@@ -78,6 +78,11 @@ openssl pkeyutl -verify -pubin -inkey update-schluessel.pem -rawin -in manifest.
   <p>Expected output: <code>Signature Verified Successfully</code>. Then compare the SHA-256 of the APK with the value in <code>manifest.json</code>.</p>
 </section>
 
+<section aria-labelledby="build-yourself">
+  <h2 id="build-yourself">Build it yourself</h2>
+  <p>The source code is public on <a href="https://github.com/malachiapp/malachi">GitHub</a> (AGPL-3.0 license); build instructions are in the README. An app you build yourself is signed with your own key – so Android won't install it as an update over the official version, and vice versa.</p>
+</section>
+
 <section aria-labelledby="install">
   <h2 id="install">Install</h2>
   <ol class="schritte">
