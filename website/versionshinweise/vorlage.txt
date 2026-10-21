@@ -1,0 +1,11 @@
+Vorlage fuer Versionshinweise - fuer jede Version eine Datei <versionName>.txt
+in diesem Ordner anlegen (z. B. 1.0.txt). Der Text steht auf der Download-Seite
+und im signierten Update-Manifest (website/UPDATE_FORMAT.md).
+
+Regeln: Klartext auf Deutsch, hoechstens 4000 Zeichen, keine Links.
+Leerzeile = neuer Absatz, Zeilen mit "- " = Listenpunkte. Beispiel:
+
+Malachi 1.1 bringt Verbesserungen bei Gruppenchats.
+
+- Gruppen: Nachrichten kommen zuverlaessiger an
+- Fehler beim Teilen von Dateien behoben

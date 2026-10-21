@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Malachi – Variante B „Shield“: das M sitzt in einem Schild. Die Aussage
+       „schützt dich“ ist ohne Worte lesbar und funktioniert gut als Store- und
+       Website-Hero-Motiv. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0B2A4F"/>
+      <stop offset="1" stop-color="#020A16"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#5CE9FF"/>
+      <stop offset="0.5" stop-color="#1DB7EA"/>
+      <stop offset="1" stop-color="#0667B0"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#00C8FF" flood-opacity="0.35"/>
+    </filter>
+    <mask id="cut">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <path fill="#000" d="M387 610 V372 H452 L512 452 L572 372 H637 V610 H583 V488 L547 536 V610 H477 V536 L441 488 V610 Z"/>
+      <circle cx="512" cy="560" r="17" fill="#fff"/>
+      <path d="M504 568 L520 568 L526 606 L498 606 Z" fill="#fff"/>
+    </mask>
+  </defs>
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <g filter="url(#drop)">
+    <path mask="url(#cut)" fill="url(#shield)"
+          d="M512 196 C606 250 700 272 796 276 C804 540 716 740 512 836 C308 740 220 540 228 276 C324 272 418 250 512 196 Z"/>
+    <path fill="url(#edge)" opacity="0.5"
+          d="M512 214 C600 264 688 286 778 292 C780 320 780 346 778 372 C690 360 600 336 512 290 C424 336 334 360 246 372 C244 346 244 320 246 292 C336 286 424 264 512 214 Z"/>
+  </g>
+</svg>

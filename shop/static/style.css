@@ -1,0 +1,211 @@
+/* Malachi Onion-Shop - schlicht, dunkel, ohne externe Schriften */
+:root {
+  --grund: #04182f;
+  --flaeche: #0d2a4a;
+  --flaeche-hell: #143a63;
+  --akzent: #0a7ea4;
+  --akzent-hell: #3fb0d6;
+  --text: #f0f6fa;
+  --text-leise: #a9bfd0;
+  --rand: #1d4670;
+  --warnung: #f2c14e;
+  --fehler: #ff8a80;
+  --erfolg: #7fd7a8;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--grund);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 0 16px 2rem;
+}
+
+a { color: var(--akzent-hell); }
+a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--akzent-hell);
+  outline-offset: 2px;
+}
+
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 1.5rem 0 .75rem; }
+h2 { font-size: 1.15rem; margin: 0 0 .6rem; }
+
+.kopf {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1rem 16px;
+  border-bottom: 1px solid var(--rand);
+}
+.marke { color: var(--text); font-weight: 700; font-size: 1.2rem; text-decoration: none; letter-spacing: .02em; }
+.etikett {
+  font-size: .75rem;
+  color: var(--text-leise);
+  border: 1px solid var(--rand);
+  border-radius: 999px;
+  padding: .1rem .6rem;
+}
+
+.held .unter { color: var(--akzent-hell); font-size: 1.1rem; margin-top: -.25rem; }
+
+.karte {
+  background: var(--flaeche);
+  border: 1px solid var(--rand);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  margin: 1rem 0;
+}
+.karte > :last-child { margin-bottom: 0; }
+.karte.merken { border-color: var(--akzent); }
+
+.preis .betrag { font-size: 2rem; font-weight: 700; margin: 0 0 .25rem; }
+
+.hinweise { padding-left: 1.2rem; margin: 0; }
+.hinweise li { margin: .35rem 0; }
+ol, ul { padding-left: 1.3rem; }
+
+.klein { font-size: .88rem; color: var(--text-leise); }
+.hinweis { color: var(--warnung); }
+.warnung {
+  color: var(--warnung);
+  border-left: 3px solid var(--warnung);
+  padding-left: .7rem;
+}
+.fehler {
+  color: var(--fehler);
+  border-left: 3px solid var(--fehler);
+  padding-left: .7rem;
+}
+.erfolg { color: var(--erfolg); }
+
+.mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+}
+.umbruch { word-break: break-all; overflow-wrap: anywhere; }
+.nummer { font-size: 1.3rem; font-weight: 700; letter-spacing: .05em; margin: .1rem 0 .6rem; }
+.gross { font-size: 1.25rem; font-weight: 700; }
+
+code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  background: var(--grund);
+  border: 1px solid var(--rand);
+  border-radius: 4px;
+  padding: 0 .3rem;
+  font-size: .9em;
+  word-break: break-all;
+}
+
+.daten { margin: .5rem 0; }
+.daten dt { font-size: .85rem; color: var(--text-leise); margin-top: .5rem; }
+.daten dd { margin: .1rem 0 0; }
+
+.qrbox {
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 8px;
+  width: 100%;
+  max-width: 300px;
+  margin: .5rem auto 1rem;
+}
+.qr { display: block; width: 100%; height: auto; }
+.qrpng { display: block; width: 100%; max-width: 300px; height: auto; margin: 0 auto; background: #fff; border-radius: 6px; }
+
+details { margin: .6rem 0; }
+summary { cursor: pointer; color: var(--akzent-hell); }
+
+button, .knopf {
+  display: inline-block;
+  background: var(--akzent);
+  color: #ffffff;
+  border: 0;
+  border-radius: 10px;
+  padding: .75rem 1.3rem;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  min-height: 44px;
+}
+button:hover, .knopf:hover { background: var(--akzent-hell); color: var(--grund); }
+.knopf.zweit { background: transparent; border: 1px solid var(--akzent); color: var(--akzent-hell); }
+
+form { margin: .5rem 0; }
+.zeile { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.zeile label { width: 100%; font-size: .9rem; color: var(--text-leise); }
+.zeile input { flex: 1 1 14rem; }
+
+input[type="text"] {
+  background: var(--grund);
+  color: var(--text);
+  border: 1px solid var(--rand);
+  border-radius: 8px;
+  padding: .65rem .75rem;
+  font: inherit;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  min-height: 44px;
+  min-width: 0;
+}
+
+.zustimmung {
+  display: flex;
+  gap: .6rem;
+  align-items: flex-start;
+  margin: .5rem 0 1rem;
+  font-size: .92rem;
+}
+.zustimmung input { margin-top: .3rem; width: 1.2rem; height: 1.2rem; flex: none; }
+
+.fuss {
+  max-width: 44rem;
+  margin: 2rem auto 0;
+  padding: 1rem 16px 2rem;
+  border-top: 1px solid var(--rand);
+  color: var(--text-leise);
+  font-size: .85rem;
+}
+.fuss a { color: var(--text-leise); }
+
+.qrbox.gross { max-width: 360px; }
+
+textarea.lizenz {
+  width: 100%;
+  background: var(--grund);
+  color: var(--text);
+  border: 1px solid var(--rand);
+  border-radius: 8px;
+  padding: .6rem;
+  font-size: .85rem;
+  word-break: break-all;
+  resize: vertical;
+}
+
+fieldset.wege {
+  border: 1px solid var(--rand);
+  border-radius: 8px;
+  margin: .5rem 0 1rem;
+  padding: .5rem .8rem;
+}
+fieldset.wege label { display: block; margin: .3rem 0; }
+
+@media (max-width: 420px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.45rem; }
+  .nummer { font-size: 1.1rem; }
+}
+
+/* "Vertrag widerrufen" (§ 356a BGB): hervorgehoben, auf jeder Seite */
+.fuss a.widerrufen { color: var(--text); font-weight: 600; text-decoration: underline; }

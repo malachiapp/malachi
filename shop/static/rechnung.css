@@ -1,0 +1,10 @@
+/* Rechnung: hell und druckfreundlich */
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 16px; color: #111; background: #fff; line-height: 1.5; }
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.1rem; margin-top: 1.5rem; }
+table { border-collapse: collapse; width: 100%; }
+td, th { border-bottom: 1px solid #ccc; padding: .4rem; text-align: left; vertical-align: top; }
+.r { text-align: right; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+.klein { font-size: .85rem; color: #444; }
+.warnung { color: #8a5a00; }

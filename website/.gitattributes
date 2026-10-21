@@ -1,0 +1,7 @@
+# Alles, was auf den Laptop (Debian) geht oder signiert wird, immer mit LF
+# auschecken - auch unter Windows. Nur das PowerShell-Skript mit CRLF.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.ico binary
+*.apk binary

@@ -1,0 +1,8 @@
+# Gebaute Seite (website/werkzeuge/veroeffentlichen.mjs)
+build/
+node_modules/
+# Private Schluessel gehoeren NIE ins Repo (Update-Signierschluessel, TLS, WireGuard)
+*.key
+*.pem
+update-signierschluessel*.json
+*.token

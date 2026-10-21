@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">Pesan</string>
+    <string name="notif_channel_messages_desc">Pesan Malachi</string>
+    <string name="notif_new_message">Pesan baru</string>
+    <string name="notif_new_message_from" formatted="true">Pesan baru dari %1$s</string>
+    <string name="service_channel_name">Koneksi Malachi</string>
+    <string name="service_channel_desc">Menjaga koneksi Malachi tetap aktif</string>
+    <string name="service_notif_text">Koneksi aktif – menerima pesan</string>
+    <string name="call_channel_name">Panggilan</string>
+    <string name="call_channel_desc">Panggilan Malachi masuk dan yang sedang berlangsung</string>
+    <string name="call_notif_title">Panggilan Malachi</string>
+    <string name="call_incoming_text">Panggilan masuk · Malachi</string>
+    <string name="call_ongoing_text">Panggilan berlangsung · Malachi</string>
+    <string name="call_action_decline">Tolak</string>
+    <string name="call_action_answer">Jawab</string>
+    <string name="call_action_hangup">Tutup</string>
+    <string name="call_wake_text">Panggilan masuk …</string>
+    <string name="call_unknown_contact">Kontak Malachi</string>
+</resources>

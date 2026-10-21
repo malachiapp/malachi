@@ -1,0 +1,275 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+/**
+ * This is the configuration block to customize your React Native Android app.
+ * By default you don't need to apply any configuration, just uncomment the lines you need.
+ */
+react {
+    /* Autolinking */
+    autolinkLibrariesWithApp()
+    // Mit Produkt-Flavors (unten, Dimension "vertrieb") heissen die
+    // Debug-Varianten "webDebug"/"playDebug" - der Standard ["debug",
+    // "debugOptimized"] passte dann auf keine Variante mehr, und auch
+    // Debug-Builds bekaemen das JS fest eingebaut statt vom Metro-Server.
+    debuggableVariants = ["webDebug", "playDebug", "webDebugOptimized", "playDebugOptimized"]
+}
+
+/**
+ * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
+ */
+def enableProguardInReleaseBuilds = false
+
+/**
+ * The preferred build flavor of JavaScriptCore (JSC)
+ *
+ * For example, to use the international variant, you can use:
+ * `def jscFlavor = 'org.webkit:android-jsc-intl:+'`
+ *
+ * The international variant includes ICU i18n library and necessary data
+ * allowing to use e.g. `Date.toLocaleString` and `String.localeCompare` that
+ * give correct results when using with locales other than en-US. Note that
+ * this variant is about 6MiB larger per architecture than default.
+ */
+def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+
+// Release-Signierung: Passwörter kommen aus keystore.properties (NICHT ins Git-Repo!),
+// nicht direkt hier im Klartext. Ohne diese Datei fällt release automatisch auf debug
+// zurück, damit der Build nicht bricht, falls die Datei mal fehlt.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+// ── Zwei Vertriebswege (PLAY_STORE.md) ─────────────────────────────────────
+// Flavor "web":  APK von der eigenen Website. App-ID bleibt EXAKT
+//                "com.securecommapp", signiert mit dem bisherigen Release-
+//                Schluessel aus keystore.properties (nie an Google geben).
+//                Vollversion ueber den Shop, signierte Updates von der Website.
+// Flavor "play": Google Play Store. Eigene App-ID, eigener Upload-Schluessel
+//                (keystore-play.properties), App-Signatur verwaltet Google
+//                ("Play App Signing"). Vollversion NUR ueber Google Play Billing.
+// Beide sind getrennte Apps, sprechen aber exakt dasselbe Protokoll (Kopplung,
+// Chats, Gruppen, Anrufe, Siegel) - die Flavors unterscheiden sich NUR in
+// Vertrieb und Kauf, nie in Protokoll oder Kryptografie.
+//
+// Paketname der Play-Variante: ENDGUELTIG, sobald das erste App Bundle in der
+// Play Console hochgeladen ist (laesst sich danach nie mehr aendern). Bis der
+// Inhaber ihn bestaetigt hat, gilt der Platzhalter unten; Release-Builds der
+// Play-Variante brechen ohne ausdrueckliche Angabe ab (siehe unten). Festlegen
+// in android/gradle.properties:  playApplicationId=<paketname>
+// oder einmalig: ./gradlew bundlePlayRelease -PplayApplicationId=<paketname>
+def playApplicationIdPlaceholder = "de.malachiapp"
+def playApplicationIdConfirmed = project.hasProperty("playApplicationId")
+def playApplicationId = (project.findProperty("playApplicationId") ?: playApplicationIdPlaceholder).toString().trim()
+if (!(playApplicationId ==~ /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/)) {
+    throw new GradleException("playApplicationId \"${playApplicationId}\" ist kein gueltiger Paketname (nur Kleinbuchstaben, Ziffern, _ und Punkte, mind. zwei Teile).")
+}
+if (playApplicationId == "com.securecommapp" || playApplicationId.startsWith("com.securecommapp.")) {
+    throw new GradleException("Die Play-Variante braucht eine EIGENE App-ID - \"com.securecommapp\" gehoert der Website-Variante (PLAY_STORE.md).")
+}
+
+// Upload-Schluessel der Play-Variante (NIE der Website-Release-Schluessel):
+// android/keystore-play.properties, gleiches Format wie keystore.properties,
+// nicht im Git. Ohne die Datei wird die Play-Variante debug-signiert (Play
+// Console lehnt das ab - ein Versehen faellt also beim Hochladen auf).
+def keystorePlayPropertiesFile = rootProject.file("keystore-play.properties")
+def keystorePlayProperties = new Properties()
+def hasPlayUploadKeystore = keystorePlayPropertiesFile.exists()
+if (hasPlayUploadKeystore) {
+    keystorePlayPropertiesFile.withInputStream { keystorePlayProperties.load(it) }
+}
+
+// SHA-256 des Zertifikats eines Schluessels (nur fuer den Vergleich unten).
+def certSha256 = { String storePath, String storePassword, String alias ->
+    try {
+        def ks = java.security.KeyStore.getInstance(file(storePath), (storePassword ?: "").toCharArray())
+        def cert = ks.getCertificate(alias)
+        return cert == null ? null : java.security.MessageDigest.getInstance("SHA-256").digest(cert.encoded).encodeHex().toString()
+    } catch (Exception e) {
+        logger.warn("Malachi: Schluesselspeicher ${storePath} nicht lesbar (${e.class.simpleName}) - Vergleich uebersprungen.")
+        return null
+    }
+}
+// Sicherheitsnetz: Play-Upload-Schluessel und Website-Release-Schluessel
+// muessen verschieden sein (gleiche Datei ODER gleiches Zertifikat = Abbruch).
+if (hasReleaseKeystore && hasPlayUploadKeystore) {
+    def webStore = file(keystoreProperties['storeFile'].toString())
+    def playStore = file(keystorePlayProperties['storeFile'].toString())
+    if (webStore.canonicalPath == playStore.canonicalPath) {
+        throw new GradleException("keystore-play.properties zeigt auf denselben Schluesselspeicher wie keystore.properties - die Play-Variante braucht einen EIGENEN Upload-Schluessel (PLAY_STORE.md).")
+    }
+    if (webStore.exists() && playStore.exists()) {
+        def webCert = certSha256(webStore.path, keystoreProperties['storePassword']?.toString(), keystoreProperties['keyAlias']?.toString())
+        def playCert = certSha256(playStore.path, keystorePlayProperties['storePassword']?.toString(), keystorePlayProperties['keyAlias']?.toString())
+        if (webCert != null && webCert == playCert) {
+            throw new GradleException("Der Play-Upload-Schluessel ist derselbe wie der Website-Release-Schluessel - abgebrochen. Eigenen Upload-Schluessel erzeugen (PLAY_STORE.md).")
+        }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    // Nur Aufgaben, die wirklich ein Play-Paket erzeugen - assembleWebRelease
+    // zieht z. B. das leere prePlayReleaseBuild mit, das darf nicht abbrechen.
+    def playRelease = graph.allTasks.any { it.project == project && it.name ==~ /(assemble|bundle|package|sign)PlayRelease.*/ }
+    if (!playRelease) return
+    if (!playApplicationIdConfirmed) {
+        throw new GradleException("Release der Play-Variante abgebrochen: Paketname nicht bestaetigt. Der Paketname ist nach dem ersten Hochladen ENDGUELTIG - erst festlegen (android/gradle.properties: playApplicationId=${playApplicationIdPlaceholder} oder einen anderen), dann erneut bauen. Siehe PLAY_STORE.md.")
+    }
+    if (!hasPlayUploadKeystore) {
+        logger.warn("Malachi: android/keystore-play.properties fehlt - die Play-Variante wird DEBUG-signiert und laesst sich so NICHT hochladen (PLAY_STORE.md, Upload-Schluessel).")
+    }
+}
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.securecommapp"
+    defaultConfig {
+        applicationId "com.securecommapp"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0.0"
+        manifestPlaceholders = [appLabel: "@string/app_name"]
+        // Audit 2026-09-28: `./gradlew assembleRelease -PmalachiDemo` baut eine
+        // NEBEN der echten App installierbare Demo-Version (eigene App-ID
+        // com.securecommapp.demo, eigener Name "Malachi Demo", komplett
+        // getrennte Daten/Schluessel) - zum gefahrlosen Ausprobieren auf dem
+        // Testgeraet, ohne die installierte Malachi-App anzufassen.
+        // Mit Flavors: z. B. `./gradlew assembleWebRelease -PmalachiDemo`
+        // (com.securecommapp.demo) bzw. `assemblePlayDebug -PmalachiDemo`
+        // (<playApplicationId>.demo) - das Suffix haengt an beiden Varianten.
+        if (project.hasProperty('malachiDemo')) {
+            applicationIdSuffix ".demo"
+            versionNameSuffix "-demo"
+            manifestPlaceholders = [appLabel: "Malachi Demo"]
+        }
+    }
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+        // Upload-Schluessel der Play-Variante (keystore-play.properties). Der
+        // eigentliche App-Signaturschluessel liegt bei Google (Play App Signing).
+        if (hasPlayUploadKeystore) {
+            playUpload {
+                storeFile file(keystorePlayProperties['storeFile'])
+                storePassword keystorePlayProperties['storePassword']
+                keyAlias keystorePlayProperties['keyAlias']
+                keyPassword keystorePlayProperties['keyPassword']
+            }
+        }
+    }
+    // Vertriebsvarianten (Kommentar oben). Aufgaben:
+    //   Website: ./gradlew assembleWebRelease  -> app/build/outputs/apk/web/release/app-web-<abi>-release.apk
+    //   Play:    ./gradlew bundlePlayRelease   -> app/build/outputs/bundle/playRelease/app-play-release.aab
+    //            (assemblePlayRelease nur zum lokalen Testen - hochgeladen wird das AAB)
+    // JS bekommt die Variante ueber MalachiBuild.distribution (BuildConfig.FLAVOR).
+    flavorDimensions "vertrieb"
+    productFlavors {
+        web {
+            dimension "vertrieb"
+            applicationId "com.securecommapp"
+            // Release: bisheriger Website-Schluessel; ohne keystore.properties
+            // (Sicherheitsnetz wie bisher) debug.
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+        play {
+            dimension "vertrieb"
+            applicationId playApplicationId
+            // NIE signingConfigs.release - siehe Pruefung oben.
+            signingConfig hasPlayUploadKeystore ? signingConfigs.playUpload : signingConfigs.debug
+        }
+    }
+    // Eine APK pro Prozessor-Architektur statt einer Universal-APK: Tor und
+    // die Bridge-Transporte bringen pro Architektur ~30 MB native Bibliotheken
+    // mit - als Universal-APK waren das 267 MB. Fuer Pixel & Co. genuegt
+    // app-web-arm64-v8a-release.apk. Das App Bundle fuer den Play Store
+    // (bundlePlayRelease) ignoriert diesen Block und teilt selbst nach
+    // Architektur auf (Abschnitt "bundle" unten) - Google liefert jedem
+    // Geraet nur seine Architektur aus.
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "armeabi-v7a", "x86_64"
+            universalApk false
+        }
+    }
+    bundle {
+        abi { enableSplit = true }
+        density { enableSplit = true }
+        language { enableSplit = true }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            // Signierschluessel kommt aus dem Flavor (productFlavors oben):
+            // web = keystore.properties, play = keystore-play.properties, jeweils
+            // mit debug als Sicherheitsnetz. Hier bewusst KEIN signingConfig -
+            // der Build-Typ haette Vorrang vor dem Flavor.
+            minifyEnabled enableProguardInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+}
+
+dependencies {
+    implementation("com.facebook.react:react-android")
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.80'
+    // Kein Firebase/FCM mehr (Release 2026-10): die App ist serverlos, Push
+    // wurde nicht mehr genutzt - Firebase meldete sich aber beim Start bei
+    // Google an (Installations-ID/Token). Komplett entfernt.
+    // Tor-Ausweichweg (siehe tor/MalachiTorModule.kt): Tor selbst (Guardian
+    // Project), dessen Steuerprotokoll und die Bridge-Transporte obfs4/
+    // Snowflake/meek/WebTunnel (IPtProxy). Alle Open Source, Maven Central.
+    // tor-android bewusst 0.4.8.x (LTS-Linie): ab 0.4.9 wird compileSdk 37
+    // verlangt, die App baut (AGP 8.12) mit 36.
+    // kotlin-stdlib ausgeschlossen: TorService ist reines Java (geprueft), die
+    // mitgezogene 2.3er-Bibliothek waere fuer den Kotlin-2.1-Compiler unlesbar.
+    implementation("info.guardianproject:tor-android:0.4.8.22") {
+        exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib"
+    }
+    implementation("info.guardianproject:jtorctl:0.4.5.7")
+    implementation("com.netzarchitekten:IPtProxy:5.5.1")
+    // Google Play Billing NUR in der Play-Variante (PlayBillingModule.kt) -
+    // die Website-APK enthaelt die Bibliothek (und die Berechtigung
+    // com.android.vending.BILLING aus ihrem Manifest) gar nicht.
+    // Version 8.x: Google verlangt fuer neue Apps/Updates ab 31.08.2026
+    // mindestens Billing Library 8 - vor jedem Release auf eine neuere
+    // stabile 8.x/9.x pruefen (PLAY_STORE.md, Checkliste).
+    playImplementation("com.android.billingclient:billing:8.0.0")
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    } else {
+        implementation jscFlavor
+    }
+}
+apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")
+

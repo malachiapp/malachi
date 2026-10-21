@@ -1,0 +1,11 @@
+[Unit]
+Description=Malachi coturn IPv6-Updater (einmaliger Lauf, getriggert von coturn-ipv6-update.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/malachi/coturn-ipv6-update.sh
+# Laeuft als root (schreibt /etc/turnserver.conf, restartet den coturn-
+# Systemdienst) - kein User=-Override, Default ist bereits root fuer
+# System-Units.

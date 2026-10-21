@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">Сообщения</string>
+    <string name="notif_channel_messages_desc">Сообщения Malachi</string>
+    <string name="notif_new_message">Новое сообщение</string>
+    <string name="notif_new_message_from" formatted="true">Новое сообщение от %1$s</string>
+    <string name="service_channel_name">Соединение Malachi</string>
+    <string name="service_channel_desc">Поддерживает соединение Malachi</string>
+    <string name="service_notif_text">Соединение активно – сообщения принимаются</string>
+    <string name="call_channel_name">Звонки</string>
+    <string name="call_channel_desc">Входящие и текущие звонки Malachi</string>
+    <string name="call_notif_title">Звонок Malachi</string>
+    <string name="call_incoming_text">Входящий звонок · Malachi</string>
+    <string name="call_ongoing_text">Текущий разговор · Malachi</string>
+    <string name="call_action_decline">Отклонить</string>
+    <string name="call_action_answer">Ответить</string>
+    <string name="call_action_hangup">Завершить</string>
+    <string name="call_wake_text">Входящий звонок …</string>
+    <string name="call_unknown_contact">Контакт Malachi</string>
+</resources>

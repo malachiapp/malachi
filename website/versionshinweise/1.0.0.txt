@@ -1,0 +1,21 @@
+Malachi 1.0 – die erste Version.
+
+Malachi ist ein privater Messenger für Android ohne Server: Nachrichten gehen direkt von Gerät zu Gerät, Ende-zu-Ende- und Post-Quanten-verschlüsselt, bei Bedarf über Tor. Kein Konto, keine Telefonnummer, keine Kontaktliste beim Anbieter.
+
+Kostenlos:
+- Chats, Gruppen mit Bildern und Sprachnachrichten, Anrufe und Gruppenanrufe annehmen
+- Kontakte koppeln per QR-Code oder Telefonnummer-Abgleich über Tor (Nummern werden nirgends gespeichert)
+- App-PIN und Fingerabdruck, Tor mit Bridges, selbstlöschende Nachrichten, Einmal-Medien, Secret Chat und Sicherheitscode
+- Siegel-Nachrichten aus anderen Messengern öffnen und entschlüsseln
+- Nachrichten geschützt kopieren (wird nach 60 Sekunden aus der Zwischenablage gelöscht)
+- In 18 Sprachen, darunter Arabisch und Persisch
+
+Vollversion (einmalig, kein Abo):
+- Notfall-PIN, Löschen nach 5 falschen PINs und Fernlöschung
+- Maximal anonym: alles nur über Tor
+- Siegel-Modus: verschlüsselte Nachrichten über WhatsApp und Co. verschicken
+- Gruppenanrufe starten
+- 21 Design-Themen inklusive passendem App-Symbol
+- Bildschirmschutz abschaltbar, zum Beispiel für eigene Screenshots (Secret Chat und Siegel bleiben immer geschützt)
+
+Updates kommen signiert direkt aus der App (über Tor) oder von dieser Website.

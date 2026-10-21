@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Privacy policy – Malachi</title>
+<meta name="description" content="Privacy policy for the Malachi website, the app (website and Play Store version) and the shop.">
+{{TEIL:meta}}
+</head>
+<body>
+{{TEIL:kopfen}}
+<main id="inhalt" class="rahmen">
+
+<h1>Privacy policy</h1>
+<p class="hinweis">This is a translation for your convenience. The <a href="{{BASIS}}datenschutz.html" hreflang="de" lang="de">German version (Datenschutzerklärung)</a> is legally binding.</p>
+
+<p>This policy applies to the website, the Malachi app (downloaded from this website and from the Google Play Store) and the shop for the full version. Malachi is built so that as little data as possible is created at all – and whatever is created stays on your device.</p>
+
+<h2>In short</h2>
+<ul>
+  <li><strong>Website:</strong> no cookies, no JavaScript, no analytics or advertising tools, no third-party content, no access log.</li>
+  <li><strong>App:</strong> no account, no phone number in the system, no server of the provider that messages, contacts or calls pass through. We as the provider receive no data from the app.</li>
+  <li><strong>Shop:</strong> only reachable over Tor; only what is needed for license, payment and accounting is stored – without name, address or email address.</li>
+</ul>
+
+<h2>1. Controller</h2>
+<p>
+  David Mark Meyer<br>
+  Elisenweg 20, 72762 Reutlingen, Germany<br>
+  Email: <a href="mailto:MalachiApp@proton.me">MalachiApp@proton.me</a>
+</p>
+<p>We are not required to appoint a data protection officer. For questions about data protection, write to the address above.</p>
+
+<h2>2. Website</h2>
+<h3>2.1 Visiting the website</h3>
+<p>When you visit, your browser sends technically necessary information to the server: your IP address, the address requested, date and time, and information about the browser. The server uses it only to deliver the page to you.</p>
+<ul>
+  <li><strong>No access log:</strong> this information is not written to log files.</li>
+  <li><strong>Protection against overload:</strong> so that individual clients cannot paralyse the server, it limits the number of simultaneous requests and downloads. For this it keeps the IP address briefly in memory – usually less than a minute after the last request, for downloads until they finish. It is not written to any storage medium.</li>
+  <li><strong>Error log:</strong> the server only logs serious errors of the server itself. In rare cases (for example a failed connection setup) such an entry can contain an IP address. The error log is rotated daily and deleted after 14 days at the latest.</li>
+  <li><strong>Encryption:</strong> via the normal address the connection is encrypted with HTTPS (TLS), via the onion address by Tor.</li>
+</ul>
+<p>The legal basis is Art. 6(1)(f) GDPR. Our legitimate interest is the secure and stable delivery of the website, the app and its updates.</p>
+
+<h3>2.2 Onion service</h3>
+<p>If you visit the website via its onion address in the Tor Browser, the connection runs through the Tor network. The server then only sees a connection from the Tor network, not your IP address.</p>
+
+<h3>2.3 Hosting</h3>
+<p>The website and shop run on a rented server of Hetzner Online GmbH, Industriestr. 25, 91710 Gunzenhausen, Germany, in the Nuremberg data centre. Hetzner processes the data on our behalf; a data processing agreement under Art. 28 GDPR is in place with Hetzner.</p>
+
+<h3>2.4 Name resolution and certificate</h3>
+<ul>
+  <li>The normal address (malachiapp.de) is resolved via the name servers of STRATO GmbH (Berlin), where the domain is registered. Usually your internet provider's DNS server asks STRATO for the server address; STRATO normally does not learn your own IP address in the process. The former address malachii.duckdns.org redirects to malachiapp.de and is resolved via the Duck DNS name service – the same applies to it.</li>
+  <li>The HTTPS certificate comes from Let's Encrypt (Internet Security Research Group, USA). No data about you is sent to Let's Encrypt when you visit the website.</li>
+</ul>
+
+<h3>2.5 Downloading the app</h3>
+<p>No registration is needed for the download. The same applies as in section 2.1: no access log.</p>
+
+<h2>3. The Malachi app</h2>
+<h3>3.1 Principle</h3>
+<p>Malachi needs no account, no email address and no phone number. Profile name, profile picture, contacts, messages, groups and settings are stored exclusively on your device, and encrypted. There is no server of the provider that messages, files, contact lists or calls pass through, and no copy "in the cloud". The app contains no advertising, no analytics or crash reporting tools and no push service.</p>
+
+<h3>3.2 Connection to your contacts</h3>
+<ul>
+  <li><strong>Content:</strong> messages, pictures, files, voice messages and calls are end-to-end encrypted and go directly between the devices of the people talking – via the Tor network first, then via a direct connection whenever possible. In groups, every message is encrypted individually for each member.</li>
+  <li><strong>Tor:</strong> the app starts its own Tor access and runs an onion service for your device whose address only your contacts know. Tor nodes see neither content nor who is talking to whom. Optionally the app can use so-called bridges of the Tor Project if Tor is blocked on your network; their operators then see your IP address, but not where the connection goes.</li>
+  <li><strong>Direct connection and STUN:</strong> in the "Fast" connection mode (default) the app asks two public STUN services per connection for its own public address: Nextcloud GmbH (Stuttgart), sipgate GmbH (Düsseldorf), 1&amp;1 (Montabaur) and Deutsche Telekom (Bonn). They see your IP address, but no content and no contacts. During a direct connection your conversation partner sees your IP address. In the "Private" and "Maximum anonymity (Tor only)" modes no STUN service is asked; in "Maximum anonymity" not even your conversation partner sees your IP address.</li>
+  <li><strong>Pairing via phone number:</strong> if you pair a contact via phone numbers, both numbers are only processed briefly in your device's memory to calculate a temporary meeting point in the Tor network. The numbers are neither stored nor sent to us or third parties.</li>
+</ul>
+<p>The legal basis for this processing is Art. 6(1)(b) GDPR (provision of the messenger you use). We ourselves receive no data from these connections.</p>
+
+<h3>3.3 Sending your location</h3>
+<p>You can send a contact your location. The exact location goes only end-to-end encrypted to that contact. So that a place name (street/town) can also be shown, the app queries the Nominatim service of OpenStreetMap when sending (OpenStreetMap Foundation, St John's Innovation Centre, Cowley Road, Cambridge, CB4 0WS, United Kingdom). This transmits a position rounded to about 100 metres and – for technical reasons – your IP address; Nominatim processes them under its own privacy policy. This only happens when you send a location yourself, and only in the "Fast" connection mode – in the "Private" and "Maximum anonymity" modes and in Secret Chat the app does not query Nominatim and only sends the coordinates. The EU Commission has adopted an adequacy decision for the United Kingdom (Art. 45 GDPR). The legal basis is Art. 6(1)(b) GDPR (the feature you use).</p>
+
+<h3>3.4 Seal mode</h3>
+<p>With Seal you encrypt texts and files that you then send yourself over another messenger (e.g. WhatsApp or Signal). Keys and contacts are kept in a separate, encrypted vault on your device. For the transport, the privacy terms of the messenger you choose apply – it only sees encrypted text.</p>
+
+<h3>3.5 Permissions</h3>
+<p>The app only asks for permissions a feature needs, and only when you use that feature: camera (QR code, photos, video calls), microphone (voice messages, calls), location (only when sending a location, never in the background), notifications, access to photos and files you select, and a background service so that messages arrive even when the app is closed. QR code recognition uses the Google ML Kit library; it works entirely on the device. We have removed ML Kit's built-in transmission of usage statistics to Google from the app.</p>
+
+<h3>3.6 Updates (version from this website)</h3>
+<p>Unless you switch it off in the settings, the version from this website checks at most once a day over Tor whether a new version is available on our onion service, and only downloads it after you confirm. No device data is transmitted; the server does not see your IP address. The version from the Google Play Store is updated exclusively via Google Play.</p>
+
+<h3>3.7 Deleting data</h3>
+<p>Since all app data is on your device, you delete it yourself: individually (chat, contact, group), via "Delete all data" in the settings or by uninstalling the app. Copies your contacts have received from you are on their devices.</p>
+
+<h2>4. Buying the full version</h2>
+<h3>4.1 Shop (version from this website)</h3>
+<p>The shop is only reachable as an onion service over Tor – in the Tor Browser or directly from the app. It does not learn your IP address. For purchase, license and accounting it stores:</p>
+<ul>
+  <li>order number, times and status of the order, price in euros as well as amount and exchange rate in Monero or Bitcoin,</li>
+  <li>the payment address generated for the order and the amounts received with their transaction IDs,</li>
+  <li>the device code the license is bound to (a random identifier from the app, no name, no phone number),</li>
+  <li>a check value of the recovery code (for changing devices),</li>
+  <li>your consent to immediate provision (see the information on the right of withdrawal) and the invoice.</li>
+</ul>
+<p>The shop does not ask for name, address or email address. The legal bases are Art. 6(1)(b) GDPR (contract) and (c) GDPR (retention obligations under tax and commercial law). Unpaid orders are deleted after about three days, partially paid ones after 30 days; paid orders and invoices are kept for ten years (§ 147 AO, § 257 HGB) – for that long you can also move the license to a new device.</p>
+<p><strong>Paying with cryptocurrency:</strong> Bitcoin payments are permanently and publicly visible on the Bitcoin blockchain (amount, addresses, time). Monero payments are not publicly viewable on the blockchain. To check incoming payments, the shop queries a Monero node or the mempool.space service over Tor; only blockchain data is retrieved, no information about you is transmitted. The shop fetches exchange rates over Tor from public rate sources (Kraken, CoinGecko), likewise without any reference to you.</p>
+
+<h3>4.2 Google Play (version from the Play Store)</h3>
+<p>In the version from the Google Play Store you buy the full version via Google Play. Google handles the payment (Google Ireland Limited, Gordon House, Barrow Street, Dublin 4, Ireland); Google's privacy policy applies. We only receive the purchase confirmation from Google, which the app checks on your device – no name, no email address and no payment data. Download and updates of this version also run via Google Play.</p>
+
+<h2>5. Contact by email</h2>
+<p>If you send us an email, we process your information to answer your request (Art. 6(1)(b) or (f) GDPR) and delete it when it is no longer needed and no retention obligation applies.</p>
+
+<h2>6. Your rights</h2>
+<p>You have the right of access (Art. 15 GDPR), rectification (Art. 16), erasure (Art. 17), restriction of processing (Art. 18), data portability (Art. 20) and to object to processing based on legitimate interests (Art. 21). Please contact the address above. Since we store neither names nor contact details of buyers, we need the order number for requests about an order.</p>
+<p>You can also lodge a complaint with a data protection supervisory authority, in particular in the member state of your residence or of our registered office (Art. 77 GDPR). The authority responsible for us is the State Commissioner for Data Protection and Freedom of Information Baden-Württemberg (Landesbeauftragter für den Datenschutz und die Informationsfreiheit Baden-Württemberg), Lautenschlagerstraße 20, 70173 Stuttgart, Germany.</p>
+
+<h2>7. Changes</h2>
+<p>If the app or our services change, we adapt this policy. The version published here applies.</p>
+
+<p>Last updated: 20 October 2026</p>
+
+</main>
+{{TEIL:fussen}}
+</body>
+</html>

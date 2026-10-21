@@ -1,0 +1,30 @@
+{
+  "name": "malachi-shop",
+  "version": "2.0.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "Onion-Shop (Tor Hidden Service) fuer die Malachi-Vollversion: Zahlung in Monero (view-only Wallet) oder Bitcoin (watch-only zpub), signierte geraetegebundene Lizenz, Buchhaltung mit Hash-Kette",
+  "type": "module",
+  "engines": {
+    "node": ">=18.19"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "pruefen": "node src/server.js --pruefen",
+    "lizenzschluessel": "node src/werkzeuge/lizenzschluessel.js",
+    "buchhaltung": "node src/werkzeuge/buchhaltung.js",
+    "adressen": "node src/werkzeuge/adressen.js",
+    "test": "node --test test/lizenz.test.js test/kurs.test.js test/monero.test.js test/bestellungen.test.js test/umzug.test.js test/buchhaltung.test.js test/verkauf.test.js test/app.test.js test/config.test.js test/bip84.test.js test/bitcoin.test.js test/qr.test.js test/tor.test.js test/geheimnisse.test.js test/geschenklizenz.test.js test/widerruf.test.js test/proxyprotokoll.test.js"
+  },
+  "dependencies": {
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0",
+    "@scure/base": "1.2.6",
+    "@scure/bip32": "1.7.0",
+    "qrcode-generator": "1.4.4"
+  },
+  "devDependencies": {
+    "@scure/bip39": "1.6.0",
+    "jsqr": "1.4.0"
+  }
+}

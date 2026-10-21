@@ -1,0 +1,15 @@
+# Alle 5 Minuten pruefen, ob sich die IPv6-Adresse geaendert hat
+# (z. B. neues Praefix vom Provider). Gemeldet wird nur bei Aenderung,
+# sonst hoechstens stuendlich.
+
+[Unit]
+Description=Malachi - DuckDNS-Eintrag regelmaessig aktualisieren
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

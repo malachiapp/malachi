@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">Mesajlar</string>
+    <string name="notif_channel_messages_desc">Malachi mesajları</string>
+    <string name="notif_new_message">Yeni mesaj</string>
+    <string name="notif_new_message_from" formatted="true">%1$s kişisinden yeni mesaj</string>
+    <string name="service_channel_name">Malachi bağlantısı</string>
+    <string name="service_channel_desc">Malachi bağlantısını açık tutar</string>
+    <string name="service_notif_text">Bağlantı etkin – mesajlar alınıyor</string>
+    <string name="call_channel_name">Aramalar</string>
+    <string name="call_channel_desc">Gelen ve devam eden Malachi aramaları</string>
+    <string name="call_notif_title">Malachi araması</string>
+    <string name="call_incoming_text">Gelen arama · Malachi</string>
+    <string name="call_ongoing_text">Devam eden görüşme · Malachi</string>
+    <string name="call_action_decline">Reddet</string>
+    <string name="call_action_answer">Yanıtla</string>
+    <string name="call_action_hangup">Kapat</string>
+    <string name="call_wake_text">Gelen arama …</string>
+    <string name="call_unknown_contact">Malachi kişisi</string>
+</resources>

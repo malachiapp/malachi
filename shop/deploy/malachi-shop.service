@@ -1,0 +1,74 @@
+# Malachi Onion-Shop - Node.js-Dienst, nur 127.0.0.1, Zugriff ausschliesslich ueber Tor.
+# Installation: deploy/install.sh (kopiert diese Datei nach /etc/systemd/system/).
+
+[Unit]
+Description=Malachi Onion-Shop (Tor Hidden Service)
+After=network-online.target tor@default.service malachi-wallet-rpc.service
+Wants=network-online.target tor@default.service malachi-wallet-rpc.service
+
+[Service]
+Type=simple
+User=malachi-shop
+Group=malachi-shop
+WorkingDirectory=/opt/malachi-shop
+ExecStart=/usr/bin/node /opt/malachi-shop/src/server.js --config /etc/malachi-shop/config.json
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=10
+
+# Geheimnisse: die Dateien gehoeren root (0600); systemd stellt sie nur diesem
+# Dienst im RAM bereit ($CREDENTIALS_DIRECTORY, 0400). In config.json als
+# "credential:<name>" eingetragen.
+LoadCredential=lizenz-schluessel:/etc/malachi-shop/lizenz-privat.pem
+LoadCredential=wallet-rpc-login:/etc/malachi-shop/wallet-rpc.login
+# Kraken (verkauf.modus = "kraken", API-Schluessel OHNE Auszahlungsrecht):
+# deploy/kraken-einrichten.sh legt dafuer eine Drop-in-Datei an
+# (/etc/systemd/system/malachi-shop.service.d/kraken.conf), die Neuinstallationen ueberlebt.
+#LoadCredential=kraken-api:/etc/malachi-shop/kraken-api.json
+
+# Daten: /var/lib/malachi-shop (Bestellungen, Buchhaltung, Sicherungen)
+StateDirectory=malachi-shop
+StateDirectoryMode=0700
+UMask=0077
+
+# Netzwerk: nur Loopback (eigener Port, Tor-SOCKS 127.0.0.1:9050, wallet-rpc 127.0.0.1:18082)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+# Haertung
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+# MemoryDenyWriteExecute ist fuer Node.js (JIT) nicht gesetzt.
+
+# Ressourcen begrenzen (Isolation gegenueber anderen Diensten, z. B. Coachbay)
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=1024
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

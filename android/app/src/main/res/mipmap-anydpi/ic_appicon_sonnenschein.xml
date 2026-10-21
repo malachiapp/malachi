@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GENERIERT von tools/gen-theme-icons.js - nicht von Hand aendern.
+     Android 7.x (API 24/25, kein adaptives Icon): App-Icon "Sonnenschein"
+     (sonnenschein) als einfache Ebenenliste. Ab Android 8 gilt mipmap-anydpi-v26. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_appicon_sonnenschein_bg" />
+    <item android:drawable="@drawable/ic_appicon_sonnenschein_fg" />
+</layer-list>

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><title>Icon-Prüfung Logo D</title>
+<style>
+  body { margin:0; background:#1b1f27; color:#cfd8e3; font:14px system-ui, sans-serif; padding:24px 16px; }
+  .row { display:flex; flex-wrap:wrap; gap:28px; align-items:flex-end; }
+  figure { margin:0; text-align:center; }
+  figcaption { margin-top:8px; font-size:12px; color:#8ea0b5; }
+</style></head><body>
+<h1 style="font-size:18px">Adaptives Icon – dieselben Pfade wie ic_launcher_fg.xml</h1>
+<div class="row">
+<!-- 108er-Leinwand, sichtbar im Launcher: Kreis r=36 um 54/54 -->
+<figure>
+<svg width="216" height="216" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="108" y2="108" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#101E4A"/><stop offset="0.5" stop-color="#071433"/><stop offset="1" stop-color="#02060F"/></linearGradient>
+    <linearGradient id="ln" x1="33.66" y1="0" x2="74.34" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#36E0FF"/><stop offset="0.5" stop-color="#7C8CFF"/><stop offset="1" stop-color="#36E0FF"/></linearGradient>
+    <radialGradient id="h1" cx="33.66" cy="66.6" r="8.28" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#36E0FF" stop-opacity=".45"/><stop offset="1" stop-color="#36E0FF" stop-opacity="0"/></radialGradient>
+    <radialGradient id="h2" cx="74.34" cy="66.6" r="8.28" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#36E0FF" stop-opacity=".45"/><stop offset="1" stop-color="#36E0FF" stop-opacity="0"/></radialGradient>
+    <clipPath id="circle"><circle cx="54" cy="54" r="36"/></clipPath>
+  </defs>
+  <g clip-path="url(#circle)">
+    <rect width="108" height="108" fill="url(#bg)"/>
+    <circle cx="54" cy="54" r="29.7" fill="none" stroke="#36E0FF" stroke-opacity=".16" stroke-width=".4"/>
+    <path d="M33.66,66.6V34.2L54,54L74.34,34.2V66.6" fill="none" stroke="#36E0FF" stroke-opacity=".2" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M33.66,66.6V34.2L54,54L74.34,34.2V66.6" fill="none" stroke="url(#ln)" stroke-width="5.22" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="33.66" cy="66.6" r="8.28" fill="url(#h1)"/><circle cx="74.34" cy="66.6" r="8.28" fill="url(#h2)"/>
+    <circle cx="33.66" cy="66.6" r="4.14" fill="#5DE6FF"/><circle cx="74.34" cy="66.6" r="4.14" fill="#5DE6FF"/>
+    <circle cx="33.66" cy="34.2" r="2.7" fill="#5DE6FF"/><circle cx="74.34" cy="34.2" r="2.7" fill="#5DE6FF"/>
+    <circle cx="54" cy="54" r="8.64" fill="#071433" stroke="url(#ln)" stroke-width=".9"/>
+    <path d="M51.66,52.38a2.34,2.34 0 1,0 4.68,0a2.34,2.34 0 1,0 -4.68,0M52.92,53.64L55.08,53.64L55.98,58.68L52.02,58.68Z" fill="#7FEFFF"/>
+  </g>
+  <!-- Pruefhilfen: Mitte und 66dp-Sicherheitszone -->
+  <line x1="54" y1="14" x2="54" y2="94" stroke="#ff4d6d" stroke-width=".25"/>
+  <line x1="14" y1="54" x2="94" y2="54" stroke="#ff4d6d" stroke-width=".25"/>
+  <circle cx="54" cy="54" r="33" fill="none" stroke="#ffd166" stroke-width=".3" stroke-dasharray="1 1"/>
+</svg>
+<figcaption>Kreismaske + Mitte (rot) + Sicherheitszone (gelb)</figcaption>
+</figure>
+<figure><svg width="72" height="72" viewBox="18 18 72 72"><use href="#dummy"/></svg></figure>
+</div>
+</body></html>

@@ -1,0 +1,2037 @@
+--- a/App.tsx
++++ b/App.tsx
+@@ -7,8 +7,23 @@
+ } from 'react-native';
+ import Icon from 'react-native-vector-icons/Feather';
+ import QRCode from 'react-native-qrcode-svg';
+-import { launchImageLibrary } from 'react-native-image-picker';
+-import { RELAY_URL, sendSignalOffer, getSignalOffer, sendSignalAnswer, sendReconnectOffer, getReconnectAnswer, getReconnectOffer, sendReconnectAnswer, pollCallSignals, startWakeSocket, setWakeSubscriptions, onWake, fetchWithTimeout } from './RelayClient';
++import { launchImageLibrary as rawLaunchImageLibrary } from 'react-native-image-picker';
++
++// Automatische Sperre (siehe AppInner, "Automatische Sperre"): System-Auswahl-
++// dialoge (Galerie, Dateien) schicken die App ebenfalls in den Hintergrund.
++// Waehrend einer solchen Auswahl gilt eine laengere Gnadenfrist, damit man
++// nach laengerem Suchen nicht mitten im Senden auf dem Sperrbildschirm landet.
++const AUTO_LOCK_AFTER_MS = 60 * 1000;
++const AUTO_LOCK_DURING_PICKER_MS = 10 * 60 * 1000;
++let autoLockSuspendCount = 0;
++function withAutoLockSuspended(fn) {
++  autoLockSuspendCount++;
++  let p;
++  try { p = Promise.resolve(fn()); } catch (e) { autoLockSuspendCount--; throw e; }
++  return p.finally(() => { autoLockSuspendCount = Math.max(0, autoLockSuspendCount - 1); });
++}
++const launchImageLibrary = (...args) => withAutoLockSuspended(() => rawLaunchImageLibrary(...args));
++import { RELAY_URL, sendSignalOffer, getSignalOffer, sendSignalAnswer, sendReconnectOffer, getReconnectAnswer, getReconnectOffer, sendReconnectAnswer, pollCallSignals, startWakeSocket, setWakeSubscriptions, onWake, fetchWithTimeout, getRelayHealth } from './RelayClient';
+ import { generateKyberKeypair } from './HybridCrypto';
+ import { WebRTCManager, padToBlock } from './WebRTCManager';
+ import { encryptMsg, decryptMsg, secureRandomToken } from './MessageCrypto';
+@@ -83,6 +98,7 @@
+   updateGroups as sharedUpdateGroups,
+   wipeContactLocally as sharedWipeContactLocally,
+   withQueueLock, wipeQueueForContact,
++  abandonPendingOutgoingAttempts, pollPendingAnswersNow, loadPreviousSecret,
+ } from './BackgroundSync';
+ 
+ // Gruppenchats: v1-Obergrenze aus GROUP_CHAT_CRYPTO_PLAN.md §2 (O(N²)-
+@@ -119,6 +135,74 @@
+ };
+ let AC = '#0A7EA4';
+ 
++// ── UI-DEMO-FUNKTIONEN (Audit 2026-09-28) ──────────────────────────────────
++// Jede UI-Verbesserung aus dem Audit ist einzeln schaltbar (Einstellungen →
++// "Demo-Funktionen"), damit sie am Geraet ausprobiert und spaeter einzeln
++// uebernommen oder verworfen werden kann. Keine davon beruehrt Protokoll,
++// Verschluesselung oder Datenhaltung - reine Darstellung/Bedienung.
++// Uebernahme in die finale Version: Schalter entfernen und den jeweiligen
++// Zweig fest einbauen (bzw. den Alt-Zweig loeschen).
++export const UI_DEMOS = [
++  { key: 'liveStatus',    title: 'Echter Verbindungsstatus',  desc: 'Kopfzeile zeigt, ob du online bist und wie viele Kontakte gerade direkt verbunden sind - statt immer „Verbindung gesichert“.' },
++  { key: 'contactDots',   title: 'Online-Punkt am Kontakt',    desc: 'Grüner Punkt am Profilbild, solange eine direkte P2P-Verbindung zu diesem Kontakt steht.' },
++  { key: 'emptyState',    title: 'Willkommens-Bildschirm',     desc: 'Ohne Kontakte: kurze Erklärung in drei Schritten und ein großer Knopf „Ersten Kontakt verbinden“.' },
++  { key: 'offlineBanner', title: 'Offline-Hinweis im Chat',    desc: 'Erklärt im Chat, dass Nachrichten verschlüsselt auf dem Gerät warten, und bietet „Jetzt verbinden“.' },
++  { key: 'callMenu',      title: 'Anruf-Auswahl',              desc: 'Der Anruf-Knopf fragt „Sprachanruf oder Videoanruf?“ statt eines versteckten Gedrückthaltens.' },
++  { key: 'darkChat',      title: 'Dunkler Chat-Hintergrund',   desc: 'Chatverlauf im selben dunklen Design wie der Rest der App.' },
++  { key: 'bigTargets',    title: 'Größere Tippflächen',        desc: 'Kleine Symbole (Suche, Zurück, Schild, Anruf, Secret Chat) lassen sich leichter treffen.' },
++  { key: 'groupsTab',     title: 'Chats/Gruppen-Umschalter',   desc: 'Gruppen direkt unter dem Titel erreichbar statt versteckt hinter der Suche.' },
++];
++const uiDemoStore = {
++  flags: Object.fromEntries(UI_DEMOS.map(d => [d.key, true])),
++  listeners: new Set(),
++};
++function notifyUiDemo() { uiDemoStore.listeners.forEach(l => { try { l(); } catch {} }); }
++EncryptedStorage.getItem('ui_demo_flags').then(raw => {
++  if (!raw) return;
++  try {
++    const saved = JSON.parse(raw);
++    for (const d of UI_DEMOS) if (typeof saved?.[d.key] === 'boolean') uiDemoStore.flags[d.key] = saved[d.key];
++    notifyUiDemo();
++  } catch {}
++}).catch(() => {});
++function setUiDemoFlag(key, on) {
++  uiDemoStore.flags = { ...uiDemoStore.flags, [key]: !!on };
++  EncryptedStorage.setItem('ui_demo_flags', JSON.stringify(uiDemoStore.flags)).catch(() => {});
++  notifyUiDemo();
++}
++function useUiDemo(key) {
++  const [, force] = React.useReducer(x => x + 1, 0);
++  React.useEffect(() => {
++    uiDemoStore.listeners.add(force);
++    return () => { uiDemoStore.listeners.delete(force); };
++  }, []);
++  return !!uiDemoStore.flags[key];
++}
++const DEMO_HIT = { top: 12, bottom: 12, left: 12, right: 12 };
++
++// Tatsaechlicher Verbindungszustand fuer die Statusanzeigen (Demo
++// "liveStatus"/"contactDots"): Netz laut NetInfo, Erreichbarkeit des Relays
++// (letzte Anfragen erfolgreich?) und welche Kontakte gerade direkt per P2P
++// verbunden sind. Rein lesend, alle 2s aktualisiert.
++function useConnectivity(contacts, enabled) {
++  const [state, setState] = React.useState({ online: true, relayOk: true, connected: [] });
++  React.useEffect(() => {
++    if (!enabled) return undefined;
++    let online = true;
++    const tick = () => {
++      const connected = (contacts || []).filter(c => RTCStore.isConnected(c.id)).map(c => c.id);
++      const relayOk = getRelayHealth().consecutiveFailures < 3;
++      setState(prev => (prev.online === online && prev.relayOk === relayOk &&
++        prev.connected.join(',') === connected.join(',')) ? prev : { online, relayOk, connected });
++    };
++    const unsub = NetInfo.addEventListener(s => { online = !!s.isConnected && s.isInternetReachable !== false; tick(); });
++    tick();
++    const t = setInterval(tick, 2000);
++    return () => { clearInterval(t); unsub(); };
++  }, [contacts, enabled]);
++  return state;
++}
++
+ // Globaler WebRTC Manager - außerhalb React
+ let GLOBAL_RTC = null;
+ 
+@@ -204,6 +288,22 @@
+ // den konkreten Ablaufzeitpunkt um. War zuvor an drei Stellen in ChatScreen
+ // (gepufferte Nachrichten, Live-Empfang, eigenes Senden) identisch dupliziert -
+ // hier zusammengefasst, keine Verhaltensaenderung (Simplification-Pass).
++// Entfernt beim App-Start entschluesselte Klartext-Kopien, die fuers Teilen/
++// Oeffnen einer empfangenen Datei im Cache abgelegt wurden (siehe openFile im
++// ChatScreen) - die Ziel-App hatte seitdem genug Zeit, sie zu lesen. Alte
++// Dateien ohne Praefix (vor dem Fix: "<13-stellige Zeit>_<Name>") mit.
++async function cleanupSharedFileCache() {
++  try {
++    const files = await RNFS.readDir(RNFS.CachesDirectoryPath);
++    const cutoff = Date.now() - 10 * 60 * 1000;
++    for (const f of files) {
++      const isShareCopy = f.name.startsWith('malachi_share_') || /^\d{13}_/.test(f.name);
++      const mtime = f.mtime ? new Date(f.mtime).getTime() : 0;
++      if (isShareCopy && f.isFile() && mtime < cutoff) await RNFS.unlink(f.path).catch(() => {});
++    }
++  } catch {}
++}
++
+ function expireModeToExpireAt(mode) {
+   return mode === 'read' ? 'read'
+     : mode === '1h'  ? Date.now() + 3600000
+@@ -289,6 +389,10 @@
+   const [videoOn, setVideoOn] = useState(false);
+   const [remoteVideoOn, setRemoteVideoOn] = useState(false);
+   const callManagerRef = useRef(null);
++  // Siehe "Automatische Sperre" weiter unten - hier schon deklariert, weil die
++  // Anruf-Callbacks direkt darunter sie benutzen.
++  const afterCallNavRef = useRef((contact) => nav('chat', contact));
++  const lockPendingRef = useRef(false);
+ 
+   // Neuen ausgehenden Anruf starten - vorher landete man beim Tippen auf den
+   // Anruf-Button nur auf einem Fake-CallScreen ohne jede echte Signalisierung.
+@@ -306,7 +410,7 @@
+           setRemoteStream(null);
+           setVideoOn(false);
+           setRemoteVideoOn(false);
+-          nav('chat', contact);
++          afterCallNavRef.current(contact);
+         }
+       },
+       onMissedCall: () => {},
+@@ -342,7 +446,7 @@
+             setRemoteStream(null);
+             setVideoOn(false);
+             setRemoteVideoOn(false);
+-            nav('chat', contact);
++            afterCallNavRef.current(contact);
+           }
+         },
+         onMissedCall: () => {},
+@@ -350,6 +454,10 @@
+         onVideoStateChange: (own, remote) => { setVideoOn(own); setRemoteVideoOn(remote); },
+       });
+       callManagerRef.current = cm;
++      // Anruf kommt auf dem Sperrbildschirm (oder vor der Ersteinrichtung)
++      // an: annehmen geht ohne PIN (wie beim Telefon), danach aber zurueck
++      // zur Sperre statt ungesperrt in den Chat (Audit 2026-09-28).
++      if (screenRef.current === 'lock') lockPendingRef.current = true;
+       setChat(contact);
+       setScreen('call');
+       await cm.handleSignal(offerSignal);
+@@ -362,7 +470,20 @@
+         if (s !== offerSignal) await cm.handleSignal(s);
+       }
+     };
++    // Audit 2026-09-28: dieser 2s-Intervall hatte (anders als alle anderen
++    // Poll-Zyklen der App) keine "laeuft noch"-Sperre. Ein Durchlauf macht
++    // einen Relay-Request PRO KONTAKT nacheinander (je bis zu 10s Timeout) -
++    // bei langsamem/haengendem Netz liefen so schnell dutzende Durchlaeufe
++    // parallel, belegten die (auf 5 pro Host begrenzten) HTTP-Verbindungen
++    // und liessen die eigentlich wichtigen Reconnect-Requests dahinter in
++    // den Timeout laufen - ein selbst verstaerkender Verbindungs-Stau.
++    let callPollRunning = false;
+     const checkIncomingCalls = async () => {
++      if (callManagerRef.current || callPollRunning) return; // schon in einem Anruf / Durchlauf laeuft
++      callPollRunning = true;
++      try { await checkIncomingCallsOnce(); } finally { callPollRunning = false; }
++    };
++    const checkIncomingCallsOnce = async () => {
+       if (callManagerRef.current) return; // schon in einem Anruf
+       // Live-Test-Fund 2026-09-28: ein Offer, das der Headless-Task waehrend
+       // App() nicht gemountet war bereits erkannt (und nativ beklingelt) hat,
+@@ -484,6 +605,7 @@
+         }
+         MalachiService?.start();
+         startWakeSocket();
++        cleanupSharedFileCache();
+         // Live-Test 2026-09-27: Wegwischen der Dienst-Benachrichtigung (oder ein
+         // Systemabbruch, den onTaskRemoved() nicht ueberleben konnte) beendete
+         // den P2P-Empfang bisher lautlos - weder Popup noch Hinweis. Einmalig
+@@ -529,6 +651,9 @@
+             EncryptedStorage.getItem('shared_secret_' + c.id).then(secret => {
+               if (secret) RTCStore.sharedSecrets.set(c.id, secret);
+             }).catch(() => {});
++            // Audit 2026-09-28: unbestaetigtes vorheriges Secret als
++            // Rueckfall-Kandidat (siehe RTCStore.rememberPreviousSecret).
++            loadPreviousSecret(c.id).catch(() => {});
+           });
+         } catch {}
+       }
+@@ -579,7 +704,9 @@
+     // zusammen mit der schnelleren Zombie-Erkennung reduziert das die
+     // maximale Downtime bis zum naechsten Reconnect-Versuch spuerbar.
+     const interval = setInterval(checkOutgoing, 8000);
+-    const unsub = onWake(() => checkOutgoing());
++    // Audit 2026-09-28: ein Wecksignal kann auch "deine Antwort liegt bereit"
++    // bedeuten - laufende Versuche sofort nachsehen lassen statt bis zu 5s.
++    const unsub = onWake(() => { pollPendingAnswersNow(); checkOutgoing(); });
+     // Live-Test-Fund 2026-09-27: nach einem WLAN-Wechsel (aus/an) scheiterte
+     // ICE hier wiederholt mit veralteten Kandidaten, bis der naechste
+     // turnusmaessige 8s-Poll zufaellig in ein stabiles Netz-Fenster fiel -
+@@ -589,10 +716,22 @@
+     // warten - kurze Verzoegerung, damit Android Routing/DNS nach dem
+     // Wechsel noch fertig aufbauen kann, dann sofort selbst pruefen.
+     let wasReachable = true;
++    let lastNetIdentity = null;
+     const unsubNet = NetInfo.addEventListener(state => {
+       const isUp = !!state.isConnected && state.isInternetReachable !== false;
+-      if (isUp && !wasReachable) {
+-        console.log('[Auto-Reconnect] Netzwerk wieder da (NetInfo) - pruefe sofort statt auf naechsten Poll zu warten');
++      // Audit 2026-09-28: ein Wechsel WLAN <-> Mobilfunk (oder eine neue IP
++      // nach einem Provider-Prefix-Wechsel) meldet oft NIE "offline" - die
++      // Pruefung unten griff dann gar nicht. Gleichzeitig blockierte ein
++      // bereits vor dem Wechsel verschicktes, unbeantwortetes Angebot (mit
++      // Kandidaten des ALTEN Netzes) jeden neuen Versuch fuer bis zu 30 Min.
++      // Jetzt: bei jeder Aenderung der Netz-Identitaet solche Angebote
++      // verwerfen und frisch pruefen.
++      const identity = `${state.type}|${state.details?.ipAddress || ''}`;
++      const netChanged = lastNetIdentity !== null && identity !== lastNetIdentity;
++      lastNetIdentity = identity;
++      if (isUp && (!wasReachable || netChanged)) {
++        const dropped = abandonPendingOutgoingAttempts();
++        console.log('[Auto-Reconnect] Netzwerk wieder da/gewechselt (NetInfo) - pruefe sofort statt auf naechsten Poll zu warten', dropped ? `(${dropped} veraltete Angebote verworfen)` : '');
+         // War 1500 - Live-Test 2026-09-27 zeigte wiederholt einen fehlschlagenden
+         // ersten ICE-Versuch direkt nach dem Wechsel (vermutlich Routing/DNS
+         // noch nicht ganz fertig), der dann einen kompletten zusaetzlichen
+@@ -606,6 +745,18 @@
+     return () => { clearTimeout(initialDelay); clearInterval(interval); unsub(); unsubNet(); };
+   }, []);
+ 
++  // "Jetzt verbinden" (UI-Demo offlineBanner im Chat): verwirft haengende
++  // Angebote und startet beide Zyklen sofort, statt auf den naechsten Tick
++  // zu warten. Nutzt ausschliesslich die bestehenden Reconnect-Pfade.
++  React.useEffect(() => {
++    global.malachiReconnectNow = () => {
++      abandonPendingOutgoingAttempts();
++      runOutgoingCycle({ onContactsChanged: setContacts, onRtcConnected: (_id, rtc) => { GLOBAL_RTC = rtc; } });
++      runIncomingCycle({ onContactsChanged: setContacts, onRtcConnected: (_id, rtc) => { GLOBAL_RTC = rtc; } });
++    };
++    return () => { delete global.malachiReconnectNow; };
++  }, []);
++
+   // Auto-Reconnect – Responder prüft auf eingehende Offers (läuft dauerhaft),
+   // plus Relay-Fallback-Empfang der System-/Nachrichtenpakete fuer BEIDE
+   // Rollen. Rumpf (vorher inline als checkIncoming hier) jetzt in
+@@ -714,6 +865,7 @@
+     RTCStore.clearContact(chatId);
+     // SharedSecret aus persistentem Storage löschen
+     EncryptedStorage.removeItem('shared_secret_' + chatId).catch(() => {});
++    EncryptedStorage.removeItem('shared_secret_prev_' + chatId).catch(() => {});
+     // "M3": Index UND .enc-Dateien der Sende-Warteschlange loeschen (siehe
+     // wipeQueueForContact() in BackgroundSync.js).
+     wipeQueueForContact(chatId);
+@@ -733,8 +885,14 @@
+         }).catch(() => {});
+       });
+     }
+-    // Relay-Offers löschen
+-    fetchWithTimeout(`${RELAY_URL}/reconnect/offer/${chatId}_offer`, { method: 'DELETE' }).catch(() => {});
++    // Audit 2026-09-28: hier stand zusaetzlich
++    //   DELETE /reconnect/offer/<chatId>_offer
++    // - diese Route gab es auf dem Relay nie. Jeder Aufruf zaehlte dort als
++    // Fehlversuch; mehrere Kontakte auf einmal loeschen (Mehrfachauswahl)
++    // sperrte die eigene IP 5 Minuten lang fuer ALLES (Nachrichten,
++    // Reconnect, Anrufe). Das liegengebliebene Angebot ist ohnehin
++    // verschluesselt, die Gegenseite loescht den Kontakt per delete_chat und
++    // fragt es nie mehr ab - der Aufruf war also auch funktional ueberfluessig.
+     fetchWithTimeout(`${RELAY_URL}/transfer/${chatId}`, { method: 'DELETE' }).catch(() => {});
+   };
+   // "Chat leeren" - auf Nutzerwunsch ergaenzt: anders als deleteContact()
+@@ -806,9 +964,71 @@
+     return () => sub.remove();
+   }, [screen]);
+ 
++  // ── Automatische Sperre (Audit 2026-09-28) ─────────────────────────────
++  // Der PIN wurde bisher NUR beim Kaltstart abgefragt. Da MalachiService den
++  // Prozess absichtlich dauerhaft am Leben haelt, kam praktisch nie wieder ein
++  // Kaltstart - wer das entsperrte Handy in die Hand bekam, konnte Malachi
++  // jederzeit ohne PIN oeffnen und alle Chats lesen. Jetzt: war die App
++  // laenger als AUTO_LOCK_AFTER_MS im Hintergrund, erscheint beim
++  // Zurueckkehren wieder der Sperrbildschirm; nach dem Entsperren geht es
++  // genau dort weiter, wo man war. Die Gnadenfrist deckt kurze System-Dialoge
++  // ab (Bild-/Dateiauswahl, Kamera, Berechtigungsabfragen), die die App
++  // ebenfalls kurz in den Hintergrund schicken. Waehrend eines Anrufs wird nie
++  // gesperrt - die Sperre folgt dann direkt nach dem Auflegen.
++  const backgroundSinceRef = useRef(0);
++  const backgroundGraceRef = useRef(AUTO_LOCK_AFTER_MS);
++  const resumeTargetRef = useRef(null);
++  const screenRef = useRef(screen);
++  screenRef.current = screen;
++  const chatRef = useRef(chat);
++  chatRef.current = chat;
++  const lockNow = () => {
++    const cur = screenRef.current;
++    if (cur === 'lock' || cur === 'setup') return;
++    resumeTargetRef.current = { screen: cur, chat: chatRef.current };
++    setScreen('lock');
++  };
++  React.useEffect(() => {
++    const sub = AppState.addEventListener('change', (next) => {
++      if (next === 'background') {
++        if (!backgroundSinceRef.current) {
++          backgroundSinceRef.current = Date.now();
++          backgroundGraceRef.current = autoLockSuspendCount > 0 ? AUTO_LOCK_DURING_PICKER_MS : AUTO_LOCK_AFTER_MS;
++        }
++        return;
++      }
++      if (next !== 'active') return;
++      const since = backgroundSinceRef.current;
++      backgroundSinceRef.current = 0;
++      if (!since || Date.now() - since < backgroundGraceRef.current) return;
++      if (callManagerRef.current || screenRef.current === 'call') { lockPendingRef.current = true; return; }
++      lockNow();
++    });
++    return () => sub.remove();
++  }, []);
++  // Nach Anrufende: war waehrenddessen eine Sperre faellig (bzw. kam der Anruf
++  // auf dem Sperrbildschirm an), zurueck zur Sperre statt direkt in den Chat.
++  afterCallNavRef.current = (contact) => {
++    if (lockPendingRef.current) {
++      lockPendingRef.current = false;
++      if (!resumeTargetRef.current) resumeTargetRef.current = { screen: 'chat', chat: contact };
++      setScreen('lock');
++      return;
++    }
++    nav('chat', contact);
++  };
++  const RESUMABLE_SCREENS = ['home', 'settings', 'connect', 'groups', 'groupCreate', 'groupDetail'];
++  const onUnlocked = () => {
++    const target = resumeTargetRef.current;
++    resumeTargetRef.current = null;
++    if (target?.screen === 'chat' && target.chat) { nav('chat', target.chat); return; }
++    if (target?.screen && RESUMABLE_SCREENS.includes(target.screen)) { nav(target.screen); return; }
++    nav('home');
++  };
++
+   const screens = {
+     setup:    <SetupScreen    onDone={(n) => { setUsername(n); setScreen('lock'); }} />,
+-    lock:     <LockScreen     onUnlock={() => nav('home')} onWipe={() => { setContacts([]); setUsername(''); setAvatar(null); nav('setup'); }} />,
++    lock:     <LockScreen     onUnlock={onUnlocked} onWipe={() => { resumeTargetRef.current = null; setContacts([]); setUsername(''); setAvatar(null); nav('setup'); }} />,
+     home:     <HomeScreen     contacts={contacts} avatar={avatar} onChat={c => nav('chat',c)} onConnect={() => nav('connect')} onSettings={() => nav('settings')} onGroups={() => nav('groups')} onDelete={(ids) => ids.forEach(deleteContact)} onClearChat={clearChatMessages} />,
+     groups:   <GroupsScreen   groups={groups} onBack={() => nav('home')} onCreate={() => nav('groupCreate')} onOpenGroup={(g) => nav('groupDetail', g)} />,
+     groupCreate: <GroupCreateScreen contacts={contacts} onBack={() => nav('groups')} onCreate={createGroup} />,
+@@ -898,13 +1118,16 @@
+     currentAccent={accentColor === '#0A7EA4' ? 'cyan' : accentColor === '#8B7355' ? 'brown' : accentColor === '#4A90D9' ? 'blue' : accentColor === '#4A8B46' ? 'green' : 'lilac'}
+     currentBg={bgColor === '#F7F5F2' ? 'warm' : bgColor === '#FFFFFF' ? 'white' : bgColor === '#EDF4EC' ? 'sage' : bgColor === '#F5EFE6' ? 'sand' : bgColor === '#1C1C1E' ? 'dark' : customBgUri ? 'custom' : 'warm'}
+     currentFont={fontSize === 13 ? 'small' : fontSize === 18 ? 'large' : 'normal'}
+-    onAccentChange={(color) => { setAccentColor(color); AC = color; AsyncStorage.setItem('settings', JSON.stringify({accentColor: color, bgColor, fontSize})); }} 
++    // Audit 2026-09-28: Akzent-/Schriftgroessen-Aenderung schrieb die
++    // Einstellungen OHNE customBgUri - ein eigenes Chat-Hintergrundbild war
++    // nach dem naechsten App-Start stillschweigend wieder weg.
++    onAccentChange={(color) => { setAccentColor(color); AC = color; AsyncStorage.setItem('settings', JSON.stringify({accentColor: color, bgColor, fontSize, customBgUri})); }}
+     onBgChange={(color, uri) => { 
+-      if (uri) { setCustomBgUri(uri); } 
+-      else { setBgColor(color); P.bg = color; }
++      if (uri) { setCustomBgUri(uri); }
++      else { setBgColor(color); P.bg = color; setCustomBgUri(null); }
+       AsyncStorage.setItem('settings', JSON.stringify({accentColor, bgColor: color, fontSize, customBgUri: uri || null})); 
+     }} 
+-    onFontChange={(size) => { setFontSize(size); AsyncStorage.setItem('settings', JSON.stringify({accentColor, bgColor, fontSize: size})); }}
++    onFontChange={(size) => { setFontSize(size); AsyncStorage.setItem('settings', JSON.stringify({accentColor, bgColor, fontSize: size, customBgUri})); }}
+     onAvatarChange={(uri) => setAvatar(uri)}
+     username={username}
+     onUsernameChange={(n) => { setUsername(n); AsyncStorage.setItem('username', n); }}
+@@ -1420,6 +1643,25 @@
+     return all.filter(c => (c.name || '').toLowerCase().includes(q));
+   }, [contacts, search]);
+ 
++  // UI-Demos (siehe UI_DEMOS oben)
++  const demoLiveStatus = useUiDemo('liveStatus');
++  const demoContactDots = useUiDemo('contactDots');
++  const demoEmptyState = useUiDemo('emptyState');
++  const demoBigTargets = useUiDemo('bigTargets');
++  const demoGroupsTab = useUiDemo('groupsTab');
++  const conn = useConnectivity(contacts, demoLiveStatus || demoContactDots);
++  const allContacts = contacts || CONTACTS;
++  const statusView = (() => {
++    if (!demoLiveStatus) return { color: P.green, text: 'Verbindung gesichert' };
++    if (!conn.online) return { color: '#E0A33A', text: 'Offline · Nachrichten warten sicher auf dem Gerät' };
++    if (!conn.relayOk) return { color: '#E0A33A', text: 'Server nicht erreichbar · versuche es weiter' };
++    if (allContacts.length === 0) return { color: P.green, text: 'Online · Ende-zu-Ende verschlüsselt' };
++    const n = conn.connected.length;
++    return n > 0
++      ? { color: '#2ECC71', text: `${n} von ${allContacts.length} direkt verbunden` }
++      : { color: P.textSub, text: 'Online · verbinde mit Kontakten …' };
++  })();
++
+   const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
+   const toggleSelected = (id) => {
+     setSelected(s => {
+@@ -1482,17 +1724,28 @@
+           </>
+         ) : (
+           <>
+-            <View>
++            <View style={{ flexShrink:1 }}>
+               <Text style={hm.title}>Nachrichten</Text>
+               <View style={{ flexDirection:'row', alignItems:'center', gap:5, marginTop:2 }}>
+-                <View style={{ width:5, height:5, borderRadius:2.5, backgroundColor:P.green }} />
+-                <Text style={{ fontSize:11, color:P.green }}>Verbindung gesichert</Text>
++                <View style={{ width:6, height:6, borderRadius:3, backgroundColor:statusView.color }} />
++                <Text style={{ fontSize:11, color:statusView.color }} numberOfLines={1}>{statusView.text}</Text>
+               </View>
++              {demoGroupsTab && (
++                <View style={{ flexDirection:'row', gap:8, marginTop:10 }}>
++                  <View style={{ paddingHorizontal:14, paddingVertical:5, borderRadius:14, backgroundColor:AC }}>
++                    <Text style={{ fontSize:12, fontWeight:'600', color:'white' }}>Chats</Text>
++                  </View>
++                  <TouchableOpacity onPress={onGroups} hitSlop={DEMO_HIT}
++                    style={{ paddingHorizontal:14, paddingVertical:5, borderRadius:14, borderWidth:1, borderColor:P.border }}>
++                    <Text style={{ fontSize:12, fontWeight:'500', color:P.textSub }}>Gruppen</Text>
++                  </TouchableOpacity>
++                </View>
++              )}
+             </View>
+             <View style={{ flexDirection:'row', alignItems:'center' }}>
+               {(contacts || CONTACTS).length > 0 && (
+-                <TouchableOpacity onPress={openSearch} style={{ padding:6, marginRight:2 }}>
+-                  <Icon name="search" size={15} color={P.textMuted} />
++                <TouchableOpacity onPress={openSearch} style={{ padding:6, marginRight:2 }} hitSlop={demoBigTargets ? DEMO_HIT : undefined}>
++                  <Icon name="search" size={demoBigTargets ? 19 : 15} color={demoBigTargets ? P.textSub : P.textMuted} />
+                 </TouchableOpacity>
+               )}
+               <TouchableOpacity onPress={onSettings} style={{ padding:4 }}>
+@@ -1515,6 +1768,35 @@
+           <Text style={{ textAlign:'center', color:P.textMuted, marginTop:32, fontSize:13 }}>
+             Kein Kontakt gefunden für „{search}"
+           </Text>
++        ) : demoEmptyState ? (
++          <View style={{ alignItems:'center', paddingHorizontal:32, paddingTop:48 }}>
++            <View style={{ width:72, height:72, borderRadius:22, backgroundColor:P.surface, borderWidth:1,
++              borderColor:P.border, alignItems:'center', justifyContent:'center', marginBottom:18 }}>
++              <Icon name="shield" size={32} color={AC} />
++            </View>
++            <Text style={{ fontSize:18, fontWeight:'600', color:P.text, textAlign:'center' }}>Noch keine Kontakte</Text>
++            <Text style={{ fontSize:13, color:P.textSub, textAlign:'center', marginTop:8, lineHeight:19 }}>
++              Malachi verbindet dich direkt und Ende-zu-Ende verschlüsselt - ohne Konto, ohne Telefonbuch-Upload.
++            </Text>
++            <View style={{ alignSelf:'stretch', marginTop:22, gap:12 }}>
++              {[
++                ['1', 'Tippe unten auf „Ersten Kontakt verbinden“.'],
++                ['2', 'Zeig deinem Gegenüber den QR-Code - oder scanne seinen.'],
++                ['3', 'Vergleicht den Sicherheitscode (Schild im Chat). Fertig.'],
++              ].map(([n, t]) => (
++                <View key={n} style={{ flexDirection:'row', alignItems:'center', gap:12 }}>
++                  <View style={{ width:26, height:26, borderRadius:13, backgroundColor:P.greenBg, alignItems:'center', justifyContent:'center' }}>
++                    <Text style={{ fontSize:12, fontWeight:'700', color:AC }}>{n}</Text>
++                  </View>
++                  <Text style={{ flex:1, fontSize:13, color:P.text }}>{t}</Text>
++                </View>
++              ))}
++            </View>
++            <TouchableOpacity onPress={onConnect} activeOpacity={0.85}
++              style={{ marginTop:28, backgroundColor:AC, borderRadius:16, paddingVertical:15, alignSelf:'stretch', alignItems:'center' }}>
++              <Text style={{ color:'white', fontSize:15, fontWeight:'600' }}>Ersten Kontakt verbinden</Text>
++            </TouchableOpacity>
++          </View>
+         ) : null}
+         renderItem={({ item }) => (
+           <TouchableOpacity
+@@ -1532,7 +1814,13 @@
+                   size={22} color={selected.has(item.id) ? AC : P.border} />
+               </View>
+             )}
+-            <Avatar c={item} size={44} />
++            <View>
++              <Avatar c={item} size={44} />
++              {demoContactDots && !item.wiped && conn.connected.includes(item.id) && (
++                <View style={{ position:'absolute', right:-1, bottom:-1, width:14, height:14, borderRadius:7,
++                  backgroundColor:'#2ECC71', borderWidth:2.5, borderColor:P.bg }} />
++              )}
++            </View>
+             <View style={{ flex:1, marginLeft:12 }}>
+               <View style={{ flexDirection:'row', justifyContent:'space-between', marginBottom:4 }}>
+                 <Text style={hm.name}>{item.wiped ? '🪦 Wiped Kontakt' : item.name}</Text>
+@@ -1543,8 +1831,10 @@
+                   {item.wiped ? 'Gerät wurde zurückgesetzt' : item.last}
+                 </Text>
+                 {item.unread > 0 && !item.wiped && (
++                  // Audit 2026-09-28: feste Breite 20 - ab dreistelligen
++                  // Zahlen lief die Zahl aus dem Kreis heraus.
+                   <View style={[hm.badge, { backgroundColor:AC }]}>
+-                    <Text style={{ fontSize:11, color:'white', fontWeight:'600' }}>{item.unread}</Text>
++                    <Text style={{ fontSize:11, color:'white', fontWeight:'600' }}>{item.unread > 99 ? '99+' : item.unread}</Text>
+                   </View>
+                 )}
+               </View>
+@@ -1621,7 +1911,7 @@
+   title:  { fontSize:22, fontWeight:'600', color:P.text },
+   row:    { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:12 },
+   name:   { fontSize:15, fontWeight:'500', color:P.text },
+-  badge:  { width:20, height:20, borderRadius:10, alignItems:'center', justifyContent:'center' },
++  badge:  { minWidth:20, height:20, borderRadius:10, paddingHorizontal:5, alignItems:'center', justifyContent:'center' },
+   fab:    { position:'absolute', bottom:24, right:24, width:54, height:54, borderRadius:27,
+             alignItems:'center', justifyContent:'center', elevation:4 },
+ });
+@@ -1861,6 +2151,19 @@
+ }
+ 
+ function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, rtc, fontSize, customBg, onRename, onDelete, onWipe, onLastMessage }) {
++  // UI-Demos (siehe UI_DEMOS oben)
++  const demoOfflineBanner = useUiDemo('offlineBanner');
++  const demoCallMenu = useUiDemo('callMenu');
++  const demoDarkChat = useUiDemo('darkChat');
++  const demoBigTargets = useUiDemo('bigTargets');
++  const [callMenuOpen, setCallMenuOpen] = useState(false);
++  const [reconnectKick, setReconnectKick] = useState(0);
++  const [, rerender] = React.useReducer(x => x + 1, 0);
++  React.useEffect(() => {
++    if (!reconnectKick) return undefined;
++    const t = setTimeout(rerender, 8100); // Knopf nach 8s wieder freigeben
++    return () => clearTimeout(t);
++  }, [reconnectKick]);
+   const [text, setText]         = useState('');
+   const [msgs, setMsgs]         = useState(messages || []);
+   const [renaming, setRenaming]   = useState(false);
+@@ -2897,7 +3200,8 @@
+   const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25MB - Base64 landet komplett im RAM, siehe FileCrypto.js
+   const pickAndSendFile = async () => {
+     try {
+-      const { pick, isErrorWithCode, errorCodes } = await import('@react-native-documents/picker');
++      const { pick: rawPick, isErrorWithCode, errorCodes } = await import('@react-native-documents/picker');
++      const pick = (opts) => withAutoLockSuspended(() => rawPick(opts));
+       const [picked] = await pick({ type: ['*/*'] });
+       if (!picked) return;
+       const fileName = picked.name || 'Datei';
+@@ -3080,10 +3384,20 @@
+   // dafuer selbst nie eine Anfrage an einen Dritten stellen). Schlaegt die
+   // Aufloesung fehl oder dauert zu lange, wird trotzdem ganz normal mit den
+   // reinen Koordinaten gesendet - nie blockierend fuers eigentliche Senden.
++  //
++  // Audit 2026-09-28 (Vorgabe "echte Daten nur ueber P2P"): dieser Aufruf ist
++  // der einzige Ort, an dem Standortdaten die App NICHT Ende-zu-Ende
++  // verschluesselt verlassen - bisher mit voller GPS-Genauigkeit (~1 m) an
++  // einen Drittanbieter, zusammen mit der eigenen IP. Fuer eine Strassen-/
++  // Ortsangabe (zoom=16) genuegt eine auf ~100 m gerundete Position; die
++  // EXAKTEN Koordinaten gehen weiterhin nur verschluesselt an den Kontakt.
++  // (Ob die Adressanzeige per Drittanbieter ueberhaupt gewuenscht ist, ist
++  // eine Produktentscheidung - siehe Audit-Bericht.)
+   const reverseGeocode = async (lat, lng) => {
++    const coarse = (v) => (Math.round(v * 1000) / 1000).toFixed(3);
+     try {
+       const res = await Promise.race([
+-        fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=16&addressdetails=0`,
++        fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coarse(lat)}&lon=${coarse(lng)}&zoom=16&addressdetails=0`,
+           { headers: { 'User-Agent': 'Malachi-Messenger/1.0 (selbst-gehosteter Messenger, kein Tracking)' } }),
+         new Promise((_, reject) => setTimeout(() => reject(new Error('Nominatim-Timeout')), 5000)),
+       ]);
+@@ -3479,7 +3793,7 @@
+           }
+           // Storage wird automatisch durch msgs useEffect bereinigt
+           onBack();
+-        }} style={{ marginRight:8, padding:4 }}>
++        }} style={{ marginRight:8, padding:4 }} hitSlop={demoBigTargets ? DEMO_HIT : undefined}>
+           <Text style={{ fontSize:22, color:AC }}>←</Text>
+         </TouchableOpacity>
+         {chat && <Avatar c={chat} size={34} />}
+@@ -3487,7 +3801,7 @@
+           <View style={{ flexDirection:'row', alignItems:'center', gap:5 }}>
+             <Text style={{ fontSize:15, fontWeight:'500', color:P.text }}>{chat?.name}</Text>
+             {safetyCode && (
+-              <TouchableOpacity onPress={(e) => { e.stopPropagation(); setSafetyVisible(true); }}>
++              <TouchableOpacity onPress={(e) => { e.stopPropagation(); setSafetyVisible(true); }} hitSlop={demoBigTargets ? DEMO_HIT : undefined}>
+                 <View>
+                   <Icon name="shield" size={13} color="#8FD9F0" />
+                   {safetyChanged && (
+@@ -3501,23 +3815,64 @@
+               {isConnected ? '● P2P verbunden' : '○ Warte auf Verbindung'}
+             </Text>
+         </TouchableOpacity>
+-        <TouchableOpacity onPress={() => setSecretModal(true)} style={{ padding:6 }}>
++        <TouchableOpacity onPress={() => setSecretModal(true)} style={{ padding:6 }} hitSlop={demoBigTargets ? DEMO_HIT : undefined}>
+           <Text style={{ fontSize:18, color:AC }}>🔥</Text>
+         </TouchableOpacity>
+         {/* Design-Feedback: kein Umschalter mehr nebeneinander - EIN Knopf,
+             der direkt im aktuellen Modus anruft; Gedrückthalten wechselt den
+             Modus (Audio/Video), ohne selbst anzurufen. RNs Touchable
+             unterdrueckt onPress bereits eingebaut, wenn onLongPress
+-            ausgeloest wurde - kein eigenes Timer-Handling noetig. */}
++            ausgeloest wurde - kein eigenes Timer-Handling noetig.
++            UI-Demo "callMenu": Antippen oeffnet stattdessen eine kleine
++            Auswahl (Sprach-/Videoanruf) - gleiches Menue-Muster wie die
++            Kontaktliste, kein zusaetzliches Header-Icon. */}
+         <TouchableOpacity
+-          onPress={() => onCall(callMode === 'video')}
+-          onLongPress={() => setCallMode(m => m === 'audio' ? 'video' : 'audio')}
++          onPress={() => demoCallMenu ? setCallMenuOpen(true) : onCall(callMode === 'video')}
++          onLongPress={demoCallMenu ? undefined : () => setCallMode(m => m === 'audio' ? 'video' : 'audio')}
+           delayLongPress={350}
++          hitSlop={demoBigTargets ? DEMO_HIT : undefined}
+           style={{ padding:6 }}>
+-          <Icon name={callMode === 'video' ? 'video' : 'phone'} size={20} color={AC} />
++          <Icon name={demoCallMenu ? 'phone' : (callMode === 'video' ? 'video' : 'phone')} size={20} color={AC} />
+         </TouchableOpacity>
+         </View>
+ 
++      <Modal visible={callMenuOpen} transparent animationType="fade" onRequestClose={() => setCallMenuOpen(false)}>
++        <TouchableOpacity style={{ flex:1 }} activeOpacity={1} onPress={() => setCallMenuOpen(false)}>
++          <View style={{ position:'absolute', right:12, top:58, backgroundColor:P.surface, borderRadius:12,
++            borderWidth:0.5, borderColor:P.border, overflow:'hidden', minWidth:190, elevation:6 }}>
++            <TouchableOpacity style={{ flexDirection:'row', alignItems:'center', gap:10, paddingVertical:13, paddingHorizontal:14 }}
++              onPress={() => { setCallMenuOpen(false); onCall(false); }}>
++              <Icon name="phone" size={16} color={AC} />
++              <Text style={{ fontSize:14, color:P.text }}>Sprachanruf</Text>
++            </TouchableOpacity>
++            <View style={{ height:0.5, backgroundColor:P.border }} />
++            <TouchableOpacity style={{ flexDirection:'row', alignItems:'center', gap:10, paddingVertical:13, paddingHorizontal:14 }}
++              onPress={() => { setCallMenuOpen(false); onCall(true); }}>
++              <Icon name="video" size={16} color={AC} />
++              <Text style={{ fontSize:14, color:P.text }}>Videoanruf</Text>
++            </TouchableOpacity>
++          </View>
++        </TouchableOpacity>
++      </Modal>
++
++      {demoOfflineBanner && !isConnected && !secretActive && (
++        <View style={{ backgroundColor:'#0A2340', borderBottomWidth:0.5, borderBottomColor:P.border,
++          paddingVertical:8, paddingHorizontal:14, flexDirection:'row', alignItems:'center', gap:10 }}>
++          <Icon name="clock" size={15} color="#E0A33A" />
++          <Text style={{ flex:1, fontSize:12, color:P.textSub, lineHeight:16 }}>
++            Gerade keine direkte Verbindung. Deine Nachrichten bleiben verschlüsselt auf dem Gerät und gehen automatisch raus, sobald {chat?.name || 'der Kontakt'} erreichbar ist.
++          </Text>
++          <TouchableOpacity onPress={() => { global.malachiReconnectNow?.(); setReconnectKick(Date.now()); }}
++            disabled={Date.now() - reconnectKick < 8000}
++            style={{ paddingHorizontal:10, paddingVertical:6, borderRadius:10, borderWidth:1,
++              borderColor: Date.now() - reconnectKick < 8000 ? P.border : AC }}>
++            <Text style={{ fontSize:12, fontWeight:'600', color: Date.now() - reconnectKick < 8000 ? P.textMuted : AC }}>
++              {Date.now() - reconnectKick < 8000 ? 'Verbinde …' : 'Jetzt verbinden'}
++            </Text>
++          </TouchableOpacity>
++        </View>
++      )}
++
+       {customBg && <Image source={{ uri: customBg }} style={{ position:'absolute', top:60, left:0, right:0, bottom:60 }} resizeMode="cover" />}
+       {secretActive && (
+         <View style={{ backgroundColor:'#0D2A4A', paddingVertical:8, paddingHorizontal:16,
+@@ -3541,7 +3896,7 @@
+         </View>
+       )}
+       <FlatList ref={ref} data={msgs} keyExtractor={i => i.id}
+-        style={{ backgroundColor: secretActive ? '#0E0A06' : customBg ? 'transparent' : '#F7F5F2' }}
++        style={{ backgroundColor: secretActive ? '#0E0A06' : customBg ? 'transparent' : (demoDarkChat ? '#061F3A' : '#F7F5F2') }}
+         contentContainerStyle={{ padding:14 }}
+         onContentSizeChange={() => ref.current?.scrollToEnd()}
+         renderItem={({ item }) => {
+@@ -3658,7 +4013,13 @@
+                 // FileUriExposedException) und einen echten
+                 // ACTION_SEND-Anhang-Intent startet.
+                 const safeName = (item.fileName || 'Datei').replace(/[\\/:*?"<>|]/g, '_');
+-                const path = `${RNFS.CachesDirectoryPath}/${Date.now()}_${safeName}`;
++                // Audit 2026-09-28: die ENTSCHLUESSELTE Datei lag bisher als
++                // "<zeit>_<name>" dauerhaft im Cache - ausserhalb jedes Wipes
++                // (performWipe raeumt nur play_*/malachi_* weg), also auch
++                // nach Duress-/5-Fehlversuche-Wipe im Klartext lesbar. Jetzt mit
++                // malachi_share_-Praefix (vom Wipe erfasst) und beim naechsten
++                // App-Start automatisch entfernt (cleanupSharedFileCache).
++                const path = `${RNFS.CachesDirectoryPath}/malachi_share_${Date.now()}_${safeName}`;
+                 await RNFS.writeFile(path, item.base64, 'base64');
+                 await NativeModules.FileShareModule.shareFile(path, item.mimeType || 'application/octet-stream', item.fileName || 'Datei');
+               } catch (e) {
+@@ -4312,10 +4673,25 @@
+     // handleConnect() ist unten im selben Komponenten-Rendering bereits
+     // fertig zugewiesen, bis dieser Effect (nach dem Mount) tatsaechlich
+     // laeuft - kein TDZ-Problem, uebliches React-Muster.
++    //
++    // Audit 2026-09-28: ein malachi://connect/...-Link kann von JEDER Quelle
++    // kommen (Webseite, fremde Nachricht, NFC-Tag, anderer QR-Scanner) - ohne
++    // Rueckfrage koppelte die App dann still mit einem Fremden, der danach als
++    // "Neuer Kontakt" Nachrichten schicken und Anrufe starten konnte. Jetzt
++    // eine einzige Bestaetigung (ein Tipp statt Tippen+Einfuegen - der
++    // Komfortgewinn bleibt erhalten).
+     if (deepLinkToken) {
+       setMode('enter');
+       setInput(deepLinkToken);
+-      handleConnect(deepLinkToken);
++      Alert.alert(
++        'Neuen Kontakt verbinden?',
++        'Du hast einen Malachi-Einladungslink geöffnet. Verbinde dich nur, wenn du weißt, von wem dieser Link stammt.',
++        [
++          { text: 'Abbrechen', style: 'cancel' },
++          { text: 'Verbinden', onPress: () => handleConnect(deepLinkToken) },
++        ],
++        { cancelable: true },
++      );
+     }
+   }, [deepLinkToken]);
+ 
+@@ -4865,6 +5241,21 @@
+   );
+ }
+ 
++function DemoToggleRow({ demo, accent }) {
++  const on = useUiDemo(demo.key);
++  return (
++    <TouchableOpacity activeOpacity={0.8} onPress={() => setUiDemoFlag(demo.key, !on)}
++      style={{ flexDirection:'row', alignItems:'center', padding:16 }}>
++      <View style={{ flex:1, marginRight:12 }}>
++        <Text style={{ fontSize:14, fontWeight:'500', color:'#F0F6FA' }}>{demo.title}</Text>
++        <Text style={{ fontSize:11, color:'#6E93AE', marginTop:2, lineHeight:15 }}>{demo.desc}</Text>
++      </View>
++      <Switch value={on} onValueChange={(v) => setUiDemoFlag(demo.key, v)}
++        trackColor={{ false:'#1B3A5C', true:accent + '88' }} thumbColor={on ? accent : '#6E93AE'} />
++    </TouchableOpacity>
++  );
++}
++
+ function SettingsRow({ label, value, onPress, color }) {
+   return (
+     <TouchableOpacity onPress={onPress} activeOpacity={0.7}
+@@ -5163,6 +5554,19 @@
+           </TouchableOpacity>
+         </View>
+ 
++        {/* DEMO-FUNKTIONEN (Audit 2026-09-28) - jede UI-Verbesserung einzeln
++            an/aus, um sie am Geraet zu vergleichen und spaeter auszuwaehlen. */}
++        <Text style={{ fontSize:11, color:'#6E93AE', letterSpacing:1.5, marginBottom:8 }}>DEMO-FUNKTIONEN</Text>
++        <View style={{ backgroundColor:'#0D2A4A', borderRadius:16, borderWidth:0.5,
++          borderColor:'#1B3A5C', overflow:'hidden', marginBottom:20 }}>
++          {UI_DEMOS.map((d, i) => (
++            <View key={d.key}>
++              {i > 0 && <View style={{ height:0.5, backgroundColor:'#0A2340', marginHorizontal:16 }} />}
++              <DemoToggleRow demo={d} accent={curAC} />
++            </View>
++          ))}
++        </View>
++
+         {/* NOTFALL */}
+         <Text style={{ fontSize:11, color:'#6E93AE', letterSpacing:1.5, marginBottom:8 }}>NOTFALL</Text>
+         <TouchableOpacity onPress={() => setWipe(true)}
+@@ -5174,7 +5578,16 @@
+       {/* SHEET: AKZENTFARBE */}
+       <SettingsSheet title="Akzentfarbe" visible={sheet==='accent'} onClose={() => setSheet(null)}>
+         {ACCENTS.map(a => (
+-          <TouchableOpacity key={a.key} onPress={() => { setAccent(a.key); setSheet(null); onAccentChange?.(a.color); AsyncStorage.setItem('settings', JSON.stringify({accent: a.key, chatBg, fontSize})); }}
++          // Audit 2026-09-28: hier (und in den beiden Sheets unten) wurde
++          // 'settings' ein ZWEITES Mal geschrieben - in einem anderen Format
++          // ({accent, chatBg, fontSize:'normal'} statt {accentColor, bgColor,
++          // fontSize:15}) und direkt nach dem korrekten Schreiben des
++          // Elternteils (onAccentChange/onBgChange/onFontChange). Der zweite
++          // Schreibvorgang gewann, AppInner konnte ihn beim naechsten Start
++          // nicht lesen: Akzentfarbe/Schriftgroesse waren nach jedem
++          // Neustart wieder zurueckgesetzt. Persistiert wird jetzt nur noch
++          // ueber den Elternteil.
++          <TouchableOpacity key={a.key} onPress={() => { setAccent(a.key); setSheet(null); onAccentChange?.(a.color); }}
+             style={{ flexDirection:'row', alignItems:'center', paddingVertical:14,
+               borderBottomWidth:0.5, borderBottomColor:'#1B3A5C' }}>
+             <View style={{ width:28, height:28, borderRadius:14, backgroundColor:a.color, marginRight:14 }} />
+@@ -5187,7 +5600,7 @@
+       {/* SHEET: HINTERGRUND */}
+       <SettingsSheet title="Chat-Hintergrund" visible={sheet==='background'} onClose={() => setSheet(null)}>
+         {BACKGROUNDS.map(b => (
+-          <TouchableOpacity key={b.key} onPress={() => { setChatBg(b.key); setSheet(null); onBgChange?.(b.color); AsyncStorage.setItem('settings', JSON.stringify({accent, chatBg: b.key, fontSize})); }}
++          <TouchableOpacity key={b.key} onPress={() => { setChatBg(b.key); setSheet(null); onBgChange?.(b.color); }}
+             style={{ flexDirection:'row', alignItems:'center', paddingVertical:14,
+               borderBottomWidth:0.5, borderBottomColor:'#1B3A5C' }}>
+             <View style={{ width:28, height:28, borderRadius:8, backgroundColor:b.color,
+@@ -5213,7 +5626,7 @@
+       {/* SHEET: SCHRIFTGRÖSSE */}
+       <SettingsSheet title="Schriftgröße" visible={sheet==='font'} onClose={() => setSheet(null)}>
+         {FONTS.map(f => (
+-          <TouchableOpacity key={f.key} onPress={() => { setFont(f.key); setSheet(null); onFontChange?.(f.key==='small'?13:f.key==='large'?18:15); AsyncStorage.setItem('settings', JSON.stringify({accent, chatBg, fontSize: f.key})); setFont(f.key); }}
++          <TouchableOpacity key={f.key} onPress={() => { setFont(f.key); setSheet(null); onFontChange?.(f.key==='small'?13:f.key==='large'?18:15); }}
+             style={{ flexDirection:'row', alignItems:'center', paddingVertical:14,
+               borderBottomWidth:0.5, borderBottomColor:'#1B3A5C' }}>
+             <Text style={{ flex:1, fontSize: f.key==='small'?13:f.key==='normal'?15:18, color:'#F0F6FA' }}>
+--- a/BackgroundSync.js
++++ b/BackgroundSync.js
+@@ -191,6 +191,12 @@
+       continue;
+     }
+     try {
++      // Audit 2026-09-28: fuer Bild/Audio/Datei fehlte diese Pruefung (nur
++      // 'text'/'system' unten hatten sie). `rtc.dataChannel?.send(raw)` ist
++      // bei fehlendem DataChannel ein stiller No-op - der Eintrag galt dann
++      // als "gesendet", die .enc-Datei wurde geloescht, der Absender sah
++      // sogar einen 'sent'-Haken: die Datei war unwiederbringlich verloren.
++      if (rtc.dataChannel?.readyState !== 'open') throw new Error('DataChannel nicht offen');
+       if (item.type === 'image') {
+         const { sendEncryptedImage } = await import('./ImageCrypto');
+         await sendEncryptedImage(payload.base64, payload.mimeType, rtc.sharedSecret, (raw) => rtc.dataChannel?.send(raw));
+@@ -362,6 +368,7 @@
+   EncryptedStorage.removeItem('timer_' + contactId).catch(() => {});
+   EncryptedStorage.removeItem('secret_' + contactId).catch(() => {});
+   EncryptedStorage.removeItem('shared_secret_' + contactId).catch(() => {});
++  EncryptedStorage.removeItem('shared_secret_prev_' + contactId).catch(() => {});
+   wipeQueueForContact(contactId); // "M3"
+   // Gesamten In-Memory-Zustand fuer diesen Kontakt loeschen (schliesst auch
+   // dessen Verbindung + raeumt gepufferte Klartexte/Chunks auf,
+@@ -383,12 +390,21 @@
+   let cs;
+   try { cs = JSON.parse(saved).filter(c => !['1','2','3'].includes(c.id)); } catch { return; }
+   await Promise.all(cs.map(async (c) => {
++    await loadPreviousSecret(c.id);
+     if (RTCStore.sharedSecrets.has(c.id)) return;
+     const secret = await EncryptedStorage.getItem('shared_secret_' + c.id).catch(() => null);
+     if (secret && !RTCStore.sharedSecrets.has(c.id)) RTCStore.sharedSecrets.set(c.id, secret);
+   }));
+ }
+ 
++// Unbestaetigtes vorheriges Secret (siehe RTCStore.rememberPreviousSecret)
++// nach einem Neustart wieder als Kandidat laden. Auch von App.tsx genutzt.
++export async function loadPreviousSecret(contactId) {
++  if (RTCStore.previousSecrets.has(contactId)) return;
++  const prev = await EncryptedStorage.getItem('shared_secret_prev_' + contactId).catch(() => null);
++  if (prev && !RTCStore.previousSecrets.has(contactId)) RTCStore.previousSecrets.set(contactId, prev);
++}
++
+ // ─── Zyklus-Zustand ─────────────────────────────────────────────────────────
+ // Vorher useRef()s in AppInner, jetzt modulweit: App-UI-Timer und Headless-
+ // Task laufen (wenn beide aktiv sind) im selben JS-Kontext und teilen sich
+@@ -445,6 +461,104 @@
+ // naechsten Intervall/Wake) statt zusaetzlich draufzusatteln.
+ let incomingCycleRunning = false;
+ 
++// ─── Audit 2026-09-28: Reconnect-Versuchsverwaltung (Initiator) ────────────
++// Vorher lebte jeder Initiator-Versuch nur als lose Closure: ein 5s-Antwort-
++// Poll plus ein 30-Minuten-Timer, der NUR den Poll und die Sperre raeumte.
++// Drei Folgen, die sich im Alltag als "Verbindung klappt oft nicht" zeigen:
++//  1. Die RTCPeerConnection eines unbeantworteten Versuchs wurde nie
++//     geschlossen (weder nach 30 Min. noch bei den fruehen Abbruchpfaden
++//     "Relay nicht erreichbar" / "Verschluesselung fehlgeschlagen") - bei
++//     fehlendem Netz entstand so alle 8s pro Kontakt eine neue, nie
++//     freigegebene Verbindung samt TURN-Allokation (Akku, Speicher, und ein
++//     plausibler Grund fuer das frueher beobachtete schleichende Einfrieren).
++//  2. Nach einem onDisc lief der alte Antwort-Poll bis zu 30 Min. weiter,
++//     waehrend schon der naechste Versuch startete - bei wackeligem Netz
++//     summierten sich so Dutzende parallele Polls gegen den Relay.
++//  3. Ein Angebot, das VOR einem Netzwechsel erstellt wurde, traegt tote
++//     ICE-Kandidaten - trotzdem sperrte initiatorAttempting jeden neuen
++//     Versuch fuer bis zu 30 Minuten.
++// Jetzt: genau EIN verwalteter Versuch pro Kontakt, der beim Aufgeben immer
++// vollstaendig abgeraeumt wird (inkl. rtc.close()), und der bei einem
++// Netzwechsel gezielt verworfen werden kann (abandonPendingOutgoingAttempts).
++const ANSWER_POLL_MS = 5000;
++const ATTEMPT_MAX_MS = 30 * 60 * 1000;
++const outgoingAttempts = new Map(); // contactId -> { rtc, poll, deadline, pollNow }
++
++function clearAttemptTimers(attempt) {
++  if (!attempt) return;
++  clearInterval(attempt.poll);
++  clearTimeout(attempt.deadline);
++}
++
++// Raeumt den laufenden Versuch fuer contactId ab. Schliesst dessen rtc, ausser
++// sie ist inzwischen die aktive (verbundene) Verbindung.
++function abandonAttempt(contactId, onlyRtc = null) {
++  const attempt = outgoingAttempts.get(contactId);
++  if (!attempt || (onlyRtc && attempt.rtc !== onlyRtc)) return false;
++  outgoingAttempts.delete(contactId);
++  clearAttemptTimers(attempt);
++  if (RTCStore.connections.get(contactId) !== attempt.rtc) {
++    try { attempt.rtc.close(); } catch {}
++  }
++  initiatorAttempting.delete(contactId);
++  return true;
++}
++
++// Von App.tsx bei einem Netzwechsel aufgerufen: alle noch unbeantworteten
++// Angebote tragen Kandidaten des alten Netzes und sind wertlos - verwerfen,
++// damit der naechste Zyklus sofort ein frisches Angebot schickt.
++export function abandonPendingOutgoingAttempts() {
++  let n = 0;
++  for (const contactId of Array.from(outgoingAttempts.keys())) {
++    if (!RTCStore.isConnected(contactId) && abandonAttempt(contactId)) n++;
++  }
++  return n;
++}
++
++// Wecksignal (Antwort liegt evtl. bereit) -> sofort nachsehen statt bis zu 5s
++// auf den naechsten Poll-Tick zu warten.
++export function pollPendingAnswersNow() {
++  for (const attempt of outgoingAttempts.values()) attempt.pollNow?.();
++}
++
++// Reconnect-Angebot mit allen aktuell gueltigen Secret-Kandidaten (siehe
++// RTCStore.getSecretCandidates) verschluesseln. Nur wenn es ueberhaupt einen
++// zweiten Kandidaten gibt (unbestaetigter Schluesselwechsel), wird das
++// erweiterte Format {v:2,c:[...]} verschickt - sonst bit-identisch zum alten
++// Format, damit aeltere Gegenstellen (Web-Client) weiter funktionieren.
++async function encryptOfferForCandidates(plaintext, candidates) {
++  const encs = [];
++  for (const secret of candidates) {
++    const enc = await encryptMsg(plaintext, secret, 'reconnect');
++    if (enc) encs.push(enc);
++  }
++  if (encs.length === 0) return null;
++  return encs.length === 1 ? encs[0] : JSON.stringify({ v: 2, c: encs });
++}
++
++export function offerCiphertexts(raw) {
++  if (typeof raw === 'string' && raw.startsWith('{')) {
++    try {
++      const o = JSON.parse(raw);
++      if (o?.v === 2 && Array.isArray(o.c)) return o.c.filter(x => typeof x === 'string').slice(0, 4);
++    } catch {}
++    return [];
++  }
++  return typeof raw === 'string' ? [raw] : [];
++}
++
++// Probiert jede Chiffre gegen jeden Secret-Kandidaten; liefert den Klartext
++// UND das passende Secret (damit die Antwort mit demselben verschluesselt wird).
++export function decryptWithCandidates(ciphertexts, candidates, purpose) {
++  for (const c of ciphertexts) {
++    for (const secret of candidates) {
++      const plain = decryptMsg(c, secret, purpose);
++      if (plain) return { plain, secret };
++    }
++  }
++  return null;
++}
++
+ // Auto-Reconnect, Initiator-Seite (vorher checkOutgoing in App.tsx).
+ //
+ // Rueckgabewert (neu, fuer den Headless-Task): ein Promise, das erst erfuellt
+@@ -483,6 +597,9 @@
+                 RTCStore.setConnection(contact.id, rtc);
+                 onRtcConnected(contact.id, rtc);
+                 initiatorAttempting.delete(contact.id);
++                // Versuch erfolgreich - Timer abraeumen, rtc NICHT schliessen.
++                const att = outgoingAttempts.get(contact.id);
++                if (att?.rtc === rtc) { clearAttemptTimers(att); outgoingAttempts.delete(contact.id); }
+                 resetBackoff(contact.id);
+                 console.log('[Auto-Reconnect] ✅ Initiator verbunden mit:', contact.name);
+               }, () => {
+@@ -495,7 +612,14 @@
+               if (RTCStore.connections.get(contact.id) === rtc) {
+                 RTCStore.connections.delete(contact.id);
+               }
+-              initiatorAttempting.delete(contact.id);
++              // Audit 2026-09-28: gleiche Identitaets-Pruefung fuer den
++              // Versuchs-Zustand - das verspaetete onDisc einer ALTEN Instanz
++              // darf einen inzwischen laufenden neueren Versuch nicht freigeben.
++              const current = outgoingAttempts.get(contact.id);
++              if (!current || current.rtc === rtc) {
++                abandonAttempt(contact.id, rtc);
++                initiatorAttempting.delete(contact.id);
++              }
+               // War: "kein eigenes Retry-Timing hier, der aeussere Intervall-
+               // Check uebernimmt" (um Wettlaeufe mit dem Interval zu
+               // vermeiden). Live-Test-Fund 2026-09-27: genau dieses Warten
+@@ -520,14 +644,35 @@
+             // fielen hier für immer in `remaining`, ohne je zugestellt zu
+             // werden. flushQueue() deckt alle vier Typen ab.
+             rtc._onReady = () => flushQueue(contact.id, rtc);
++            // Reconnect-Offer/Answer MUESSEN mit dem bereits etablierten Shared
++            // Secret verschluesselt werden - genau wie beim Erst-Pairing per PSK.
++            // Ohne das kann jeder, der contact.id kennt (der Relay trivial, oder
++            // wer das urspruengliche Pairing beobachtet hat), das Offer lesen und
++            // mit einer eigenen Antwort MITMen (Sicherheitsreview C-1).
++            // Audit 2026-09-28: VOR createOffer() pruefen (vorher danach - die
++            // bereits erzeugte PeerConnection blieb dann ungeschlossen liegen)
++            // und alle Secret-Kandidaten verwenden (siehe
++            // RTCStore.getSecretCandidates, unbestaetigter Schluesselwechsel).
++            const candidates = RTCStore.getSecretCandidates(contact.id);
++            if (candidates.length === 0) { initiatorAttempting.delete(contact.id); return Promise.resolve(); }
++            // Sofort registrieren (noch ohne Timer), damit auch ein Versuch,
++            // der gerade noch ICE-Kandidaten sammelt, von einem Netzwechsel
++            // verworfen werden kann (abandonPendingOutgoingAttempts).
++            outgoingAttempts.set(contact.id, { rtc, poll: null, deadline: null, pollNow: null });
++            // Fruehe Abbruchpfade unten muessen die schon erzeugte rtc schliessen -
++            // und duerfen dabei nur IHREN eigenen Versuchs-Zustand freigeben.
++            const giveUp = () => {
++              try { rtc.close(); } catch {}
++              const att = outgoingAttempts.get(contact.id);
++              if (att?.rtc === rtc) {
++                clearAttemptTimers(att);
++                outgoingAttempts.delete(contact.id);
++                initiatorAttempting.delete(contact.id);
++              } else if (!att) {
++                initiatorAttempting.delete(contact.id);
++              }
++            };
+             return rtc.createOffer().then(async offerJSON => {
+-              // Reconnect-Offer/Answer MUESSEN mit dem bereits etablierten Shared
+-              // Secret verschluesselt werden - genau wie beim Erst-Pairing per PSK.
+-              // Ohne das kann jeder, der contact.id kennt (der Relay trivial, oder
+-              // wer das urspruengliche Pairing beobachtet hat), das Offer lesen und
+-              // mit einer eigenen Antwort MITMen (Sicherheitsreview C-1).
+-              const secret = RTCStore.getSharedSecret(contact.id);
+-              if (!secret) { initiatorAttempting.delete(contact.id); return; }
+               // offerJSON ist bereits der volle JSON.stringify({sdp,type}) aus createOffer()
+               // - nur das geparste .sdp-Feld hier einbetten (nicht den ganzen String nochmal
+               // verschachteln), sonst bekommt die Gegenseite beim Verarbeiten denselben
+@@ -538,8 +683,8 @@
+               // normaler Nachrichtenverschluesselung (Sicherheitsreview Review 2,
+               // Domain-Separation). Muss auf beiden Seiten (hier + runIncomingCycle
+               // unten, sowie web/src/App.tsx) identisch sein.
+-              const encryptedOffer = await encryptMsg(offerWithMeta, secret, 'reconnect');
+-              if (!encryptedOffer) { initiatorAttempting.delete(contact.id); return; }
++              const encryptedOffer = await encryptOfferForCandidates(offerWithMeta, candidates);
++              if (!encryptedOffer) { giveUp(); return; }
+               // War derselbe Bug wie beim Erst-Pairing (dort bereits gefixt,
+               // hier beim Live-Test uebersehen): sendReconnectOffer() lieferte
+               // bei einem Netzwerkfehler `false` zurueck, wurde hier aber
+@@ -549,25 +694,45 @@
+               // (die Verbindung kam ja nie ins ICE-Negotiation-Stadium) -
+               // initiatorAttempting blieb bis zum 30-Minuten-Timeout haengen,
+               // der aeussere 15s-Retry-Zyklus konnte nie erneut greifen.
++              // Waehrend createOffer() (bis zu ~12s ICE-Sammeln) kann ein
++              // Netzwechsel diesen Versuch bereits verworfen haben.
++              if (rtc._closed) { giveUp(); return; }
+               const offerSent = await sendReconnectOffer(encryptedOffer, offerKey);
+               if (!offerSent) {
+-                console.warn('[Auto-Reconnect] Reconnect-Offer konnte nicht an den Relay gesendet werden, naechster Versuch in 15s');
+-                initiatorAttempting.delete(contact.id);
++                console.warn('[Auto-Reconnect] Reconnect-Offer konnte nicht an den Relay gesendet werden, naechster Versuch beim naechsten Zyklus');
++                giveUp();
+                 return;
+               }
+               console.log('[Auto-Reconnect] Initiator Offer gesendet für:', contact.name);
+-              const poll = setInterval(async () => {
+-                if (RTCStore.isConnected(contact.id)) { clearInterval(poll); return; }
+-                const encryptedAnswer = await getReconnectAnswer(dynamicAnswerKey);
+-                if (encryptedAnswer) {
+-                  const answer = decryptMsg(encryptedAnswer, secret, 'reconnect');
+-                  if (!answer) return; // Entschluesselung fehlgeschlagen - moeglicher Angriff, ignorieren und weiter warten
+-                  clearInterval(poll);
+-                  await rtc.handleAnswer(answer);
++              const registered = outgoingAttempts.get(contact.id);
++              if (rtc._closed || (registered && registered.rtc !== rtc)) { giveUp(); return; }
++              let answerHandled = false;
++              let polling = false;
++              const pollNow = async () => {
++                if (answerHandled || polling) return;
++                if (RTCStore.isConnected(contact.id)) { abandonAttempt(contact.id, rtc); return; }
++                polling = true;
++                try {
++                  const encryptedAnswer = await getReconnectAnswer(dynamicAnswerKey);
++                  if (!encryptedAnswer || answerHandled) return;
++                  const result = decryptWithCandidates([encryptedAnswer], candidates, 'reconnect');
++                  if (!result) return; // Entschluesselung fehlgeschlagen - moeglicher Angriff, ignorieren und weiter warten
++                  answerHandled = true;
++                  const att = outgoingAttempts.get(contact.id);
++                  if (att?.rtc === rtc) clearInterval(att.poll);
++                  await rtc.handleAnswer(result.plain);
+                   console.log('[Auto-Reconnect] ✅ Initiator Answer erhalten');
++                } catch (e) {
++                  console.warn('[Auto-Reconnect] Antwort konnte nicht verarbeitet werden:', e?.message || e);
++                } finally {
++                  polling = false;
+                 }
+-              }, 5000);
+-              setTimeout(() => { clearInterval(poll); initiatorAttempting.delete(contact.id); }, 30 * 60 * 1000);
++              };
++              const poll = setInterval(pollNow, ANSWER_POLL_MS);
++              // Ohne Antwort nach ATTEMPT_MAX_MS aufgeben - jetzt inklusive
++              // rtc.close() (vorher blieb die PeerConnection fuer immer offen).
++              const deadline = setTimeout(() => abandonAttempt(contact.id, rtc), ATTEMPT_MAX_MS);
++              outgoingAttempts.set(contact.id, { rtc, poll, deadline, pollNow });
+             }).catch((e) => {
+               // War vorher ein voellig stiller Catch (Live-Test entdeckt: ein
+               // haengender/fehlschlagender TURN-Credentials-Fetch oder ein
+@@ -575,7 +740,7 @@
+               // unsichtbar - "Auto-Reconnect funktioniert nicht" liess sich ohne
+               // dieses Logging nicht von aussen diagnostizieren).
+               console.warn('[Auto-Reconnect] Initiator-Verbindungsaufbau fehlgeschlagen:', e?.message || e);
+-              initiatorAttempting.delete(contact.id);
++              giveUp();
+             });
+           };
+           offerAttempts.push(doInitiatorConnect());
+@@ -635,9 +800,13 @@
+               const msg = JSON.parse(packet.payload);
+               if (msg.type === 'encrypted') {
+                 // Verschlüsselte Nachricht via Relay
+-                const secret = RTCStore.getSharedSecret(contact.id);
+-                if (secret) {
+-                  const plaintext = decryptMsg(msg.data, secret);
++                // Audit 2026-09-28: alle Secret-Kandidaten probieren (siehe
++                // RTCStore.getSecretCandidates) - nach einem unbestaetigten
++                // Schluesselwechsel verschluesselt die Gegenseite evtl. noch
++                // mit dem vorherigen Secret.
++                const candidates = RTCStore.getSecretCandidates(contact.id);
++                if (candidates.length > 0) {
++                  const plaintext = decryptWithCandidates([msg.data], candidates)?.plain || null;
+                   if (plaintext) {
+                     const original = JSON.parse(plaintext);
+                     // System-Kontrollnachrichten (delete_chat, secret_start/_end,
+@@ -842,41 +1011,17 @@
+                   if (!RTCStore.buffer.has(contact.id)) RTCStore.buffer.set(contact.id, []);
+                   RTCStore.buffer.get(contact.id).push(msg);
+                 }
+-              } else if (msg.type === 'phone_connect_offer') {
+-                // Eingehender Phone-Connect → Answer senden
+-                console.log('[Phone] Eingehender Connect von:', msg.chatId);
+-                const contactId = msg.chatId;
+-                const newContact = {
+-                  id: contactId, name: 'Neuer Kontakt', initials: 'N',
+-                  color: '#0A2340', tc: '#0A7EA4', last: 'P2P verbunden',
+-                  time: 'Jetzt', unread: 0, role: 'responder'
+-                };
+-                const rtcResp = new WebRTCManager(
+-                  () => {},
+-                  () => {
+-                    rtcResp.chatId = contactId;
+-                    RTCStore.setConnection(contactId, rtcResp);
+-                    onContactsChanged(c => c.find(x => x.id === contactId) ? c : [...c, newContact]);
+-                    // Ueber updateContacts serialisiert (Rot-Team-Review Fund 1).
+-                    updateContacts(cs => cs.find(x => x.id === contactId) ? null : [...cs, newContact]).catch(() => {});
+-                    console.log('[Phone] ✅ Responder verbunden');
+-                  },
+-                  () => {}
+-                );
+-                rtcResp.chatId = contactId;
+-                await rtcResp.handleOffer(msg.offer);
+-                const answerJSON = await rtcResp.createAnswer?.() || rtcResp.localDescription;
+-                // Answer zurücksenden
+-                await fetchWithTimeout(`${RELAY_URL}/packet`, {
+-                  method: 'POST',
+-                  headers: { 'Content-Type': 'application/json' },
+-                  body: JSON.stringify({
+-                    payload: JSON.stringify({ type: 'phone_connect_answer', answer: answerJSON }),
+-                    recipient: contactId + '_answer',
+-                  }),
+-                });
+-                console.log('[Phone] Answer gesendet');
+               }
++              // Audit 2026-09-28: hier stand ein Zweig fuer msg.type ===
++              // 'phone_connect_offer', der aus einem UNVERSCHLUESSELTEN,
++              // unauthentifizierten Relay-Paket einen neuen Kontakt samt
++              // P2P-Verbindung anlegen sollte (ohne PSK, also fuer den Relay
++              // oder jeden, der eine Kontakt-ID kennt, MITM-bar). Er war
++              // zusaetzlich funktionslos (rief das nicht existierende
++              // rtcResp.handleOffer() auf und warf immer) - der echte
++              // Telefonnummer-Connect laeuft laengst PSK-verschluesselt ueber
++              // den Hash-Kanal in ConnectScreen. Ersatzlos entfernt, damit er
++              // nicht versehentlich "repariert" wird.
+             } catch(e) { console.warn('[Packet]', e); }
+           }
+           if (ackTokens.length > 0) {
+@@ -906,17 +1051,26 @@
+         // Ohne bereits etabliertes Shared Secret koennen wir das Offer weder
+         // verifizieren noch entschluesseln - dann ignorieren statt (wie vorher)
+         // ein unverschluesseltes/manipuliertes Offer blind anzunehmen (C-1).
+-        const secretForOffer = RTCStore.getSharedSecret(contact.id);
+-        if (!secretForOffer) continue;
+-        const offer = decryptMsg(encryptedOffer, secretForOffer, 'reconnect');
+-        if (!offer) continue; // Entschluesselung fehlgeschlagen - moeglicher Angriff, verwerfen
++        // Audit 2026-09-28: jede Chiffre des Angebots (Format v2, siehe
++        // encryptOfferForCandidates) gegen jeden Secret-Kandidaten probieren -
++        // die Antwort geht dann mit GENAU dem Secret zurueck, das gepasst hat.
++        const candidates = RTCStore.getSecretCandidates(contact.id);
++        if (candidates.length === 0) continue;
++        const opened = decryptWithCandidates(offerCiphertexts(encryptedOffer), candidates, 'reconnect');
++        if (!opened) continue; // Entschluesselung fehlgeschlagen - moeglicher Angriff, verwerfen
++        const offer = opened.plain;
++        const secretForOffer = opened.secret;
+         responderConnecting.add(contact.id);
+         console.log('[Auto-Reconnect] Responder Offer gefunden von:', contact.name);
++        let rtc = null;
+         try {
+           const parsed = JSON.parse(offer);
+           const realSdp = parsed.sdp;
+           const dynamicAnswerKey = parsed.answerKey;
+-          const rtc = new WebRTCManager(() => {}, () => {
++          if (typeof dynamicAnswerKey !== 'string' || !dynamicAnswerKey.startsWith(contact.id + '_answer_')) {
++            throw new Error('ungueltiger answerKey im Angebot');
++          }
++          rtc = new WebRTCManager(() => {}, () => {
+             RTCStore.setConnection(contact.id, rtc);
+             onRtcConnected(contact.id, rtc);
+             responderConnecting.delete(contact.id);
+@@ -945,21 +1099,26 @@
+           // o" - das genau erklaert den seit langem beobachteten Reconnect-Parse-Fehler.
+           const answer = await rtc.createAnswer(JSON.stringify({ sdp: realSdp }));
+           const encryptedAnswer = await encryptMsg(answer, secretForOffer, 'reconnect');
+-          if (!encryptedAnswer) { responderConnecting.delete(contact.id); continue; }
++          if (!encryptedAnswer) { try { rtc.close(); } catch {} responderConnecting.delete(contact.id); continue; }
+           // Siehe identischer Fund/Fix auf der Initiator-Seite oben (runOutgoingCycle) -
+           // Rueckgabewert pruefen statt blind "gesendet" zu loggen, sonst bleibt
+           // responderConnecting bei einem stillen Netzwerkfehler haengen und der
+           // aeussere Retry-Zyklus (runIncomingCycle) greift nie erneut.
+           const answerSent = await sendReconnectAnswer(encryptedAnswer, dynamicAnswerKey);
+           if (!answerSent) {
+-            console.warn('[Auto-Reconnect] Reconnect-Answer konnte nicht an den Relay gesendet werden, naechster Versuch in 8s');
++            // Audit 2026-09-28: rtc wurde hier bisher nicht geschlossen (Leck).
++            // Das Angebot selbst ist dank Leihfrist beim Relay nicht verloren
++            // und wird beim naechsten Zyklus erneut abgeholt.
++            console.warn('[Auto-Reconnect] Reconnect-Answer konnte nicht an den Relay gesendet werden, naechster Versuch beim naechsten Zyklus');
++            try { rtc.close(); } catch {}
+             responderConnecting.delete(contact.id);
+             continue;
+           }
+           console.log('[Auto-Reconnect] Responder Answer gesendet für Session:', dynamicAnswerKey);
+         } catch(e) {
++          if (rtc) { try { rtc.close(); } catch {} }
+           responderConnecting.delete(contact.id);
+-          console.warn('[Auto-Reconnect] Fehler beim Verarbeiten des Offers:', e);
++          console.warn('[Auto-Reconnect] Fehler beim Verarbeiten des Offers:', e?.message || e);
+         }
+       }
+     }
+@@ -995,14 +1154,47 @@
+ // Mount (ausgeloest durch den nativen Vollbild-Anruf-UI-Start, siehe
+ // MalachiConnection.onAnswer()) sofort an einen echten CallManager reichen
+ // kann, statt auf den naechsten reguraeren Poll zu warten.
+-export async function checkIncomingCallSignal(onIncomingCall = noop) {
++//
++// Audit 2026-09-28 (Anrufe verbinden nicht / Auflegen kommt nicht an):
++// dieser Poll holt (und LEERT beim Relay) die komplette to-callee-Queue jedes
++// Kontakts - verwarf dabei aber alles ausser einem 'offer'. Zwei Faelle, in
++// denen genau diese Signale einem laufenden bzw. gerade klingelnden Anruf
++// gehoerten:
++//  1. Waehrend eines laufenden Anrufs mit App im Hintergrund/Bildschirm aus
++//     (MalachiService meldet dann "nicht im Vordergrund") hat der
++//     CallManager als Angerufener dieselbe Queue selbst gepollt - der
++//     Headless-Tick alle ~8s stahl ihm ICE-Kandidaten und das 'end' des
++//     Anrufers. Folge: Verbindung kam nicht zustande bzw. Auflegen kam nie an.
++//  2. Nach dem nativen Klingeln (Offer gepuffert) kamen weitere ICE-
++//     Kandidaten und ein eventuelles 'cancel' des Anrufers an - beides wurde
++//     verworfen: der Anruf verband nach dem Annehmen schlechter, und ein vom
++//     Anrufer abgebrochener Anruf klingelte trotzdem weiter.
++// Jetzt: waehrend eines laufenden Anrufs gar nicht pollen; fuer einen bereits
++// gepufferten (klingelnden) Anruf neue Signale an den Puffer anhaengen und
++// bei cancel/end das Klingeln sofort beenden.
++let callSignalCheckRunning = false;
++export async function checkIncomingCallSignal(onIncomingCall = noop, onCallCancelled = noop) {
++  if (RTCStore.activeCallContactId || callSignalCheckRunning) return;
++  callSignalCheckRunning = true;
+   try {
+     const saved = await AsyncStorage.getItem('contacts');
+     if (!saved) return;
+     const cs = JSON.parse(saved).filter(c => !['1', '2', '3'].includes(c.id));
+     for (const contact of cs) {
++      if (RTCStore.activeCallContactId) return; // App hat inzwischen einen Anruf uebernommen
+       const signals = await pollCallSignals(contact.id, 'to-callee');
+       if (!signals || signals.length === 0) continue;
++      const pending = RTCStore.pendingCalls.get(contact.id);
++      if (pending) {
++        if (signals.some(s => s.type === 'cancel' || s.type === 'end' || s.type === 'reject')) {
++          console.log('[Call][BG] Anrufer hat abgebrochen, bevor angenommen wurde:', contact.name);
++          RTCStore.pendingCalls.delete(contact.id);
++          onCallCancelled(contact);
++        } else {
++          pending.signals.push(...signals);
++        }
++        continue;
++      }
+       const offerSignal = signals.find(s => s.type === 'offer');
+       if (!offerSignal) continue;
+       console.log('[Call][BG] Eingehender Anruf erkannt von:', contact.name);
+@@ -1010,5 +1202,7 @@
+     }
+   } catch (e) {
+     console.warn('[Call][BG] Poll Fehler:', e);
++  } finally {
++    callSignalCheckRunning = false;
+   }
+ }
+--- a/CallManager.js
++++ b/CallManager.js
+@@ -28,6 +28,7 @@
+ const CONNECT_TIMEOUT_MS = 20000; // Sicherheitsnetz: hängt "Verbinde..." länger, sauber abbrechen
+ const POLL_INTERVAL_MS = 700;    // eigener, kurzer Poll-Takt nur während eines Anrufversuchs
+                                   // (unabhängig vom normalen Text/Bild-Poll-Intervall der App)
++const ICE_DISCONNECT_GRACE_MS = 6000; // siehe oniceconnectionstatechange ('disconnected')
+ 
+ export const CallState = {
+   IDLE: 'idle',
+@@ -170,6 +171,14 @@
+   _setState(state) {
+     console.log('[Call] State:', this.role, '→', state);
+     this.state = state;
++    // Audit 2026-09-28: laufenden Anruf fuer den Headless-Anruf-Check
++    // (BackgroundSync.checkIncomingCallSignal) sichtbar machen - der darf
++    // dessen to-callee-Signale sonst wegpollen.
++    if (state === CallState.IDLE) {
++      if (RTCStore.activeCallContactId === this.contactId) RTCStore.setActiveCall(null);
++    } else if (state !== CallState.ENDED) {
++      RTCStore.setActiveCall(this.contactId);
++    }
+     this.onStateChange(state);
+   }
+ 
+@@ -210,10 +219,25 @@
+         this.callStartTime = Date.now();
+         CallBridgeModule?.reportCallActive(this.contactId);
+       }
+-      if (['disconnected', 'failed', 'closed'].includes(pc.iceConnectionState)) {
++      if (['failed', 'closed'].includes(pc.iceConnectionState)) {
+         console.log('[Call] ICE fehlgeschlagen, beende Call');
+         this.endCall('connection_lost');
+       }
++      // Audit 2026-09-28 ("Anrufe brechen staendig ab"): 'disconnected' ist in
++      // WebRTC ausdruecklich ein VORUEBERGEHENDER Zustand (kurzer Paketverlust,
++      // Funkloch, WLAN->Mobilfunk-Uebergabe) und erholt sich oft von selbst
++      // wieder zu 'connected'. Bisher wurde der Anruf hier sofort beendet -
++      // jeder kurze Aussetzer war ein abgebrochenes Gespraech. Jetzt
++      // Gnadenfrist (wie WebRTCManager.js fuer Chats), erst danach aufgeben.
++      if (pc.iceConnectionState === 'disconnected') {
++        clearTimeout(this._iceGraceTimer);
++        this._iceGraceTimer = setTimeout(() => {
++          if (this.pc === pc && ['disconnected', 'failed'].includes(pc.iceConnectionState)) {
++            console.log('[Call] ICE nach Gnadenfrist weiter getrennt, beende Call');
++            this.endCall('connection_lost');
++          }
++        }, ICE_DISCONNECT_GRACE_MS);
++      }
+     };
+ 
+     return pc;
+@@ -232,6 +256,7 @@
+   // --- Ausgehender Anruf ---
+   async startCall() {
+     this.role = 'caller';
++    RTCStore.setActiveCall(this.contactId);
+     this._startPolling();
+     CallBridgeModule?.reportOutgoingCall(this.contactId, this.peerName);
+ 
+@@ -310,7 +335,18 @@
+       // purpose 'call-signal' - eigener Unterschluessel, getrennt von normaler
+       // Nachrichtenverschluesselung (Sicherheitsreview Review 2, Domain-
+       // Separation). Muss mit _sendSignal() unten und web/CallManager.ts identisch sein.
+-      const decrypted = decryptMsg(signal.payload.enc, secret, 'call-signal');
++      // Audit 2026-09-28: zusaetzlich das vorherige Secret probieren, falls der
++      // letzte Schluesselwechsel noch nicht bestaetigt ist (RTCStore.
++      // getSecretCandidates) - sonst scheitert jeder Anruf, solange die
++      // Chat-Verbindung wegen genau dieses Desyncs nicht wieder zustande kommt.
++      let decrypted = decryptMsg(signal.payload.enc, secret, 'call-signal');
++      if (!decrypted) {
++        for (const alt of RTCStore.getSecretCandidates(this.contactId)) {
++          if (alt === secret) continue;
++          decrypted = decryptMsg(signal.payload.enc, alt, 'call-signal');
++          if (decrypted) break;
++        }
++      }
+       if (decrypted) {
+         signal = { ...signal, payload: JSON.parse(decrypted) };
+       } else {
+@@ -460,6 +496,7 @@
+     if (this.state === CallState.ENDED || this.state === CallState.IDLE) return;
+     clearTimeout(this.ringTimer);
+     clearTimeout(this.connectTimer);
++    clearTimeout(this._iceGraceTimer);
+     this._stopPolling();
+     this._unsubscribeNativeEvents();
+ 
+@@ -497,6 +534,7 @@
+   _forceCleanupToIdle() {
+     clearTimeout(this.ringTimer);
+     clearTimeout(this.connectTimer);
++    clearTimeout(this._iceGraceTimer);
+     this._stopPolling();
+     if (this.localStream) {
+       this.localStream.getTracks().forEach((t) => t.stop());
+--- a/RTCStore.js
++++ b/RTCStore.js
+@@ -71,8 +71,51 @@
+     this.listeners     = new Map(); // chatId → callback
+     this.buffer        = new Map(); // chatId → [msg, msg, ...] (Hintergrundpuffer)
+     this.sharedSecrets = new Map(); // chatId → sharedSecret Base64
++    // chatId → vorheriges sharedSecret (Base64), nur solange der letzte
++    // Schluesselwechsel noch nicht von der Gegenseite bestaetigt ist - siehe
++    // rememberPreviousSecret()/getSecretCandidates() unten.
++    this.previousSecrets = new Map();
+     // chatId → { peerName, signals: [...] } - siehe bufferCallSignal() unten.
+     this.pendingCalls  = new Map();
++    // contactId des gerade laufenden Anrufs (oder null) - siehe setActiveCall().
++    this.activeCallContactId = null;
++  }
++
++  // Audit 2026-09-28 ("Reconnect klappt dauerhaft nicht mehr"): jede
++  // Verbindung handelt per Kyber ein NEUES Shared Secret aus und beide Seiten
++  // ueberschreiben dabei das alte (WebRTCManager.js, kyber_*-Handler). Reisst
++  // die Verbindung genau zwischen "Responder hat das neue Secret gespeichert"
++  // und "Initiator hat den Ciphertext empfangen/gespeichert" ab (oder wird
++  // eine Seite in diesem Fenster beendet), haben beide Seiten danach
++  // VERSCHIEDENE Secrets. Jedes weitere Reconnect-Angebot ist dann fuer die
++  // Gegenseite nicht mehr entschluesselbar und wird als "moeglicher Angriff"
++  // verworfen - fuer immer, bis zum kompletten Neu-Pairing. Deshalb merkt sich
++  // jede Seite beim Wechsel das vorherige Secret, bis die Gegenseite
++  // nachweislich mit dem neuen arbeitet (confirmCurrentSecret), und die
++  // Reconnect-/Relay-Pfade probieren beide Kandidaten.
++  rememberPreviousSecret(chatId, previous, next) {
++    if (!chatId || !previous || previous === next) return false;
++    this.previousSecrets.set(chatId, previous);
++    return true;
++  }
++
++  confirmCurrentSecret(chatId) {
++    return this.previousSecrets.delete(chatId);
++  }
++
++  getSecretCandidates(chatId) {
++    const out = [];
++    const cur = this.sharedSecrets.get(chatId);
++    const prev = this.previousSecrets.get(chatId);
++    if (cur) out.push(cur);
++    if (prev && prev !== cur) out.push(prev);
++    return out;
++  }
++
++  // Siehe BackgroundSync.js checkIncomingCallSignal(): solange ein Anruf
++  // laeuft, darf der Headless-Anruf-Check dessen Signale nicht abholen.
++  setActiveCall(contactId) {
++    this.activeCallContactId = contactId || null;
+   }
+ 
+   // Vom Headless-Anruf-Check (BackgroundSync.js checkIncomingCallSignal,
+@@ -524,13 +567,15 @@
+   // oder laufenden WebRTC-Verbindungen im Prozessspeicher ueberleben.
+   resetAll() {
+     for (const rtc of this.connections.values()) {
+-      try { rtc.close(); } catch {}
++      try { rtc.close('wipe'); } catch {}
+     }
+     this.pendingCalls.clear();
+     this.connections.clear();
+     this.listeners.clear();
+     this.buffer.clear();
+     this.sharedSecrets.clear();
++    this.previousSecrets.clear();
++    this.activeCallContactId = null;
+     this.audioBuffer?.clear();
+     this.imgBuffer?.clear();
+     this.pendingAvatars?.clear();
+@@ -544,12 +589,14 @@
+   clearContact(chatId) {
+     const existing = this.connections.get(chatId);
+     if (existing) {
+-      try { existing.close(); } catch {}
++      try { existing.close('wipe'); } catch {}
+       this.connections.delete(chatId);
+     }
+     this.listeners.delete(chatId);
+     this.buffer.delete(chatId);
+     this.sharedSecrets.delete(chatId);
++    this.previousSecrets.delete(chatId);
++    this.pendingCalls.delete(chatId);
+     this.pendingAvatars?.delete(chatId);
+     this.pendingAvatarExpected?.delete(chatId);
+     this.profileSent?.delete(chatId);
+--- a/RelayClient.js
++++ b/RelayClient.js
+@@ -78,11 +78,21 @@
+ // AbortController erzwingt, dass jeder Relay-Aufruf IMMER innerhalb
+ // begrenzter Zeit entweder erfolgreich ist oder wirft - nie unbegrenzt haengt.
+ const RELAY_FETCH_TIMEOUT_MS = 10000;
++// Audit 2026-09-28: Erreichbarkeit des Relays fuer die Statusanzeige in der
++// UI (siehe useConnectivity in App.tsx) - nur Zaehler, keine Inhalte/Adressen.
++const _relayHealth = { lastOkAt: 0, consecutiveFailures: 0 };
++export function getRelayHealth() { return { ..._relayHealth }; }
+ export async function fetchWithTimeout(url, options = {}) {
+   const controller = new AbortController();
+   const timer = setTimeout(() => controller.abort(), RELAY_FETCH_TIMEOUT_MS);
+   try {
+-    return await fetch(url, { ...options, signal: controller.signal });
++    const res = await fetch(url, { ...options, signal: controller.signal });
++    _relayHealth.lastOkAt = Date.now();
++    _relayHealth.consecutiveFailures = 0;
++    return res;
++  } catch (e) {
++    _relayHealth.consecutiveFailures += 1;
++    throw e;
+   } finally {
+     clearTimeout(timer);
+   }
+@@ -335,6 +345,33 @@
+   _wakeSocket.onerror = () => _wakeSocket?.close();
+ }
+ 
++// Audit 2026-09-28: nach einem Netzwechsel (WLAN <-> Mobilfunk, neue IPv6
++// nach Prefix-Wechsel des Providers) ist die alte TCP-Verbindung tot, der
++// Socket meldet aber oft noch minutenlang readyState OPEN - der Server
++// pingt zwar, aber die Gegenrichtung (Client merkt, dass der Server weg ist)
++// greift erst nach TCP-Timeouts. _connectWakeSocket() kehrte in genau diesem
++// Zustand sofort zurueck ("ist doch offen"), das Wecksignal blieb lange tot
++// und Nachrichten/Reconnects kamen nur noch ueber die langsameren Polls an.
++// Jetzt: aendert sich die Netz-Identitaet (Typ/IP), wird der alte Socket
++// aktiv verworfen und sofort neu verbunden.
++let _lastNetIdentity = null;
++function _netIdentity(state) {
++  return `${state?.type}|${state?.details?.ipAddress || ''}|${!!state?.isConnected}`;
++}
++function _forceWakeReconnect() {
++  const old = _wakeSocket;
++  _wakeSocket = null;
++  if (old) {
++    old.onclose = null; // kein zusaetzlicher Backoff-Reconnect vom alten Socket
++    old.onerror = null;
++    old.onmessage = null;
++    try { old.close(); } catch {}
++  }
++  if (_wakeReconnectTimer) { clearTimeout(_wakeReconnectTimer); _wakeReconnectTimer = null; }
++  _wakeReconnectDelay = 1000;
++  _connectWakeSocket();
++}
++
+ // Einmal beim App-Start aufrufen (z.B. nach setup_done, analog zu
+ // MalachiService?.start() in App.tsx). Idempotent.
+ export function startWakeSocket() {
+@@ -342,19 +379,43 @@
+   _wakeStarted = true;
+   _connectWakeSocket();
+   NetInfo.addEventListener(state => {
+-    if (state.isConnected) {
+-      _wakeReconnectDelay = 1000;
+-      _connectWakeSocket();
+-    }
++    const identity = _netIdentity(state);
++    const changed = _lastNetIdentity !== null && identity !== _lastNetIdentity;
++    _lastNetIdentity = identity;
++    if (!state.isConnected) return;
++    if (changed) _forceWakeReconnect();
++    else { _wakeReconnectDelay = 1000; _connectWakeSocket(); }
+   });
+ }
+ 
++// Reconnect-Angebote liegen beim Relay unter "<id>_offer" - ein Relay ohne
++// die serverseitige Zuordnung (aeltere relay.js) weckt nur Abonnenten genau
++// dieses Schluessels. Beide mitabonnieren kostet nichts und funktioniert mit
++// altem wie neuem Relay.
++function _withOfferKeys(ids) {
++  const out = [];
++  for (const id of ids) { out.push(id, id + '_offer'); }
++  return out;
++}
++
+ // Bei jeder Aenderung der Kontaktliste aufrufen.
++// Audit 2026-09-28: App.tsx ruft das bei JEDER contacts-State-Aenderung auf
++// (auch bei jedem Unread-Zaehler/jeder Vorschau) - der Relay verwirft aber
++// Abos, die schneller als 1/s kommen. Ein neu hinzugekommener Kontakt konnte
++// so zwischen zwei Badge-Updates verloren gehen. Jetzt: nur senden, wenn
++// sich die ID-Menge wirklich geaendert hat, und kurz entprellt.
++let _wakeSubscribeTimer = null;
+ export function setWakeSubscriptions(ids) {
+-  _wakeSubscribedIds = ids;
+-  if (_wakeSocket?.readyState === WebSocket.OPEN) {
+-    _wakeSocket.send(JSON.stringify({ subscribe: ids }));
+-  }
++  const next = _withOfferKeys([...new Set(ids)].sort());
++  if (next.join(',') === _wakeSubscribedIds.join(',')) return;
++  _wakeSubscribedIds = next;
++  if (_wakeSubscribeTimer) clearTimeout(_wakeSubscribeTimer);
++  _wakeSubscribeTimer = setTimeout(() => {
++    _wakeSubscribeTimer = null;
++    if (_wakeSocket?.readyState === WebSocket.OPEN) {
++      _wakeSocket.send(JSON.stringify({ subscribe: _wakeSubscribedIds }));
++    }
++  }, 1100);
+ }
+ 
+ export function onWake(listener) {
+--- a/WebRTCManager.js
++++ b/WebRTCManager.js
+@@ -394,7 +394,11 @@
+     this.onDisc?.();
+   }
+ 
+-  close() {
++  // reason: 'wipe' NUR aus RTCStore.clearContact()/resetAll() (Kontakt
++  // loeschen / Geraet zuruecksetzen) - alle anderen Aufrufer sind normale
++  // Verbindungsabbrueche. Siehe _closeReason-Auswertung in den kyber-Handlern.
++  close(reason = 'disconnect') {
++    if (!this._closed) this._closeReason = reason;
+     if (this._coverTraffic) {
+       clearInterval(this._coverTraffic);
+       this._coverTraffic = null;
+@@ -608,6 +612,7 @@
+           // zum Absturz bringen - deshalb weiterhin catch(), nur nicht mehr
+           // stillschweigend (geloggt statt verschluckt).
+           if (this.chatId) {
++            await this._rememberPreviousSecret();
+             RTCStore.sharedSecrets.set(this.chatId, this.sharedSecret);
+             await EncryptedStorage.setItem('shared_secret_' + this.chatId, this.sharedSecret)
+               .catch(e => console.warn('[Crypto] Persistieren des Shared Secret fehlgeschlagen (Responder):', e));
+@@ -622,9 +627,23 @@
+             // und beides (RAM + Disk) wieder entfernen, statt den Zustand vor
+             // dem Loeschen/Wipe stehen zu lassen.
+             if (this._closed) {
+-              console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen - wiederhergestellten Eintrag erneut entfernt');
+-              RTCStore.sharedSecrets.delete(this.chatId);
+-              EncryptedStorage.removeItem('shared_secret_' + this.chatId).catch(() => {});
++              // Audit 2026-09-28: dieses Entfernen darf NUR fuer einen echten
++              // Wipe/Kontakt-Loeschen gelten (dafuer war es gedacht). close()
++              // laeuft aber auch bei ganz normalem Verbindungsverlust (ICE
++              // 'failed', Zombie-Watch, ersetzte Verbindung) - dann loeschte
++              // dieser Zweig das GERADE ausgehandelte Secret komplett aus RAM
++              // und Speicher. Der Kontakt hatte danach gar kein Secret mehr:
++              // jeder weitere Reconnect wurde mangels Secret ignoriert, fuer
++              // immer (nur Neu-Pairing half). Bei normalem Abbruch bleibt das
++              // neue Secret jetzt stehen (die Gegenseite hat es ja bereits),
++              // das vorherige bleibt als Rueckfall-Kandidat erhalten.
++              if (this._closeReason === 'wipe') {
++                console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen (Wipe) - wiederhergestellten Eintrag erneut entfernt');
++                RTCStore.sharedSecrets.delete(this.chatId);
++                RTCStore.previousSecrets.delete(this.chatId);
++                EncryptedStorage.removeItem('shared_secret_' + this.chatId).catch(() => {});
++                EncryptedStorage.removeItem('shared_secret_prev_' + this.chatId).catch(() => {});
++              }
+               return;
+             }
+           }
+@@ -659,6 +678,7 @@
+           // awaiten, BEVOR _flushPending/Cover-Traffic/_onKeyExchange sich auf
+           // eine durabel abgeschlossene Pairing verlassen.
+           if (this.chatId) {
++            await this._rememberPreviousSecret();
+             RTCStore.sharedSecrets.set(this.chatId, this.sharedSecret);
+             await EncryptedStorage.setItem('shared_secret_' + this.chatId, this.sharedSecret)
+               .catch(e => console.warn('[Crypto] Persistieren des Shared Secret fehlgeschlagen (Initiator):', e));
+@@ -666,9 +686,14 @@
+             // zweites Zeitfenster (waehrend des Disk-Writes selbst, nicht nur
+             // waehrend kyberDecapsulate()).
+             if (this._closed) {
+-              console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen - wiederhergestellten Eintrag erneut entfernt');
+-              RTCStore.sharedSecrets.delete(this.chatId);
+-              EncryptedStorage.removeItem('shared_secret_' + this.chatId).catch(() => {});
++              // Siehe Kommentar im kyber_pubkey-Handler oben (Audit 2026-09-28).
++              if (this._closeReason === 'wipe') {
++                console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen (Wipe) - wiederhergestellten Eintrag erneut entfernt');
++                RTCStore.sharedSecrets.delete(this.chatId);
++                RTCStore.previousSecrets.delete(this.chatId);
++                EncryptedStorage.removeItem('shared_secret_' + this.chatId).catch(() => {});
++                EncryptedStorage.removeItem('shared_secret_prev_' + this.chatId).catch(() => {});
++              }
+               return;
+             }
+           }
+@@ -688,6 +713,11 @@
+           }
+           const plaintext = decryptMsg(msg.data, this.sharedSecret);
+           if (plaintext) {
++            // Erste erfolgreich entschluesselte Nachricht der Gegenseite unter
++            // dem NEUEN Secret = beide Seiten haben den Schluesselwechsel
++            // abgeschlossen, das vorherige Secret wird nicht mehr gebraucht
++            // (siehe _rememberPreviousSecret()).
++            if (this._awaitingKeyConfirm) this._confirmNewSecret();
+             const original = JSON.parse(plaintext);
+             // Füllfeld aus dem Uniformitäts-Padding wieder entfernen, bevor die
+             // Nachricht weiterverarbeitet oder gespeichert wird.
+@@ -783,6 +813,27 @@
+     };
+   }
+ 
++  // Audit 2026-09-28 - siehe ausfuehrliche Begruendung bei
++  // RTCStore.rememberPreviousSecret(): das bisherige Secret NICHT sofort
++  // verwerfen, sondern bis zur Bestaetigung durch die Gegenseite als
++  // Rueckfall-Kandidat fuer Reconnect-/Relay-Pfade aufheben. Ohne das endet
++  // ein im falschen Moment abgerissener Schluesselwechsel in einem
++  // dauerhaften "verbindet nie wieder".
++  async _rememberPreviousSecret() {
++    const previous = RTCStore.sharedSecrets.get(this.chatId);
++    if (!RTCStore.rememberPreviousSecret(this.chatId, previous, this.sharedSecret)) return;
++    this._awaitingKeyConfirm = true;
++    await EncryptedStorage.setItem('shared_secret_prev_' + this.chatId, previous)
++      .catch(e => console.warn('[Crypto] Vorheriges Secret konnte nicht gesichert werden:', e?.message || e));
++  }
++
++  _confirmNewSecret() {
++    this._awaitingKeyConfirm = false;
++    if (!this.chatId) return;
++    RTCStore.confirmCurrentSecret(this.chatId);
++    EncryptedStorage.removeItem('shared_secret_prev_' + this.chatId).catch(() => {});
++  }
++
+   async _flushPending() {
+     if (this.pendingMsgs.length === 0) return;
+     console.log('[Crypto] Sende', this.pendingMsgs.length, 'gepufferte Nachrichten');
+--- a/index.js
++++ b/index.js
+@@ -140,5 +140,13 @@
+     } catch (e) {
+       console.warn('[Headless] Natives Klingeln fehlgeschlagen:', e?.message || e);
+     }
++  }, (contact) => {
++    // Audit 2026-09-28: Anrufer hat vor dem Annehmen aufgelegt - natives
++    // Klingeln sofort beenden statt bis zum Timeout weiterklingeln zu lassen.
++    try {
++      CallBridgeModule?.reportCallEnded?.(contact.id);
++    } catch (e) {
++      console.warn('[Headless] Klingeln beenden fehlgeschlagen:', e?.message || e);
++    }
+   });
+ });
+--- a/__tests__/security/audit20260928.reconnectResilience.test.js
++++ b/__tests__/security/audit20260928.reconnectResilience.test.js
+@@ -0,0 +1,316 @@
++// Audit 2026-09-28 ("App verursacht staendig Verbindungsprobleme") - prueft die
++// App-seitigen Fixes gegen echten Produktionscode (BackgroundSync.js,
++// WebRTCManager.js, RTCStore.js, echte MessageCrypto-Verschluesselung):
++//   A. Schluessel-Desync nach abgerissenem Kyber-Wechsel: Reconnect-Angebote
++//      werden mit dem vorherigen Secret weiterhin geoeffnet/beantwortet.
++//   B. Ein normaler Verbindungsabbruch waehrend der Secret-Persistierung
++//      loescht das neue Secret nicht mehr komplett (nur ein echter Wipe).
++//   C. Vorheriges Secret wird nach Bestaetigung durch die Gegenseite verworfen.
++//   D. Initiator: keine liegengelassenen PeerConnections mehr (Relay nicht
++//      erreichbar / Versuch verworfen), Netzwechsel verwirft alte Angebote.
++//   E. Headless-Anruf-Check stiehlt einem laufenden/klingelnden Anruf keine
++//      Signale mehr und beendet das Klingeln bei 'cancel'.
++const { installKyberModuleMock } = require('./helpers/nativeBridgeMock');
++installKyberModuleMock();
++const crypto = require('crypto');
++const { NativeModules } = require('react-native');
++
++// Minimaler WebRTCManager-Ersatz NUR fuer die BackgroundSync-Tests (Teil A/D) -
++// die echte Klasse braucht eine RTCPeerConnection. Teil B/C benutzt die echte
++// Klasse ueber jest.requireActual.
++const fakeRtcs = [];
++jest.mock('../../WebRTCManager', () => {
++  const actual = jest.requireActual('../../WebRTCManager');
++  class FakeRtc {
++    constructor(onMessage, onConnected, onDisc) {
++      this.onConnected = onConnected;
++      this.onDisc = onDisc;
++      this._closed = false;
++      this.close = jest.fn(() => { this._closed = true; });
++      this.createOffer = jest.fn(async () => JSON.stringify({ sdp: { type: 'offer', sdp: 'v=0 fake-offer' }, type: 'offer' }));
++      this.createAnswer = jest.fn(async () => JSON.stringify({ sdp: { type: 'answer', sdp: 'v=0 fake-answer' }, type: 'offer' }));
++      this.handleAnswer = jest.fn(async () => {});
++      fakeRtcs.push(this);
++    }
++  }
++  return { ...actual, WebRTCManager: FakeRtc, RealWebRTCManager: actual.WebRTCManager };
++});
++
++jest.mock('../../RelayClient', () => ({
++  ...jest.requireActual('../../RelayClient'),
++  fetchWithTimeout: jest.fn(async () => ({ json: async () => ({ packets: [] }) })),
++  getReconnectOffer: jest.fn(async () => null),
++  sendReconnectAnswer: jest.fn(async () => true),
++  sendReconnectOffer: jest.fn(async () => true),
++  getReconnectAnswer: jest.fn(async () => null),
++  pollCallSignals: jest.fn(async () => []),
++}));
++
++const EncryptedStorage = require('react-native-encrypted-storage').default;
++const RelayClient = require('../../RelayClient');
++const RTCStore = require('../../RTCStore').default;
++const { encryptMsg, decryptMsg } = require('../../MessageCrypto');
++const BackgroundSync = require('../../BackgroundSync');
++const { RealWebRTCManager } = require('../../WebRTCManager');
++
++const OLD = crypto.randomBytes(32).toString('base64');
++const NEW = crypto.randomBytes(32).toString('base64');
++// Pro Test eine eigene Kontakt-ID: BackgroundSync haelt responderConnecting/
++// initiatorAttempting bewusst modulweit (geteilt mit dem Headless-Task) - ein
++// erfolgreich beantwortetes Angebot aus einem Test wuerde den Kontakt sonst
++// fuer die folgenden Tests als 'verbindet gerade' sperren.
++let respSeq = 0;
++const RESPONDER_CONTACT = { id: 'c_resp0', name: 'Bob', role: 'responder' };
++const INITIATOR_CONTACT = { id: 'c_init', name: 'Alice', role: 'initiator' };
++
++beforeEach(async () => {
++  await EncryptedStorage.clear();
++  RTCStore.resetAll();
++  fakeRtcs.length = 0;
++  jest.clearAllMocks();
++});
++
++describe('A. Schluessel-Desync: Reconnect-Angebot mit vorherigem Secret', () => {
++  async function offerFor(secret, answerKey = RESPONDER_CONTACT.id + '_answer_s1') {
++    return encryptMsg(JSON.stringify({ sdp: { type: 'offer', sdp: 'v=0' }, answerKey }), secret, 'reconnect');
++  }
++
++  beforeEach(async () => {
++    RESPONDER_CONTACT.id = 'c_resp' + (++respSeq);
++    await EncryptedStorage.setItem('contacts', JSON.stringify([RESPONDER_CONTACT]));
++  });
++
++  test('ohne Rueckfall-Kandidat (alter Zustand) wird das Angebot verworfen - der urspruengliche Fehler', async () => {
++    RTCStore.sharedSecrets.set(RESPONDER_CONTACT.id, NEW);
++    RelayClient.getReconnectOffer.mockResolvedValueOnce(await offerFor(OLD));
++    await BackgroundSync.runIncomingCycle();
++    expect(RelayClient.sendReconnectAnswer).not.toHaveBeenCalled();
++  });
++
++  test('mit vorherigem Secret als Kandidat wird geantwortet - verschluesselt mit GENAU dem passenden Secret', async () => {
++    RTCStore.sharedSecrets.set(RESPONDER_CONTACT.id, NEW);
++    RTCStore.previousSecrets.set(RESPONDER_CONTACT.id, OLD);
++    RelayClient.getReconnectOffer.mockResolvedValueOnce(await offerFor(OLD));
++    await BackgroundSync.runIncomingCycle();
++    expect(RelayClient.sendReconnectAnswer).toHaveBeenCalledTimes(1);
++    const [encAnswer, answerKey] = RelayClient.sendReconnectAnswer.mock.calls[0];
++    expect(answerKey).toBe(RESPONDER_CONTACT.id + '_answer_s1');
++    expect(decryptMsg(encAnswer, OLD, 'reconnect')).toContain('fake-answer');
++    expect(decryptMsg(encAnswer, NEW, 'reconnect')).toBeNull();
++  });
++
++  test('Format v2 (Initiator schickt beide Kandidaten) wird geoeffnet', async () => {
++    RTCStore.sharedSecrets.set(RESPONDER_CONTACT.id, OLD); // Responder hat den Wechsel nie gesehen
++    const v2 = JSON.stringify({ v: 2, c: [await offerFor(NEW), await offerFor(OLD)] });
++    RelayClient.getReconnectOffer.mockResolvedValueOnce(v2);
++    await BackgroundSync.runIncomingCycle();
++    expect(RelayClient.sendReconnectAnswer).toHaveBeenCalledTimes(1);
++    expect(decryptMsg(RelayClient.sendReconnectAnswer.mock.calls[0][0], OLD, 'reconnect')).toContain('fake-answer');
++  });
++
++  test('ein Angebot, das seine Antwort an einen fremden Schluessel lenken will, wird verworfen (und rtc geschlossen)', async () => {
++    RTCStore.sharedSecrets.set(RESPONDER_CONTACT.id, NEW);
++    RelayClient.getReconnectOffer.mockResolvedValueOnce(await offerFor(NEW, 'c_fremd_answer_x'));
++    await BackgroundSync.runIncomingCycle();
++    expect(RelayClient.sendReconnectAnswer).not.toHaveBeenCalled();
++  });
++
++  test('Antwort kann nicht gesendet werden -> rtc wird geschlossen (kein Leck)', async () => {
++    RTCStore.sharedSecrets.set(RESPONDER_CONTACT.id, NEW);
++    RelayClient.getReconnectOffer.mockResolvedValueOnce(await offerFor(NEW));
++    RelayClient.sendReconnectAnswer.mockResolvedValueOnce(false);
++    await BackgroundSync.runIncomingCycle();
++    expect(fakeRtcs).toHaveLength(1);
++    expect(fakeRtcs[0].close).toHaveBeenCalled();
++  });
++
++  test('Relay-Fallback-Paket unter dem vorherigen Secret wird entschluesselt', async () => {
++    RTCStore.sharedSecrets.set(RESPONDER_CONTACT.id, NEW);
++    RTCStore.previousSecrets.set(RESPONDER_CONTACT.id, OLD);
++    const data = await encryptMsg(JSON.stringify({ type: 'text', text: 'unter altem Secret', ts: Date.now() }), OLD);
++    RelayClient.fetchWithTimeout.mockImplementation(async (url) => {
++      if (url.endsWith('/packet/' + RESPONDER_CONTACT.id)) {
++        return { json: async () => ({ packets: [{ token: 't1', payload: JSON.stringify({ type: 'encrypted', data }) }] }) };
++      }
++      return { json: async () => ({ ok: true }) };
++    });
++    await BackgroundSync.runIncomingCycle();
++    expect(RTCStore.buffer.get(RESPONDER_CONTACT.id)).toEqual([expect.objectContaining({ text: 'unter altem Secret' })]);
++  });
++});
++
++describe('D. Initiator: Versuchsverwaltung ohne Lecks', () => {
++  beforeEach(async () => {
++    await EncryptedStorage.setItem('contacts', JSON.stringify([INITIATOR_CONTACT]));
++    RTCStore.sharedSecrets.set(INITIATOR_CONTACT.id, NEW);
++  });
++  afterEach(() => {
++    BackgroundSync.abandonPendingOutgoingAttempts();
++  });
++
++  test('Relay nicht erreichbar -> erzeugte PeerConnection wird geschlossen, naechster Zyklus versucht es erneut', async () => {
++    RelayClient.sendReconnectOffer.mockResolvedValueOnce(false);
++    await BackgroundSync.runOutgoingCycle();
++    expect(fakeRtcs).toHaveLength(1);
++    expect(fakeRtcs[0].close).toHaveBeenCalled();
++    await BackgroundSync.runOutgoingCycle();
++    expect(fakeRtcs).toHaveLength(2);
++  });
++
++  test('ohne Secret wird gar keine PeerConnection erzeugt', async () => {
++    RTCStore.sharedSecrets.delete(INITIATOR_CONTACT.id);
++    await BackgroundSync.runOutgoingCycle();
++    expect(fakeRtcs.every((r) => r.createOffer.mock.calls.length === 0)).toBe(true);
++  });
++
++  test('Netzwechsel verwirft das unbeantwortete Angebot (rtc geschlossen) und gibt den Kontakt fuer ein frisches frei', async () => {
++    await BackgroundSync.runOutgoingCycle();
++    expect(fakeRtcs).toHaveLength(1);
++    // Solange der Versuch laeuft: kein zweites Angebot
++    await BackgroundSync.runOutgoingCycle();
++    expect(fakeRtcs).toHaveLength(1);
++    expect(BackgroundSync.abandonPendingOutgoingAttempts()).toBe(1);
++    expect(fakeRtcs[0].close).toHaveBeenCalled();
++    await BackgroundSync.runOutgoingCycle();
++    expect(fakeRtcs).toHaveLength(2);
++    expect(RelayClient.sendReconnectOffer).toHaveBeenCalledTimes(2);
++  });
++
++  test('mit unbestaetigtem Schluesselwechsel geht das Angebot mit beiden Kandidaten raus (v2)', async () => {
++    RTCStore.previousSecrets.set(INITIATOR_CONTACT.id, OLD);
++    await BackgroundSync.runOutgoingCycle();
++    const [payload, key] = RelayClient.sendReconnectOffer.mock.calls[0];
++    expect(key).toBe(INITIATOR_CONTACT.id + '_offer');
++    const cts = BackgroundSync.offerCiphertexts(payload);
++    expect(cts).toHaveLength(2);
++    expect(BackgroundSync.decryptWithCandidates(cts, [OLD], 'reconnect')).not.toBeNull();
++    expect(BackgroundSync.decryptWithCandidates(cts, [NEW], 'reconnect')).not.toBeNull();
++  });
++
++  test('ohne zweiten Kandidaten bleibt das Angebot im alten Einzel-Format (kompatibel zum Web-Client)', async () => {
++    await BackgroundSync.runOutgoingCycle();
++    const [payload] = RelayClient.sendReconnectOffer.mock.calls[0];
++    expect(payload.startsWith('{')).toBe(false);
++    expect(decryptMsg(payload, NEW, 'reconnect')).toContain('answerKey');
++  });
++
++  test('Wecksignal laesst eine bereitliegende Antwort sofort verarbeiten', async () => {
++    await BackgroundSync.runOutgoingCycle();
++    const offerPlain = decryptMsg(RelayClient.sendReconnectOffer.mock.calls[0][0], NEW, 'reconnect');
++    const { answerKey } = JSON.parse(offerPlain);
++    const encAnswer = await encryptMsg(JSON.stringify({ sdp: { type: 'answer', sdp: 'v=0' } }), NEW, 'reconnect');
++    RelayClient.getReconnectAnswer.mockImplementation(async (k) => (k === answerKey ? encAnswer : null));
++    BackgroundSync.pollPendingAnswersNow();
++    await new Promise((r) => setTimeout(r, 20));
++    expect(fakeRtcs[0].handleAnswer).toHaveBeenCalledTimes(1);
++  });
++});
++
++describe('B/C. Secret-Wechsel in WebRTCManager (echte Klasse)', () => {
++  const CHAT = 'c_kyber';
++  function channel() {
++    return { readyState: 'open', send: null, onopen: null, onmessage: null, onclose: null };
++  }
++  beforeEach(() => {
++    NativeModules.KyberModule.generateKeypair = async () => ({ publicKey: 'pub', secretKey: 'sec' });
++    NativeModules.KyberModule.encapsulate = async () => ({ sharedSecret: NEW, cipherText: 'ct' });
++  });
++
++  async function runResponderExchange({ closeDuringPersist }) {
++    RTCStore.sharedSecrets.set(CHAT, OLD);
++    const originalSetItem = EncryptedStorage.setItem;
++    let release;
++    const gate = new Promise((r) => { release = r; });
++    const spy = jest.spyOn(EncryptedStorage, 'setItem').mockImplementation((k, v) =>
++      (k === 'shared_secret_' + CHAT ? gate : Promise.resolve()).then(() => originalSetItem(k, v)));
++    const rtc = new RealWebRTCManager(() => {}, () => {}, () => {});
++    rtc.chatId = CHAT;
++    const ch = channel();
++    ch.send = () => {};
++    rtc._setupDataChannel(ch);
++    const handler = ch.onmessage({ data: JSON.stringify({ type: 'system', subtype: 'kyber_pubkey', publicKey: 'pub' }) });
++    await new Promise((r) => setTimeout(r, 0));
++    if (closeDuringPersist) rtc.close(); // normaler Verbindungsabbruch, KEIN Wipe
++    release();
++    await handler;
++    spy.mockRestore();
++    return { rtc, ch };
++  }
++
++  test('B: Verbindungsabbruch waehrend der Persistierung laesst neues UND vorheriges Secret bestehen', async () => {
++    await runResponderExchange({ closeDuringPersist: true });
++    expect(RTCStore.sharedSecrets.get(CHAT)).toBe(NEW);
++    expect(RTCStore.previousSecrets.get(CHAT)).toBe(OLD);
++    expect(await EncryptedStorage.getItem('shared_secret_' + CHAT)).toBe(NEW);
++    expect(await EncryptedStorage.getItem('shared_secret_prev_' + CHAT)).toBe(OLD);
++    expect(RTCStore.getSecretCandidates(CHAT)).toEqual([NEW, OLD]);
++  });
++
++  test('B (Gegenprobe): ein echter Wipe waehrend der Persistierung entfernt weiterhin alles', async () => {
++    RTCStore.sharedSecrets.set(CHAT, OLD);
++    const originalSetItem = EncryptedStorage.setItem;
++    let release;
++    const gate = new Promise((r) => { release = r; });
++    const spy = jest.spyOn(EncryptedStorage, 'setItem').mockImplementation((k, v) =>
++      (k === 'shared_secret_' + CHAT ? gate : Promise.resolve()).then(() => originalSetItem(k, v)));
++    const rtc = new RealWebRTCManager(() => {}, () => {}, () => {});
++    rtc.chatId = CHAT;
++    RTCStore.setConnection(CHAT, rtc);
++    const ch = channel();
++    ch.send = () => {};
++    rtc._setupDataChannel(ch);
++    const handler = ch.onmessage({ data: JSON.stringify({ type: 'system', subtype: 'kyber_pubkey', publicKey: 'pub' }) });
++    await new Promise((r) => setTimeout(r, 0));
++    RTCStore.clearContact(CHAT);
++    release();
++    await handler;
++    spy.mockRestore();
++    expect(RTCStore.sharedSecrets.has(CHAT)).toBe(false);
++    expect(RTCStore.previousSecrets.has(CHAT)).toBe(false);
++    await new Promise((r) => setTimeout(r, 0));
++    expect(await EncryptedStorage.getItem('shared_secret_' + CHAT)).toBeNull();
++    expect(await EncryptedStorage.getItem('shared_secret_prev_' + CHAT)).toBeNull();
++  });
++
++  test('C: erste Nachricht der Gegenseite unter dem neuen Secret bestaetigt den Wechsel - vorheriges Secret wird verworfen', async () => {
++    const { rtc, ch } = await runResponderExchange({ closeDuringPersist: false });
++    expect(RTCStore.previousSecrets.get(CHAT)).toBe(OLD);
++    const enc = await encryptMsg(JSON.stringify({ type: 'dummy', p: '' }), NEW);
++    await ch.onmessage({ data: JSON.stringify({ type: 'encrypted', data: enc }) });
++    expect(RTCStore.previousSecrets.has(CHAT)).toBe(false);
++    await new Promise((r) => setTimeout(r, 0));
++    expect(await EncryptedStorage.getItem('shared_secret_prev_' + CHAT)).toBeNull();
++    rtc.close();
++  });
++});
++
++describe('E. Headless-Anruf-Check', () => {
++  const CALLER = { id: 'c_caller', name: 'Carol', role: 'initiator' };
++  beforeEach(async () => {
++    await EncryptedStorage.setItem('contacts', JSON.stringify([CALLER]));
++  });
++
++  test('waehrend eines laufenden Anrufs wird die Signal-Queue nicht angefasst', async () => {
++    RTCStore.setActiveCall(CALLER.id);
++    const onIncoming = jest.fn();
++    await BackgroundSync.checkIncomingCallSignal(onIncoming);
++    expect(RelayClient.pollCallSignals).not.toHaveBeenCalled();
++    RTCStore.setActiveCall(null);
++  });
++
++  test('klingelnder (gepufferter) Anruf: weitere ICE-Signale werden angehaengt statt verworfen', async () => {
++    RTCStore.bufferCallSignal(CALLER.id, CALLER.name, [{ type: 'offer', payload: { enc: 'x' } }]);
++    RelayClient.pollCallSignals.mockResolvedValueOnce([{ type: 'ice', payload: { enc: 'y' } }]);
++    await BackgroundSync.checkIncomingCallSignal(jest.fn(), jest.fn());
++    expect(RTCStore.pendingCalls.get(CALLER.id).signals.map((s) => s.type)).toEqual(['offer', 'ice']);
++  });
++
++  test('Anrufer bricht vor dem Annehmen ab: Klingeln wird beendet, Puffer geleert', async () => {
++    RTCStore.bufferCallSignal(CALLER.id, CALLER.name, [{ type: 'offer', payload: { enc: 'x' } }]);
++    RelayClient.pollCallSignals.mockResolvedValueOnce([{ type: 'cancel', payload: { enc: 'z' } }]);
++    const onCancelled = jest.fn();
++    await BackgroundSync.checkIncomingCallSignal(jest.fn(), onCancelled);
++    expect(onCancelled).toHaveBeenCalledWith(expect.objectContaining({ id: CALLER.id }));
++    expect(RTCStore.pendingCalls.has(CALLER.id)).toBe(false);
++  });
++});
+--- a/__tests__/security/concurrency.contactsStorageLostUpdate.stillIncomplete.test.js
++++ b/__tests__/security/concurrency.contactsStorageLostUpdate.stillIncomplete.test.js
+@@ -57,8 +57,14 @@
+     expect(BG_SRC).toMatch(/export function wipeContactLocally\(contactId, onContactsChanged = noop\) \{[\s\S]{0,500}updateContacts\(cs => cs\.map/);
+     expect(APP_SRC).toMatch(/const wipeContactLocally = \(contactId\) => \{\s*sharedWipeContactLocally\(contactId, setContacts\);/);
+     expect(BG_SRC).toMatch(/subtype === 'device_wiped'\) \{[\s\S]{0,500}wipeContactLocally\(contact\.id, onContactsChanged\)/);
+-    // phone_connect_offer, neuer Kontakt
+-    expect(BG_SRC).toMatch(/updateContacts\(cs => cs\.find\(x => x\.id === contactId\) \? null : \[\.\.\.cs, newContact\]\)/);
++    // phone_connect_offer, neuer Kontakt - Audit 2026-09-28: dieser Zweig
++    // wurde komplett entfernt (legte aus einem unverschluesselten,
++    // unauthentifizierten Relay-Paket einen Kontakt an und war zusaetzlich
++    // funktionslos, siehe Kommentar in BackgroundSync.js). Es darf daher auch
++    // keinen Direkt-Schreibpfad mehr geben - und keinen Handler dafuer.
++    expect(BG_SRC).not.toMatch(/msg\.type === 'phone_connect_offer'/);
++    // Einziger verbleibender Direkt-Schreibzugriff ist der in updateContacts() selbst.
++    expect(BG_SRC.match(/AsyncStorage\.setItem\('contacts'/g)).toHaveLength(1);
+     // onRename (inline im screens-Objekt)
+     expect(APP_SRC).toMatch(/onRename=\{\(updated\) => \{[\s\S]{0,500}updateContacts\(cs => cs\.map\(x => x\.id === updated\.id \? updated : x\)\)/);
+     // onDelete - seit dem Chat-Header-Redesign (Design-Feedback: Header war

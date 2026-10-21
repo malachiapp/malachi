@@ -1,0 +1,20 @@
+{
+  "name": "malachi-buchhaltung",
+  "version": "1.0.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "Lokale Buchhaltung fuer den Malachi-Shop: Belege-Ordner, Quartalsberichte, EUeR-Entwurf (laeuft nur auf dem PC des Betreibers)",
+  "type": "module",
+  "bin": {
+    "malachi-buchhaltung": "./malachi-buchhaltung.mjs"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "pdfjs-dist": "4.10.38"
+  }
+}

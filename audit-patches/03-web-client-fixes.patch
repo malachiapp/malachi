@@ -1,0 +1,483 @@
+--- a/web/src/lib/RTCStore.ts
++++ b/web/src/lib/RTCStore.ts
+@@ -11,6 +11,29 @@
+   listeners = new Map<string, (msg: any) => void>();
+   buffer = new Map<string, any[]>();
+   sharedSecrets = new Map<string, string>();
++  // Audit 2026-09-28 - siehe ausfuehrliche Begruendung in RTCStore.js (nativ,
++  // rememberPreviousSecret): vorheriges Secret bis zur Bestaetigung des
++  // Schluesselwechsels durch die Gegenseite als Rueckfall-Kandidat.
++  previousSecrets = new Map<string, string>();
++
++  rememberPreviousSecret(chatId: string, previous: string | null | undefined, next: string | null): boolean {
++    if (!chatId || !previous || previous === next) return false;
++    this.previousSecrets.set(chatId, previous);
++    return true;
++  }
++
++  confirmCurrentSecret(chatId: string): boolean {
++    return this.previousSecrets.delete(chatId);
++  }
++
++  getSecretCandidates(chatId: string): string[] {
++    const out: string[] = [];
++    const cur = this.sharedSecrets.get(chatId);
++    const prev = this.previousSecrets.get(chatId);
++    if (cur) out.push(cur);
++    if (prev && prev !== cur) out.push(prev);
++    return out;
++  }
+ 
+   setConnection(chatId: string, rtc: WebRTCManager) {
+     // Siehe RTCStore.js (nativ) fuer die Begruendung (State-Machine-Review,
+@@ -98,12 +121,13 @@
+   // Tab-Speicher ueberleben.
+   resetAll() {
+     for (const rtc of this.connections.values()) {
+-      try { rtc.close(); } catch {}
++      try { rtc.close('wipe'); } catch {}
+     }
+     this.connections.clear();
+     this.listeners.clear();
+     this.buffer.clear();
+     this.sharedSecrets.clear();
++    this.previousSecrets.clear();
+   }
+ 
+   // Loescht den gesamten In-Memory-Zustand eines einzelnen Kontakts (Secrets-
+@@ -112,12 +136,13 @@
+   clearContact(chatId: string) {
+     const existing = this.connections.get(chatId);
+     if (existing) {
+-      try { existing.close(); } catch {}
++      try { existing.close('wipe'); } catch {}
+       this.connections.delete(chatId);
+     }
+     this.listeners.delete(chatId);
+     this.buffer.delete(chatId);
+     this.sharedSecrets.delete(chatId);
++    this.previousSecrets.delete(chatId);
+   }
+ }
+ 
+--- a/web/src/lib/RelayClient.ts
++++ b/web/src/lib/RelayClient.ts
+@@ -6,11 +6,42 @@
+ // volle Begruendung): IPv6 kennt kein NAT, die FritzBox-Portfreigabe fuer
+ // 5356 blieb trotz korrekter Konfiguration reproduzierbar unerreichbar -
+ // Port 3333 funktioniert nachweislich zuverlaessig.
+-export const RELAY_URL = 'https://malachii.duckdns.org:3333';
++//
++// Audit 2026-09-28: wird die Web-App vom Relay selbst ausgeliefert (Normalfall,
++// siehe relay.js tryServeStatic), redet sie jetzt mit genau DEM Ursprung, von
++// dem sie geladen wurde (i.d.R. Port 443). Vorher immer fest Port 3333 - der
++// ist laut RelayClient.js (nativ) in Mobilfunknetzen teils blockiert, die
++// Web-App war dort also trotz geladener Seite offline. Ausserhalb des Relay-
++// Hosts (lokale Entwicklung) Port 443 als Default.
++// Lokal (localhost, ausser dem Vite-Dev-Server auf 5173/5174) gilt dasselbe:
++// dann liefert eine lokale Relay-Kopie die App aus (tools/relay-preview.js) -
++// so spricht eine lokale Vorschau nie versehentlich mit dem echten Server.
++const RELAY_HOST = 'malachii.duckdns.org';
++const loc = typeof window !== 'undefined' ? window.location : undefined;
++const servedByRelay = !!loc && /^https?:$/.test(loc.protocol) && (
++  (loc.hostname === RELAY_HOST && loc.protocol === 'https:') ||
++  ((loc.hostname === 'localhost' || loc.hostname === '127.0.0.1') && loc.port !== '5173' && loc.port !== '5174')
++);
++export const RELAY_URL = servedByRelay && loc ? loc.origin : `https://${RELAY_HOST}`;
++
++// Audit 2026-09-28: im Browser gab es (anders als nativ, siehe
++// fetchWithTimeout in RelayClient.js) keinerlei Zeitlimit - ein haengender
++// Request (Netzwechsel, Laptop aus dem Standby) blockierte die jeweilige
++// Poll-Schleife samt ihrer "laeuft noch"-Sperre unbegrenzt.
++const RELAY_FETCH_TIMEOUT_MS = 10000;
++async function relayFetch(url: string, init: RequestInit = {}): Promise<Response> {
++  const controller = new AbortController();
++  const timer = setTimeout(() => controller.abort(), RELAY_FETCH_TIMEOUT_MS);
++  try {
++    return await fetch(url, { ...init, signal: controller.signal });
++  } finally {
++    clearTimeout(timer);
++  }
++}
+ 
+ export async function sendSignalOffer(offer: string, token: string): Promise<boolean> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/signal/offer`, {
++    const res = await relayFetch(`${RELAY_URL}/signal/offer`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ offer, token }),
+@@ -28,7 +59,7 @@
+ 
+ export async function getSignalOffer(token: string): Promise<string | null> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/signal/offer/${token}`);
++    const res = await relayFetch(`${RELAY_URL}/signal/offer/${token}`);
+     const data = await res.json();
+     // Fund (Fuzzing-Kampagne, Server-Response-Parsing): ein kompromittierter
+     // oder fehlerhafter Relay koennte ein truthy, aber falsch geformtes
+@@ -42,7 +73,7 @@
+ 
+ export async function sendSignalAnswer(answer: string, token: string): Promise<boolean> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/signal/answer`, {
++    const res = await relayFetch(`${RELAY_URL}/signal/answer`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ answer, token }),
+@@ -56,7 +87,7 @@
+ 
+ export async function getSignalAnswer(token: string): Promise<string | null> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/signal/answer/${token}`);
++    const res = await relayFetch(`${RELAY_URL}/signal/answer/${token}`);
+     const data = await res.json();
+     // Siehe getReconnectOffer/getSignalOffer oben fuer die Begruendung.
+     return typeof data.answer === 'string' ? data.answer : null;
+@@ -67,7 +98,7 @@
+ 
+ export async function sendReconnectOffer(offer: string, contactId: string): Promise<boolean> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/reconnect/offer`, {
++    const res = await relayFetch(`${RELAY_URL}/reconnect/offer`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ offer, contactId }),
+@@ -81,7 +112,7 @@
+ 
+ export async function getReconnectOffer(contactId: string): Promise<string | null> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/reconnect/offer/${contactId}`);
++    const res = await relayFetch(`${RELAY_URL}/reconnect/offer/${contactId}`);
+     const data = await res.json();
+     // Fund (Fuzzing-Kampagne, Server-Response-Parsing): ein kompromittierter
+     // oder fehlerhafter Relay koennte ein truthy, aber falsch geformtes
+@@ -95,7 +126,7 @@
+ 
+ export async function sendReconnectAnswer(answer: string, contactId: string): Promise<boolean> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/reconnect/answer`, {
++    const res = await relayFetch(`${RELAY_URL}/reconnect/answer`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ answer, contactId }),
+@@ -109,7 +140,7 @@
+ 
+ export async function getReconnectAnswer(contactId: string): Promise<string | null> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/reconnect/answer/${contactId}`);
++    const res = await relayFetch(`${RELAY_URL}/reconnect/answer/${contactId}`);
+     const data = await res.json();
+     // Siehe getReconnectOffer/getSignalOffer oben fuer die Begruendung.
+     return typeof data.answer === 'string' ? data.answer : null;
+@@ -120,7 +151,7 @@
+ 
+ export async function sendPacket(payload: string, recipient: string): Promise<boolean> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/packet`, {
++    const res = await relayFetch(`${RELAY_URL}/packet`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ payload, recipient }),
+@@ -133,7 +164,7 @@
+ 
+ export async function getPackets(recipient: string): Promise<Array<{ payload: string; token?: string }>> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/packet/${recipient}`);
++    const res = await relayFetch(`${RELAY_URL}/packet/${recipient}`);
+     const data = await res.json();
+     // Siehe getReconnectOffer oben fuer die Begruendung - Array.isArray()
+     // statt blossem `|| []`, ein manipuliertes/fehlerhaftes "packets"-Feld
+@@ -153,7 +184,7 @@
+ export async function ackPackets(recipient: string, tokens: string[]): Promise<void> {
+   if (tokens.length === 0) return;
+   try {
+-    await fetch(`${RELAY_URL}/packet/ack`, {
++    await relayFetch(`${RELAY_URL}/packet/ack`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ recipient, tokens }),
+@@ -171,7 +202,7 @@
+   payload: unknown,
+ ): Promise<boolean> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/call/signal`, {
++    const res = await relayFetch(`${RELAY_URL}/call/signal`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ contactId, direction, type, payload }),
+@@ -187,7 +218,7 @@
+   direction: string,
+ ): Promise<Array<{ type: string; payload: unknown; ts: number }>> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/call/signal/${contactId}/${direction}`);
++    const res = await relayFetch(`${RELAY_URL}/call/signal/${contactId}/${direction}`);
+     const data = await res.json();
+     // Siehe getReconnectOffer oben fuer die Begruendung.
+     return Array.isArray(data.signals) ? data.signals : [];
+@@ -217,7 +248,7 @@
+ 
+ export async function pepperRegister(deviceId: string): Promise<PepperRegisterResult> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/pepper/register`, {
++    const res = await relayFetch(`${RELAY_URL}/pepper/register`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ deviceId }),
+@@ -239,7 +270,7 @@
+ 
+ export async function pepperRequest(deviceId: string): Promise<PepperRequestResult> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/pepper/request`, {
++    const res = await relayFetch(`${RELAY_URL}/pepper/request`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ deviceId }),
+@@ -262,7 +293,7 @@
+ // keinen Fehlversuch an (Sicherheitsreview C-3).
+ export async function pepperFail(deviceId: string, attemptToken: string): Promise<{ wiped: boolean; lockedUntil?: number }> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/pepper/fail`, {
++    const res = await relayFetch(`${RELAY_URL}/pepper/fail`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ deviceId, attemptToken }),
+@@ -279,7 +310,7 @@
+ // (Sicherheitsreview C-3: begrenzt das Zeitfenster eines einmal kopierten Peppers).
+ export async function pepperSuccess(deviceId: string, attemptToken: string): Promise<string | null> {
+   try {
+-    const res = await fetch(`${RELAY_URL}/pepper/success`, {
++    const res = await relayFetch(`${RELAY_URL}/pepper/success`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ deviceId, attemptToken }),
+@@ -349,26 +380,60 @@
+   wakeSocket.onerror = () => wakeSocket?.close();
+ }
+ 
++// Audit 2026-09-28 (siehe gleichnamiger Fix in RelayClient.js): nach
++// Netzwechsel oder Standby meldet ein totes Socket oft noch OPEN - dann den
++// alten Socket aktiv verwerfen und neu verbinden, statt auf TCP-Timeouts zu
++// warten.
++function forceWakeReconnect(): void {
++  const old = wakeSocket;
++  wakeSocket = null;
++  if (old) {
++    old.onclose = null;
++    old.onerror = null;
++    old.onmessage = null;
++    try { old.close(); } catch { /* egal */ }
++  }
++  if (wakeReconnectTimer) { clearTimeout(wakeReconnectTimer); wakeReconnectTimer = null; }
++  wakeReconnectDelay = 1000;
++  connectWakeSocket();
++}
++
+ // Einmal beim App-Start aufrufen. Idempotent.
+ export function startWakeSocket(): void {
+   if (wakeStarted) return;
+   wakeStarted = true;
+   connectWakeSocket();
+   if (typeof window !== 'undefined') {
+-    window.addEventListener('online', () => {
+-      wakeReconnectDelay = 1000;
+-      connectWakeSocket();
++    window.addEventListener('online', forceWakeReconnect);
++    let hiddenSince = 0;
++    document.addEventListener('visibilitychange', () => {
++      if (document.visibilityState === 'hidden') { hiddenSince = Date.now(); return; }
++      // Laenger unsichtbar (Tab im Hintergrund / Laptop im Standby) -> Socket
++      // ist sehr wahrscheinlich tot, sicherheitshalber frisch verbinden.
++      if (hiddenSince && Date.now() - hiddenSince > 30000) forceWakeReconnect();
++      hiddenSince = 0;
+     });
+   }
+ }
+ 
+ // Bei jeder Aenderung der Kontaktliste aufrufen - ersetzt die vorherige
+-// Abo-Liste komplett (kein Anhaeufen).
++// Abo-Liste komplett (kein Anhaeufen). Audit 2026-09-28: nur senden, wenn
++// sich die ID-Menge wirklich geaendert hat (der Relay verwirft Abos schneller
++// als 1/s), und "<id>_offer" mit abonnieren, damit auch aeltere Relays ein
++// eingehendes Reconnect-Angebot sofort melden.
++let wakeSubscribeTimer: ReturnType<typeof setTimeout> | null = null;
+ export function setWakeSubscriptions(ids: string[]): void {
+-  wakeSubscribedIds = ids;
+-  if (wakeSocket?.readyState === WebSocket.OPEN) {
+-    wakeSocket.send(JSON.stringify({ subscribe: ids }));
+-  }
++  const next: string[] = [];
++  for (const id of [...new Set(ids)].sort()) next.push(id, id + '_offer');
++  if (next.join(',') === wakeSubscribedIds.join(',')) return;
++  wakeSubscribedIds = next;
++  if (wakeSubscribeTimer) clearTimeout(wakeSubscribeTimer);
++  wakeSubscribeTimer = setTimeout(() => {
++    wakeSubscribeTimer = null;
++    if (wakeSocket?.readyState === WebSocket.OPEN) {
++      wakeSocket.send(JSON.stringify({ subscribe: wakeSubscribedIds }));
++    }
++  }, 1100);
+ }
+ 
+ export function onWake(listener: WakeListener): () => void {
+@@ -385,7 +450,7 @@
+ export async function getTurnCredentials(): Promise<{ username: string; credential: string } | null> {
+   if (turnCredsCache && Date.now() < turnCredsCacheUntil) return turnCredsCache;
+   try {
+-    const res = await fetch(`${RELAY_URL}/turn-credentials`);
++    const res = await relayFetch(`${RELAY_URL}/turn-credentials`);
+     if (!res.ok) throw new Error('TURN-Zugangsdaten-Abruf fehlgeschlagen');
+     const data = await res.json();
+     turnCredsCache = { username: data.username, credential: data.credential };
+--- a/web/src/lib/WebRTCManager.ts
++++ b/web/src/lib/WebRTCManager.ts
+@@ -222,7 +222,13 @@
+     this.onDisc?.();
+   }
+ 
+-  close() {
++  // reason 'wipe' NUR aus RTCStore.clearContact()/resetAll() - siehe
++  // gleichnamiger Fix in WebRTCManager.js (nativ, Audit 2026-09-28).
++  _closeReason: string | null = null;
++  _awaitingKeyConfirm = false;
++
++  close(reason: string = 'disconnect') {
++    if (!this._closed) this._closeReason = reason;
+     if (this._coverTraffic) {
+       clearInterval(this._coverTraffic);
+       this._coverTraffic = null;
+@@ -257,6 +263,23 @@
+     this._closed = true;
+   }
+ 
++  // Siehe WebRTCManager.js (nativ, Audit 2026-09-28).
++  async _rememberPreviousSecret() {
++    if (!this.chatId) return;
++    const previous = RTCStore.sharedSecrets.get(this.chatId);
++    if (!RTCStore.rememberPreviousSecret(this.chatId, previous, this.sharedSecret)) return;
++    this._awaitingKeyConfirm = true;
++    await setItem('shared_secret_prev_' + this.chatId, previous as string)
++      .catch((e) => console.warn('[Crypto] Vorheriges Secret konnte nicht gesichert werden:', e));
++  }
++
++  _confirmNewSecret() {
++    this._awaitingKeyConfirm = false;
++    if (!this.chatId) return;
++    RTCStore.confirmCurrentSecret(this.chatId);
++    removeItem('shared_secret_prev_' + this.chatId).catch(() => {});
++  }
++
+   _setupPC() {
+     this.pc!.oniceconnectionstatechange = () => {
+       const state = this.pc?.iceConnectionState;
+@@ -395,6 +418,7 @@
+           // selbst nicht abbrechen - deshalb weiterhin catch(), nur geloggt
+           // statt stillschweigend verschluckt.
+           if (this.chatId) {
++            await this._rememberPreviousSecret();
+             RTCStore.sharedSecrets.set(this.chatId, this.sharedSecret);
+             await setItem('shared_secret_' + this.chatId, this.sharedSecret)
+               .catch((e) => console.warn('[Crypto] Persistieren des Shared Secret fehlgeschlagen (Responder):', e));
+@@ -402,11 +426,17 @@
+             // WebRTCManager.js, nativ): zweites Zeitfenster - close() kann
+             // WAEHREND dieses awaiteten Storage-Writes gelaufen sein, NACH dem
+             // bereits synchron erfolgten RTCStore.sharedSecrets.set() darueber.
+-            // Danach erneut pruefen und beides wieder entfernen.
++            // Audit 2026-09-28: nur bei einem echten Wipe wieder entfernen - ein
++            // normaler Verbindungsabbruch darf das gerade ausgehandelte Secret
++            // nicht loeschen (Kontakt waere sonst dauerhaft unerreichbar).
+             if (this._closed) {
+-              console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen - wiederhergestellten Eintrag erneut entfernt');
+-              RTCStore.sharedSecrets.delete(this.chatId);
+-              removeItem('shared_secret_' + this.chatId).catch(() => {});
++              if (this._closeReason === 'wipe') {
++                console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen (Wipe) - wiederhergestellten Eintrag erneut entfernt');
++                RTCStore.sharedSecrets.delete(this.chatId);
++                RTCStore.previousSecrets.delete(this.chatId);
++                removeItem('shared_secret_' + this.chatId).catch(() => {});
++                removeItem('shared_secret_prev_' + this.chatId).catch(() => {});
++              }
+               return;
+             }
+           }
+@@ -433,15 +463,20 @@
+           this.keyExchangeDone = true;
+           // Siehe ausfuehrlicher Kommentar im kyber_pubkey-Handler oben (Fix 2).
+           if (this.chatId) {
++            await this._rememberPreviousSecret();
+             RTCStore.sharedSecrets.set(this.chatId, this.sharedSecret);
+             await setItem('shared_secret_' + this.chatId, this.sharedSecret)
+               .catch((e) => console.warn('[Crypto] Persistieren des Shared Secret fehlgeschlagen (Initiator):', e));
+             // Siehe identischer Kommentar im kyber_pubkey-Handler oben -
+             // zweites Zeitfenster (waehrend des Storage-Writes selbst).
+             if (this._closed) {
+-              console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen - wiederhergestellten Eintrag erneut entfernt');
+-              RTCStore.sharedSecrets.delete(this.chatId);
+-              removeItem('shared_secret_' + this.chatId).catch(() => {});
++              if (this._closeReason === 'wipe') {
++                console.warn('[Crypto] Verbindung waehrend Secret-Persistierung geschlossen (Wipe) - wiederhergestellten Eintrag erneut entfernt');
++                RTCStore.sharedSecrets.delete(this.chatId);
++                RTCStore.previousSecrets.delete(this.chatId);
++                removeItem('shared_secret_' + this.chatId).catch(() => {});
++                removeItem('shared_secret_prev_' + this.chatId).catch(() => {});
++              }
+               return;
+             }
+           }
+@@ -456,6 +491,7 @@
+           if (!this.sharedSecret) return;
+           const plaintext = decryptMsg(msg.data, this.sharedSecret);
+           if (plaintext) {
++            if (this._awaitingKeyConfirm) this._confirmNewSecret();
+             const original = JSON.parse(plaintext);
+             if (original.p !== undefined) delete original.p;
+             if (original.type === 'system' && original.subtype === 'ready') {
+--- a/web/src/lib/SecretCandidates.ts
++++ b/web/src/lib/SecretCandidates.ts
+@@ -0,0 +1,46 @@
++// Malachi Web - SecretCandidates.ts
++// Gegenstueck zu encryptOfferForCandidates()/offerCiphertexts()/
++// decryptWithCandidates() in BackgroundSync.js (nativ, Audit 2026-09-28):
++// nach einem im falschen Moment abgerissenen Kyber-Schluesselwechsel haben
++// beide Seiten evtl. verschiedene Shared Secrets. Reconnect-Angebote und
++// Relay-Pakete werden deshalb gegen ALLE aktuell gueltigen Kandidaten
++// (aktuelles + noch unbestaetigtes vorheriges Secret) probiert.
++import { encryptMsg, decryptMsg } from './MessageCrypto';
++
++export async function encryptOfferForCandidates(plaintext: string, candidates: string[]): Promise<string | null> {
++  const encs: string[] = [];
++  for (const secret of candidates) {
++    const enc = await encryptMsg(plaintext, secret, 'reconnect');
++    if (enc) encs.push(enc);
++  }
++  if (encs.length === 0) return null;
++  // Nur mit echtem zweiten Kandidaten das erweiterte Format - sonst
++  // bit-identisch zum alten Einzel-Format (Kompatibilitaet).
++  return encs.length === 1 ? encs[0] : JSON.stringify({ v: 2, c: encs });
++}
++
++export function offerCiphertexts(raw: string | null): string[] {
++  if (typeof raw !== 'string') return [];
++  if (raw.startsWith('{')) {
++    try {
++      const o = JSON.parse(raw);
++      if (o?.v === 2 && Array.isArray(o.c)) return o.c.filter((x: unknown) => typeof x === 'string').slice(0, 4);
++    } catch { /* ungueltig */ }
++    return [];
++  }
++  return [raw];
++}
++
++export function decryptWithCandidates(
++  ciphertexts: string[],
++  candidates: string[],
++  purpose?: string,
++): { plain: string; secret: string } | null {
++  for (const c of ciphertexts) {
++    for (const secret of candidates) {
++      const plain = decryptMsg(c, secret, purpose);
++      if (plain) return { plain, secret };
++    }
++  }
++  return null;
++}

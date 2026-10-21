@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Audit 2026-10-19 (A1): Ab Android 12 schaltet allowBackup="false" nur die
+  Cloud-Sicherung ab, NICHT die Uebertragung beim Geraeteumzug. Ohne diese
+  Regeln wuerden Schluessel, Kontakte und Chats (verschluesselt mit dem
+  Keystore-Schluessel des ALTEN Geraets) mitkopiert - auf dem neuen Geraet
+  ist der Speicher dann unlesbar. Malachi-Daten verlassen das Geraet nie.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>

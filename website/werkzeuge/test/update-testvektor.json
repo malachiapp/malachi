@@ -1,0 +1,10 @@
+{
+  "hinweis": "NUR ZUM TESTEN - dieser Schluessel ist oeffentlich und darf nie produktiv verwendet werden.",
+  "seedHex": "bab4131f8ad6f045b7097019e311be5f26496745a3eecb94bbd17056182a928e",
+  "oeffentlich": "1sAMs8rB7H5FDyDbuPYizHMcQW428dpMw5sP6tWvEso",
+  "oeffentlichHex": "d6c00cb3cac1ec7e450f20dbb8f622cc731c416e36f1da4cc39b0fead5af12ca",
+  "manifest": "{\n  \"format\": \"malachi-update-manifest\",\n  \"formatVersion\": 1,\n  \"applicationId\": \"com.securecommapp\",\n  \"versionName\": \"1.2.0\",\n  \"versionCode\": 12,\n  \"minSupportedVersionCode\": 10,\n  \"published\": \"2026-10-19T12:00:00Z\",\n  \"signingCertSha256\": \"e2eb4f8133258532523447772bd5c99565ca954db2c8ff7d7ccf49bb6cad533e\",\n  \"releaseNotesLang\": \"de\",\n  \"releaseNotes\": \"Testversion – nur für den Testvektor.\\n- Umlaute bleiben UTF-8: äöüß\\n- Zweiter Punkt\",\n  \"apks\": [\n    {\n      \"abi\": \"arm64-v8a\",\n      \"file\": \"malachi-1.2.0-arm64-v8a.apk\",\n      \"size\": 41234567,\n      \"sha256\": \"72f91b5d5a094eb865f89f159349f9ddf175c8c8a30d32ec62c23e7a63ed1c8b\"\n    },\n    {\n      \"abi\": \"armeabi-v7a\",\n      \"file\": \"malachi-1.2.0-armeabi-v7a.apk\",\n      \"size\": 39876543,\n      \"sha256\": \"28c0e27818b2c7fb8f88031780485ac1c415d81e585b8a6e39a8b1bf91c10c57\"\n    }\n  ]\n}\n",
+  "manifestSha256": "40d388d7d8daefee65cc00fa2dc381f2706e1609d3698165dd8ca5e2b1a3d63f",
+  "manifestBytes": 858,
+  "signaturDatei": "wM0miEDK3S74Lx+96h5i7O2+grdQDIrrtORVNDtWAup4rmwVn4h8iz3PthDI6QHUhyjCNB8cEr4hNgcXeKXuCA==\n"
+}

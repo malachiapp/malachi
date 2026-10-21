@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Malachi – Messenger ohne Telefonnummer, ohne Konto, ohne Server</title>
+<meta name="description" content="Malachi ist ein kostenloser Messenger für Android: ohne Telefonnummer, ohne Konto, ohne Malachi-Server. Nachrichten gehen Ende-zu-Ende verschlüsselt direkt von Gerät zu Gerät, zuerst über Tor.">
+{{TEIL:meta}}
+</head>
+<body>
+{{TEIL:kopf}}
+<main id="inhalt" class="rahmen">
+
+<section class="held" aria-labelledby="titel">
+  <h1 id="titel">Malachi – Nachrichten direkt von Gerät zu Gerät</h1>
+  <p class="unterzeile">Ein kostenloser Messenger für Android. Ohne Telefonnummer, ohne Konto und ohne einen Server, über den deine Nachrichten laufen. Ende-zu-Ende verschlüsselt, mit eingebautem Tor.</p>
+  <div class="knopfreihe">
+    <a class="knopf" href="download.html">Android-App laden</a>
+    <a class="knopf zweitrangig" href="#so-funktioniert-es">So funktioniert es</a>
+  </div>
+</section>
+
+<section aria-labelledby="ueberblick">
+  <h2 id="ueberblick">Auf einen Blick</h2>
+  <ul class="raster">
+    <li class="karte">
+      <h3>Kein Konto, keine Nummer</h3>
+      <p>Du meldest dich nirgends an. Kontakte fügst du hinzu, indem ihr eine Einladung austauscht – am besten persönlich per QR-Code, sonst als Link oder Code.</p>
+    </li>
+    <li class="karte">
+      <h3>Kein Malachi-Server</h3>
+      <p>Es gibt keinen Server, der deine Nachrichten speichert oder weiterleitet. Nachrichten, Dateien und Anrufe gehen zwischen euren Geräten – zuerst über Tor, danach nach Möglichkeit direkt.</p>
+    </li>
+    <li class="karte">
+      <h3>Ende-zu-Ende verschlüsselt</h3>
+      <p>Jede Nachricht bekommt einen eigenen Schlüssel (Double Ratchet). Der Schlüsseltausch verbindet X25519 mit ML-KEM-768, einem Verfahren gegen künftige Quantencomputer.</p>
+    </li>
+    <li class="karte">
+      <h3>Alles, was ein Messenger braucht</h3>
+      <p>Einzel- und Gruppenchats, Sprachnachrichten, Bilder und Dateien, Sprach- und Videoanrufe – alles verschlüsselt.</p>
+    </li>
+    <li class="karte">
+      <h3>Siegel-Modus</h3>
+      <p>Texte und Dateien für WhatsApp, Signal &amp; Co. verschlüsseln. Der fremde Messenger transportiert nur Geheimtext. Verschlüsseln gehört zur Vollversion, Entschlüsseln ist kostenlos.</p>
+    </li>
+    <li class="karte">
+      <h3>Kostenlos</h3>
+      <p>Die App ist kostenlos. Wer mehr möchte, kauft einmalig die <a href="vollversion.html">Vollversion für 2,99 €</a> – kein Abo, kein Konto.</p>
+    </li>
+  </ul>
+</section>
+
+<section aria-labelledby="so-funktioniert-es">
+  <h2 id="so-funktioniert-es">So funktioniert es – in einfachen Worten</h2>
+  <ol class="schritte">
+    <li><strong>Einladen.</strong> Du zeigst deinem Kontakt einen QR-Code (oder schickst einen Link). Darin steht, wie sein Gerät dein Gerät über Tor erreicht. Eine Telefonnummer oder ein Nutzername ist nicht nötig.</li>
+    <li><strong>Schlüssel vereinbaren.</strong> Eure Geräte handeln untereinander geheime Schlüssel aus. Den Sicherheitscode (Schild-Symbol im Chat) könnt ihr vergleichen – stimmt er überein, sitzt niemand dazwischen.</li>
+    <li><strong>Schreiben.</strong> Jede Nachricht wird auf deinem Handy verschlüsselt und erst auf dem Handy deines Kontakts wieder entschlüsselt. Unterwegs ist sie nur Geheimtext.</li>
+    <li><strong>Zustellen.</strong> Sind beide Geräte erreichbar, kommt die Nachricht direkt an. Sonst wartet sie verschlüsselt auf deinem Gerät und wird automatisch zugestellt, sobald ihr wieder verbunden seid. Ein Zwischenspeicher im Internet existiert nicht.</li>
+  </ol>
+</section>
+
+<section aria-labelledby="wer-sieht-was">
+  <h2 id="wer-sieht-was">Wer sieht was?</h2>
+  <p>Die Inhalte sieht in jedem Fall nur ihr. Wer deine <strong>IP-Adresse</strong> sehen kann, hängt vom Verbindungsweg ab, den du in den Einstellungen wählst:</p>
+  <div class="tabelle">
+    <table>
+      <caption>Verbindungswege in Malachi</caption>
+      <thead>
+        <tr><th scope="col">Verbindungsweg</th><th scope="col">Wie verbunden wird</th><th scope="col">Wer deine IP-Adresse sehen kann</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Schnell (Standard)</th>
+          <td>Erst über Tor, dann möglichst direkt. Für den Direktweg fragt die App zwei öffentliche STUN-Dienste deutscher Anbieter nach der eigenen öffentlichen Adresse.</td>
+          <td>Die zwei gefragten STUN-Dienste (keine Inhalte, keine Kontakte) und dein Kontakt bei einer Direktverbindung.</td>
+        </tr>
+        <tr>
+          <th scope="row">Privat (ohne STUN)</th>
+          <td>Wie „Schnell“, aber ohne STUN-Dienste. Direkt klappt seltener – sonst bleibt Tor.</td>
+          <td>Nur dein Kontakt, und nur bei einer Direktverbindung.</td>
+        </tr>
+        <tr>
+          <th scope="row">Maximal anonym (nur Tor)<br>– Vollversion</th>
+          <td>Nie eine Direktverbindung. Anrufe nur als Sprache über Tor, kein Video.</td>
+          <td>Niemand, auch dein Kontakt nicht.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="grenzen">
+  <h2 id="grenzen">Ehrliche Grenzen</h2>
+  <ul>
+    <li>Damit eine Nachricht ankommt, müssen beide Geräte irgendwann gleichzeitig erreichbar sein – es gibt keinen Server, der sie zwischenspeichert.</li>
+    <li>Gegen Schadsoftware auf dem Handy selbst oder ein entsperrtes Gerät in fremden Händen hilft keine Verschlüsselung.</li>
+    <li>Verschlüsselung versteckt Inhalte, nicht jede Spur: Je nach Verbindungsweg sehen STUN-Dienste oder dein Kontakt deine IP-Adresse (siehe oben).</li>
+    <li>Malachi wurde bisher nicht von einer unabhängigen Stelle geprüft.</li>
+    <li>Malachi gibt es derzeit nur für Android (ab Version 7.0).</li>
+  </ul>
+  <p>Mehr dazu in den <a href="faq.html">Fragen &amp; Antworten</a>.</p>
+</section>
+
+</main>
+{{TEIL:fuss}}
+</body>
+</html>
