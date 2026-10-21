@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GENERIERT von tools/gen-theme-icons.js - nicht von Hand aendern.
+     App-Icon "Sonnenschein" (sonnenschein); die einfarbige Ebene
+     (Android 13+ "Designte Symbole") ist fuer alle Varianten dieselbe. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_appicon_sonnenschein_bg"/>
+    <foreground android:drawable="@drawable/ic_appicon_sonnenschein_fg"/>
+    <monochrome android:drawable="@drawable/ic_launcher_mono"/>
+</adaptive-icon>

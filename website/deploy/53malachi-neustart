@@ -1,0 +1,6 @@
+// Malachi: Neustart automatisch, wenn ein Update ihn verlangt (z. B. Kernel),
+// nachts um 03:00 UTC (04:00 Winterzeit / 05:00 Sommerzeit). Dauer ca. 15 s.
+// Ziel: /etc/apt/apt.conf.d/53malachi-neustart (ueberschreibt 52malachi-...).
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "03:00";

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">संदेश</string>
+    <string name="notif_channel_messages_desc">Malachi संदेश</string>
+    <string name="notif_new_message">नया संदेश</string>
+    <string name="notif_new_message_from" formatted="true">%1$s से नया संदेश</string>
+    <string name="service_channel_name">Malachi कनेक्शन</string>
+    <string name="service_channel_desc">Malachi कनेक्शन को बनाए रखता है</string>
+    <string name="service_notif_text">कनेक्शन सक्रिय – संदेश प्राप्त हो रहे हैं</string>
+    <string name="call_channel_name">कॉल</string>
+    <string name="call_channel_desc">Malachi की आने वाली और चल रही कॉल</string>
+    <string name="call_notif_title">Malachi कॉल</string>
+    <string name="call_incoming_text">आने वाली कॉल · Malachi</string>
+    <string name="call_ongoing_text">चल रही बातचीत · Malachi</string>
+    <string name="call_action_decline">अस्वीकार करें</string>
+    <string name="call_action_answer">उत्तर दें</string>
+    <string name="call_action_hangup">कॉल काटें</string>
+    <string name="call_wake_text">आने वाली कॉल …</string>
+    <string name="call_unknown_contact">Malachi संपर्क</string>
+</resources>

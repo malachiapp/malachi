@@ -1,0 +1,39 @@
+# DuckDNS: stabile IPv6-Adresse des Laptops eintragen (ausgeloest von malachi-duckdns.timer).
+# Installation: website/deploy/install.sh
+
+[Unit]
+Description=Malachi - DuckDNS-Eintrag (IPv6) aktualisieren
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/malachi-web/duckdns.env
+LoadCredential=duckdns-token:/etc/malachi-web/duckdns.token
+ExecStart=/usr/local/lib/malachi-web/duckdns-ipv6.sh
+DynamicUser=yes
+StateDirectory=malachi-duckdns
+UMask=0077
+
+# Haertung (braucht nur Netlink fuer "ip" und ausgehendes HTTPS)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged

@@ -1,0 +1,31 @@
+{
+  "_hinweis": "ENTWURF fuer den Abschnitt \"rechtliches\" in /etc/malachi-shop/config.json. Alle [BITTE AUSFUELLEN ...] ersetzen, rechtlich pruefen lassen und mit den Seiten der Website (impressum.html, datenschutz.html, widerruf.html, kaufbedingungen.html) abgleichen. Jede Zeile bzw. jeder Absatz ist ein Listeneintrag. Die Datenschutzseite des Shops beschreibt die Technik bereits selbst (src/seiten.js); datenschutzZusatz ergaenzt nur den rechtlichen Teil.",
+  "rechtliches": {
+    "anbieter": [
+      "David Mark Meyer",
+      "Elisenweg 20",
+      "72762 Reutlingen, Deutschland",
+      "E-Mail: MalachiApp@proton.me"
+    ],
+    "impressum": [
+      "Angaben gemäß § 5 DDG",
+      "David Mark Meyer",
+      "Elisenweg 20",
+      "72762 Reutlingen, Deutschland",
+      "E-Mail: MalachiApp@proton.me",
+      "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet (Kleinunternehmerregelung).",
+      "Wir sind nicht bereit und nicht verpflichtet, an Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle teilzunehmen."
+    ],
+    "widerrufsbelehrung": [
+      "Widerrufsrecht: Sie haben das Recht, binnen vierzehn Tagen ohne Angabe von Gründen diesen Vertrag zu widerrufen. Die Widerrufsfrist beträgt vierzehn Tage ab dem Tag des Vertragsabschlusses.",
+      "Um Ihr Widerrufsrecht auszuüben, müssen Sie uns (David Mark Meyer, Elisenweg 20, 72762 Reutlingen, E-Mail: MalachiApp@proton.me) mittels einer eindeutigen Erklärung (z. B. ein mit der Post versandter Brief oder eine E-Mail) über Ihren Entschluss, diesen Vertrag zu widerrufen, informieren. Sie können dafür das Muster-Widerrufsformular auf unserer Website verwenden, das jedoch nicht vorgeschrieben ist. Sie können auch die Funktion „Vertrag widerrufen“ in diesem Shop (Link unten auf jeder Seite) oder in der App (Vollversion → Widerruf) nutzen; Sie erhalten dann sofort eine Eingangsbestätigung. Zur Wahrung der Widerrufsfrist reicht es aus, dass Sie die Mitteilung über die Ausübung des Widerrufsrechts vor Ablauf der Widerrufsfrist absenden.",
+      "Folgen des Widerrufs: Wenn Sie diesen Vertrag widerrufen, haben wir Ihnen alle Zahlungen, die wir von Ihnen erhalten haben, unverzüglich und spätestens binnen vierzehn Tagen ab dem Tag zurückzuzahlen, an dem die Mitteilung über Ihren Widerruf dieses Vertrags bei uns eingegangen ist. Für diese Rückzahlung verwenden wir dasselbe Zahlungsmittel, das Sie bei der ursprünglichen Transaktion eingesetzt haben, es sei denn, mit Ihnen wurde ausdrücklich etwas anderes vereinbart; in keinem Fall werden Ihnen wegen dieser Rückzahlung Entgelte berechnet. Wir zahlen den eingegangenen Betrag in derselben Kryptowährung an eine Adresse zurück, die Sie uns mit der Bestellnummer nennen; die Netzwerkgebühr tragen wir.",
+      "Vorzeitiges Erlöschen: Ihr Widerrufsrecht erlischt, wenn wir mit der Ausführung des Vertrags begonnen haben, nachdem Sie (1) ausdrücklich zugestimmt haben, dass wir vor Ablauf der Widerrufsfrist mit der Ausführung des Vertrags beginnen, (2) Ihre Kenntnis davon bestätigt haben, dass Sie durch Ihre Zustimmung mit Beginn der Ausführung des Vertrags Ihr Widerrufsrecht verlieren, und (3) wir Ihnen eine Bestätigung des Vertrags auf einem dauerhaften Datenträger zur Verfügung gestellt haben. Die Zustimmung geben Sie vor dem Bezahlen ab; die Lizenz und die Rechnung mit der Vertragsbestätigung werden unmittelbar nach dem Zahlungseingang bereitgestellt."
+    ],
+    "datenschutzZusatz": [
+      "Verantwortlich: David Mark Meyer, Elisenweg 20, 72762 Reutlingen, E-Mail: MalachiApp@proton.me. Ausführlich: Datenschutzerklärung auf unserer Website.",
+      "Rechtsgrundlagen: Art. 6 Abs. 1 lit. b DSGVO (Durchführung des Kaufs, Lizenz, Geräteumzug) und Art. 6 Abs. 1 lit. c DSGVO (steuer- und handelsrechtliche Aufbewahrungspflichten, § 147 AO, § 257 HGB). Der Server steht bei der Hetzner Online GmbH in Nürnberg (Auftragsverarbeitung nach Art. 28 DSGVO).",
+      "Ihre Rechte: Auskunft, Berichtigung, Löschung, Einschränkung, Datenübertragbarkeit und Widerspruch (Art. 15–21 DSGVO) sowie Beschwerde bei einer Datenschutz-Aufsichtsbehörde (Art. 77 DSGVO). Da wir keine Namen oder Kontaktdaten speichern, nennen Sie uns für Anfragen bitte die Bestellnummer."
+    ]
+  }
+}

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Malachi – Messenger without a phone number, without an account, without a server</title>
+<meta name="description" content="Malachi is a free messenger for Android: no phone number, no account, no Malachi server. Messages are end-to-end encrypted and go straight from device to device, via Tor first.">
+{{TEIL:meta}}
+</head>
+<body>
+{{TEIL:kopfen}}
+<main id="inhalt" class="rahmen">
+
+<section class="held" aria-labelledby="titel">
+  <h1 id="titel">Malachi – messages straight from device to device</h1>
+  <p class="unterzeile">A free messenger for Android. No phone number, no account and no server your messages pass through. End-to-end encrypted, with Tor built in.</p>
+  <div class="knopfreihe">
+    <a class="knopf" href="download.html">Get the Android app</a>
+    <a class="knopf zweitrangig" href="#how-it-works">How it works</a>
+  </div>
+</section>
+
+<section aria-labelledby="overview">
+  <h2 id="overview">At a glance</h2>
+  <ul class="raster">
+    <li class="karte">
+      <h3>No account, no number</h3>
+      <p>You don't sign up anywhere. You add contacts by exchanging an invitation – ideally in person via QR code, otherwise as a link or code.</p>
+    </li>
+    <li class="karte">
+      <h3>No Malachi server</h3>
+      <p>There is no server that stores or relays your messages. Messages, files and calls travel between your devices – via Tor first, then directly whenever possible.</p>
+    </li>
+    <li class="karte">
+      <h3>End-to-end encrypted</h3>
+      <p>Every message gets its own key (Double Ratchet). The key exchange combines X25519 with ML-KEM-768, a scheme designed to resist future quantum computers.</p>
+    </li>
+    <li class="karte">
+      <h3>Everything a messenger needs</h3>
+      <p>One-to-one and group chats, voice messages, pictures and files, voice and video calls – all encrypted.</p>
+    </li>
+    <li class="karte">
+      <h3>Seal mode</h3>
+      <p>Encrypt texts and files for WhatsApp, Signal and others. The other messenger only carries ciphertext. Encrypting is part of the full version, decrypting is free.</p>
+    </li>
+    <li class="karte">
+      <h3>Free</h3>
+      <p>The app is free. If you want more, buy the <a href="vollversion.html">full version for €2.99</a> once – no subscription, no account.</p>
+    </li>
+  </ul>
+</section>
+
+<section aria-labelledby="how-it-works">
+  <h2 id="how-it-works">How it works – in plain words</h2>
+  <ol class="schritte">
+    <li><strong>Invite.</strong> You show your contact a QR code (or send a link). It tells their device how to reach yours over Tor. No phone number or username is needed.</li>
+    <li><strong>Agree on keys.</strong> Your devices negotiate secret keys between themselves. You can compare the safety code (shield icon in the chat) – if it matches, nobody is sitting in between.</li>
+    <li><strong>Write.</strong> Each message is encrypted on your phone and only decrypted again on your contact's phone. On the way it is nothing but ciphertext.</li>
+    <li><strong>Deliver.</strong> If both devices are reachable, the message arrives directly. Otherwise it waits, encrypted, on your device and is delivered automatically as soon as you are connected again. There is no storage on the internet in between.</li>
+  </ol>
+</section>
+
+<section aria-labelledby="who-sees-what">
+  <h2 id="who-sees-what">Who sees what?</h2>
+  <p>Only you and your contact ever see the content. Who can see your <strong>IP address</strong> depends on the connection mode you choose in the settings:</p>
+  <div class="tabelle">
+    <table>
+      <caption>Connection modes in Malachi</caption>
+      <thead>
+        <tr><th scope="col">Connection mode</th><th scope="col">How it connects</th><th scope="col">Who can see your IP address</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Fast (default)</th>
+          <td>Via Tor first, then directly if possible. For the direct route the app asks two public STUN services run by German providers for its own public address.</td>
+          <td>The two STUN services asked (no content, no contacts) and your contact during a direct connection.</td>
+        </tr>
+        <tr>
+          <th scope="row">Private (without STUN)</th>
+          <td>Like "Fast", but without STUN services. A direct connection works less often – otherwise it stays on Tor.</td>
+          <td>Only your contact, and only during a direct connection.</td>
+        </tr>
+        <tr>
+          <th scope="row">Maximum anonymity (Tor only)<br>– full version</th>
+          <td>Never a direct connection. Calls are voice only over Tor, no video.</td>
+          <td>Nobody, not even your contact.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="limits">
+  <h2 id="limits">Honest limits</h2>
+  <ul>
+    <li>For a message to arrive, both devices have to be reachable at the same time at some point – there is no server that keeps it in the meantime.</li>
+    <li>No encryption helps against malware on the phone itself or an unlocked device in someone else's hands.</li>
+    <li>Encryption hides content, not every trace: depending on the connection mode, STUN services or your contact can see your IP address (see above).</li>
+    <li>Malachi has not been reviewed by an independent auditor yet.</li>
+    <li>Malachi is currently only available for Android (version 7.0 and later).</li>
+  </ul>
+  <p>More in the <a href="faq.html">questions &amp; answers</a>.</p>
+</section>
+
+</main>
+{{TEIL:fussen}}
+</body>
+</html>

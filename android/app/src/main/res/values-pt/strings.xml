@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">Mensagens</string>
+    <string name="notif_channel_messages_desc">Mensagens do Malachi</string>
+    <string name="notif_new_message">Nova mensagem</string>
+    <string name="notif_new_message_from" formatted="true">Nova mensagem de %1$s</string>
+    <string name="service_channel_name">Conexão do Malachi</string>
+    <string name="service_channel_desc">Mantém a conexão do Malachi ativa</string>
+    <string name="service_notif_text">Conexão ativa – recebendo mensagens</string>
+    <string name="call_channel_name">Chamadas</string>
+    <string name="call_channel_desc">Chamadas do Malachi recebidas e em andamento</string>
+    <string name="call_notif_title">Chamada do Malachi</string>
+    <string name="call_incoming_text">Chamada recebida · Malachi</string>
+    <string name="call_ongoing_text">Chamada em andamento · Malachi</string>
+    <string name="call_action_decline">Recusar</string>
+    <string name="call_action_answer">Atender</string>
+    <string name="call_action_hangup">Desligar</string>
+    <string name="call_wake_text">Chamada recebida …</string>
+    <string name="call_unknown_contact">Contato do Malachi</string>
+</resources>

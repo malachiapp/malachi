@@ -1,0 +1,21 @@
+Malachi 1.0 – the first version.
+
+Malachi is a private messenger for Android without a server: messages go straight from device to device, end-to-end and post-quantum encrypted, via Tor when needed. No account, no phone number, no contact list on our side.
+
+Free:
+- Chats, groups with pictures and voice messages, calls, and joining group calls
+- Pair contacts via QR code or by matching phone numbers over Tor (the numbers are not stored anywhere)
+- App PIN and fingerprint, Tor with bridges, disappearing messages, view-once media, Secret Chat and safety code
+- Open and decrypt Seal messages from other messengers
+- Copy messages safely (removed from the clipboard after 60 seconds)
+- Available in 18 languages, including Arabic and Persian
+
+Full version (one-time, no subscription):
+- Emergency PIN, wipe after 5 wrong PINs and remote wipe
+- Maximum anonymity: everything over Tor only
+- Seal mode: send encrypted messages over WhatsApp and others
+- Start group calls
+- 21 design themes including a matching app icon
+- Screen protection can be switched off, for example for your own screenshots (Secret Chat and Seal always stay protected)
+
+Updates come signed directly in the app (over Tor) or from this website.

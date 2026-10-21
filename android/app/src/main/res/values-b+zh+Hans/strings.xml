@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">消息</string>
+    <string name="notif_channel_messages_desc">Malachi 消息</string>
+    <string name="notif_new_message">新消息</string>
+    <string name="notif_new_message_from" formatted="true">来自 %1$s 的新消息</string>
+    <string name="service_channel_name">Malachi 连接</string>
+    <string name="service_channel_desc">保持 Malachi 连接</string>
+    <string name="service_notif_text">连接已激活 – 正在接收消息</string>
+    <string name="call_channel_name">通话</string>
+    <string name="call_channel_desc">Malachi 来电和进行中的通话</string>
+    <string name="call_notif_title">Malachi 通话</string>
+    <string name="call_incoming_text">来电 · Malachi</string>
+    <string name="call_ongoing_text">通话中 · Malachi</string>
+    <string name="call_action_decline">拒绝</string>
+    <string name="call_action_answer">接听</string>
+    <string name="call_action_hangup">挂断</string>
+    <string name="call_wake_text">来电 …</string>
+    <string name="call_unknown_contact">Malachi 联系人</string>
+</resources>

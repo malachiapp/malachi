@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">پیام‌ها</string>
+    <string name="notif_channel_messages_desc">پیام‌های Malachi</string>
+    <string name="notif_new_message">پیام جدید</string>
+    <string name="notif_new_message_from" formatted="true">پیام جدید از %1$s</string>
+    <string name="service_channel_name">اتصال Malachi</string>
+    <string name="service_channel_desc">اتصال Malachi را برقرار نگه می‌دارد</string>
+    <string name="service_notif_text">اتصال فعال – پیام‌ها دریافت می‌شوند</string>
+    <string name="call_channel_name">تماس‌ها</string>
+    <string name="call_channel_desc">تماس‌های ورودی و جاری Malachi</string>
+    <string name="call_notif_title">تماس Malachi</string>
+    <string name="call_incoming_text">تماس ورودی · Malachi</string>
+    <string name="call_ongoing_text">مکالمهٔ جاری · Malachi</string>
+    <string name="call_action_decline">رد کردن</string>
+    <string name="call_action_answer">پاسخ دادن</string>
+    <string name="call_action_hangup">قطع تماس</string>
+    <string name="call_wake_text">تماس ورودی …</string>
+    <string name="call_unknown_contact">مخاطب Malachi</string>
+</resources>

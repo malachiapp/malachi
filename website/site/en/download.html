@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Download – Malachi for Android</title>
+<meta name="description" content="Download Malachi for Android: current version, file size, SHA-256 checksum and fingerprint of the signing certificate – with instructions for verifying.">
+{{TEIL:meta}}
+</head>
+<body>
+{{TEIL:kopfen}}
+<main id="inhalt" class="rahmen">
+
+<h1>Malachi for Android</h1>
+<p class="einleitung">Malachi is available as an APK file right here – no app store, no account. Please verify the file before installing; it takes a minute.</p>
+
+<section aria-labelledby="current">
+  <h2 id="current">Current version</h2>
+  <dl class="daten">
+    <dt>Version</dt><dd>{{VERSION}} (version code {{VERSION_CODE}})</dd>
+    <dt>Released</dt><dd>{{DATUM_EN}}</dd>
+    <dt>Requirement</dt><dd>Android 7.0 or later</dd>
+    <dt>File</dt><dd><span class="pruefsumme">{{APK_HAUPT_DATEI}}</span> ({{APK_HAUPT_GROESSE_EN}})</dd>
+    <dt>SHA-256</dt><dd><code class="pruefsumme">{{APK_HAUPT_SHA256}}</code></dd>
+  </dl>
+  <div class="knopfreihe">
+    <a class="knopf" href="{{BASIS}}updates/{{APK_HAUPT_DATEI}}">Download Malachi {{VERSION}} ({{APK_HAUPT_ABI}}, {{APK_HAUPT_GROESSE_EN}})</a>
+  </div>
+  <p>Also works over Tor: open <a class="pruefsumme" href="http://{{ONION_ADRESSE}}/en/download.html">{{ONION_ADRESSE}}</a> in the Tor Browser.</p>
+</section>
+
+<section aria-labelledby="new">
+  <h2 id="new">What's new?</h2>
+  {{HINWEISE_EN_HTML}}
+</section>
+
+<section aria-labelledby="which-file">
+  <h2 id="which-file">Which file do I need?</h2>
+  <p>There is a separate, smaller file for each processor type. <strong>Almost all phones from about 2017 onwards need "arm64-v8a".</strong> If the file won't install ("App not installed"), take "armeabi-v7a" (older 32-bit devices). "x86_64" is only for emulators and some Chromebooks.</p>
+  <div class="tabelle">
+    <table>
+      <caption>All files of this version</caption>
+      <thead>
+        <tr><th scope="col">Processor</th><th scope="col">File</th><th scope="col">Size</th><th scope="col">SHA-256</th></tr>
+      </thead>
+      <tbody>
+{{APK_TABELLE_EN_HTML}}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="verify">
+  <h2 id="verify">Verify the file</h2>
+  <p>This is how you make sure the file is complete and really comes from Malachi. To be safest, also compare the values over a second route, for example once via the normal address and once via the onion address.</p>
+
+  <h3>1. Compare the checksum (SHA-256)</h3>
+  <p>The output must match the value in the table above exactly. Upper and lower case don't matter.</p>
+  <ul>
+    <li>Linux: <code>sha256sum {{APK_HAUPT_DATEI}}</code></li>
+    <li>macOS: <code>shasum -a 256 {{APK_HAUPT_DATEI}}</code></li>
+    <li>Windows (Command Prompt): <code>certutil -hashfile {{APK_HAUPT_DATEI}} SHA256</code></li>
+    <li>Windows (PowerShell): <code>Get-FileHash .\{{APK_HAUPT_DATEI}} -Algorithm SHA256</code></li>
+  </ul>
+  <p>All checksums are also listed in the file <a href="{{BASIS}}updates/SHA256SUMS">SHA256SUMS</a>. On Linux, <code>sha256sum -c --ignore-missing SHA256SUMS</code> checks all downloaded files at once.</p>
+
+  <h3>2. Compare the signing certificate</h3>
+  <p>Every Malachi APK is signed with the same key. Its certificate has this SHA-256 fingerprint:</p>
+  <p><code class="pruefsumme">{{APK_ZERTIFIKAT_SHA256}}</code></p>
+  <p>With <code>apksigner</code> from the Android SDK Build-Tools (on Windows <code>apksigner.bat</code>):</p>
+  <pre><code>apksigner verify --print-certs {{APK_HAUPT_DATEI}}</code></pre>
+  <p>The line <code>Signer #1 certificate SHA-256 digest:</code> must show exactly the value above. <code>keytool -printcert -jarfile {{APK_HAUPT_DATEI}}</code> shows the same value written with colons:</p>
+  <p><code class="pruefsumme">{{APK_ZERTIFIKAT_SHA256_DOPPELPUNKT}}</code></p>
+
+  <h3>3. Advanced: signed version list</h3>
+  <p>The file <a href="{{BASIS}}updates/manifest.json">updates/manifest.json</a> lists version, size and SHA-256 of every file. It is signed with an Ed25519 key that is never stored on this server (<a href="{{BASIS}}updates/manifest.json.sig">manifest.json.sig</a>, Base64). The public key is <code class="pruefsumme">{{UPDATE_SCHLUESSEL}}</code> (Base64url, 32 bytes; as a file: <a href="{{BASIS}}updates/update-schluessel.pem">update-schluessel.pem</a>). Verify with OpenSSL 3:</p>
+  <pre><code>base64 -d manifest.json.sig &gt; manifest.sig.bin
+openssl pkeyutl -verify -pubin -inkey update-schluessel.pem -rawin -in manifest.json -sigfile manifest.sig.bin</code></pre>
+  <p>Expected output: <code>Signature Verified Successfully</code>. Then compare the SHA-256 of the APK with the value in <code>manifest.json</code>.</p>
+</section>
+
+<section aria-labelledby="install">
+  <h2 id="install">Install</h2>
+  <ol class="schritte">
+    <li>Download the APK on your phone (in the browser or in Tor Browser for Android).</li>
+    <li>Open the file. Android asks whether the app you open it with (browser or file manager) may "install unknown apps". Allow this for that one app only.</li>
+    <li>Tap "Install".</li>
+    <li>Afterwards, revoke the permission from step 2 in the Android settings.</li>
+  </ol>
+  <div class="hinweis">
+    <p><strong>Updates:</strong> You simply install a new version over the old one; your chats are kept. Android only accepts an update if it is signed with the same key as the installed app. A fake APK with a different key therefore cannot replace your installed Malachi – Android stops with an error message. In that case, don't install anything; download the file from here again.</p>
+  </div>
+</section>
+
+</main>
+{{TEIL:fussen}}
+</body>
+</html>

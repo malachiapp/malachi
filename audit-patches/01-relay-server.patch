@@ -1,0 +1,1011 @@
+--- a/relay.js
++++ b/relay.js
+@@ -57,6 +57,14 @@
+   '.png':  'image/png',
+   '.ico':  'image/x-icon',
+   '.json': 'application/json; charset=utf-8',
++  '.webmanifest': 'application/manifest+json; charset=utf-8',
++  '.txt':  'text/plain; charset=utf-8',
++  '.webp': 'image/webp',
++  '.jpg':  'image/jpeg',
++  '.jpeg': 'image/jpeg',
++  '.woff2': 'font/woff2',
++  '.mp4':  'video/mp4',
++  '.webm': 'video/webm',
+ };
+ 
+ // Liefert NUR echte, existierende Dateien aus WEB_DIST_PATH (plus "/" als
+@@ -66,16 +74,90 @@
+ // braucht das nicht (kein URL-Routing, nur interner React-State). Gibt true
+ // zurueck wenn beantwortet, sonst false (Aufrufer faehrt normal fort).
+ // Pfad-Traversal ("../..") wird durch path.join + startsWith-Check verhindert.
++//
++// Audit 2026-09-28 (drei Funde in dieser einen Funktion):
++//  1. decodeURIComponent() warf bei einer kaputten Prozent-Kodierung (z.B.
++//     GET /%ff) einen URIError - synchron im 'request'-Handler, also
++//     unbehandelt: der KOMPLETTE Relay-Prozess stuerzte ab (pm2 startet ihn
++//     neu, aber jeder RAM-Zustand - wartende Nachrichten, Reconnect-Angebote,
++//     Web-Pepper - war weg). Eine einzige Anfrage von irgendwem im Internet
++//     genuegte. Jetzt: ungueltige Kodierung = einfach keine statische Datei.
++//  2. Der Praefix-Vergleich ohne Pfadtrenner liess ein Geschwisterverzeichnis
++//     mit gleichem Namensanfang durch (/opt/malachi/web-dist-alt/... beginnt
++//     auch mit /opt/malachi/web-dist) - jetzt mit path.sep abgeschlossen.
++//  3. Ein Lesefehler des Streams (Datei zwischen stat() und open() geloescht)
++//     war ein unbehandeltes 'error'-Event = ebenfalls Prozessabsturz.
++// Zusaetzlich jetzt Sicherheits-Header fuer die ausgelieferte Web-App (CSP,
++// kein Framing, kein Referrer, kein MIME-Sniffing) - vorher gab es keine.
++// connect-src: nur der eigene Host (HTTPS + WebSocket, auf demselben Host
++// auch die beiden Alt-Ports 3333/5356 fuer bereits ausgelieferte Web-
++// Clients) - kein beliebiges https:/wss:, damit eingeschleustes Script
++// (falls es je eins gaebe) keine Daten an fremde Server schicken koennte.
++// Host kommt aus dem Request, wird aber hart auf Hostnamen-Zeichen gefiltert.
++function webCsp(req) {
++  const rawHost = String(req.headers.host || '').split(':')[0];
++  const host = /^[a-zA-Z0-9.-]{1,253}$/.test(rawHost) ? rawHost : null;
++  const extra = host
++    ? ` wss://${host} https://${host}:3333 wss://${host}:3333 https://${host}:5356 wss://${host}:5356`
++    : '';
++  return [
++    "default-src 'self'",
++    "script-src 'self'",
++    "style-src 'self' 'unsafe-inline'",
++    "img-src 'self' data: blob:",
++    "media-src 'self' data: blob:",
++    "font-src 'self'",
++    `connect-src 'self'${extra}`,
++    "worker-src 'none'",
++    "object-src 'none'",
++    "base-uri 'none'",
++    "form-action 'none'",
++    "frame-ancestors 'none'",
++  ].join('; ');
++}
++
++function setStaticSecurityHeaders(req, res, ext) {
++  res.setHeader('X-Content-Type-Options', 'nosniff');
++  res.setHeader('Referrer-Policy', 'no-referrer');
++  res.setHeader('X-Frame-Options', 'DENY');
++  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
++  res.setHeader('Permissions-Policy', 'geolocation=(), payment=(), usb=(), interest-cohort=()');
++  if (usingTls) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
++  if (ext === '.html') {
++    res.setHeader('Content-Security-Policy', webCsp(req));
++    // index.html nie cachen - sonst verweist ein alter Browser-Cache nach
++    // einem Redeploy auf nicht mehr existierende, gehashte Asset-Dateien.
++    res.setHeader('Cache-Control', 'no-store');
++  } else {
++    res.setHeader('Cache-Control', 'public, max-age=86400');
++  }
++}
++
+ function tryServeStatic(req, res) {
+   if (!WEB_DIST_PATH || req.method !== 'GET') return false;
+-  const urlPath = decodeURIComponent(req.url.split('?')[0]);
+-  const target = path.join(WEB_DIST_PATH, urlPath === '/' ? 'index.html' : urlPath);
+-  if (!target.startsWith(path.resolve(WEB_DIST_PATH))) return false;
+-  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return false;
++  let urlPath;
++  try {
++    urlPath = decodeURIComponent(req.url.split('?')[0]);
++  } catch {
++    return false; // kaputte Prozent-Kodierung - keine statische Datei (Fund 1)
++  }
++  if (urlPath.includes('\0')) return false;
++  const root = path.resolve(WEB_DIST_PATH);
++  const target = path.resolve(root, '.' + (urlPath === '/' ? '/index.html' : urlPath));
++  if (target !== root && !target.startsWith(root + path.sep)) return false; // Fund 2
++  let stat;
++  try { stat = fs.statSync(target); } catch { return false; }
++  if (!stat.isFile()) return false;
+ 
+-  const ext = path.extname(target);
++  const ext = path.extname(target).toLowerCase();
+   res.setHeader('Content-Type', MIME_TYPES[ext] || 'application/octet-stream');
+-  fs.createReadStream(target).pipe(res);
++  setStaticSecurityHeaders(req, res, ext);
++  const stream = fs.createReadStream(target);
++  stream.on('error', () => { // Fund 3
++    if (!res.headersSent) res.writeHead(404);
++    res.end();
++  });
++  stream.pipe(res);
+   return true;
+ }
+ 
+@@ -92,7 +174,68 @@
+ 
+ // ── SPEICHER (nur RAM, kein Disk) ──────────────
+ const store       = new Map(); // token → { payload, expires, delivered }
+-const knownIPs    = new Set(); // bekannte IPs
++// Audit 2026-09-28: hier stand zusaetzlich `knownIPs` - ein Set, in das JEDE
++// je gesehene rohe Client-IP fuer die gesamte Prozesslaufzeit geschrieben,
++// aber nirgends gelesen wurde. Reines Datensammeln ohne Zweck (widerspricht
++// dem "keine Metadaten"-Anspruch im Kopfkommentar) und ein unbegrenzt
++// wachsender Speicher. Ersatzlos entfernt.
++
++// ── SPEICHER-OBERGRENZEN (Audit 2026-09-28) ─────
++// Vorher war nur jeder EINZELNE Request auf 2MB begrenzt (MAX_BODY_BYTES
++// weiter unten) - die Summe aller gespeicherten Eintraege dagegen gar nicht.
++// Ein einziger Client konnte per /transfer (24h TTL, beliebig viele Chunks
++// pro Transfer) oder /packet (beliebig viele Empfaenger) den RAM des
++// Heimservers fuellen, bis der Prozess abstuerzt - und mit ihm jeder
++// wartende Reconnect/jede wartende Nachricht aller Nutzer. Jetzt: Buchfuehrung
++// ueber die ungefaehre Groesse aller Nutzdaten + harte Obergrenzen. Die
++// Grenzen liegen weit ueber jedem legitimen Verbrauch (ein Chat-Paket/SDP
++// ist wenige KB, ein Medien-Chunk ~100KB).
++const MAX_STORED_BYTES      = Number(process.env.MAX_STORED_BYTES) || 256 * 1024 * 1024;
++const MAX_STORE_ENTRIES     = 50000;
++const MAX_SMALL_PAYLOAD     = 64 * 1024;   // Pakete, SDP-Angebote/-Antworten, Anruf-Signale
++const MAX_CHUNK_PAYLOAD     = 512 * 1024;  // ein /transfer-Chunk
++const MAX_CHUNKS_PER_XFER   = 4096;
++const MAX_TRANSFERS         = 100;
++const MAX_PACKETS_PER_RCPT  = 500;
++const MAX_SIGNALS_PER_QUEUE = 300;
++const MAX_PEPPERS           = 10000;
++const MAX_PUSH_TOKENS       = 10000;
++let storedBytes = 0;
++
++function payloadBytes(v) {
++  if (v == null) return 0;
++  if (typeof v === 'string') return v.length;
++  try { return JSON.stringify(v).length; } catch { return MAX_SMALL_PAYLOAD; }
++}
++
++// Einziger Weg, Eintraege mit Nutzdaten abzulegen/zu entfernen - haelt
++// storedBytes konsistent (auch beim Ueberschreiben eines bestehenden Keys).
++function storeSet(key, entry, bytes = 0) {
++  const old = store.get(key);
++  if (old?._bytes) storedBytes -= old._bytes;
++  entry._bytes = bytes;
++  storedBytes += bytes;
++  store.set(key, entry);
++}
++function storeDelete(key) {
++  const old = store.get(key);
++  if (!old) return false;
++  if (old._bytes) storedBytes -= old._bytes;
++  return store.delete(key);
++}
++// true = Platz fuer `bytes` weitere Nutzdaten (bzw. einen neuen Key) vorhanden.
++function hasCapacity(bytes, isNewKey = true) {
++  if (isNewKey && store.size >= MAX_STORE_ENTRIES) return false;
++  return storedBytes + bytes <= MAX_STORED_BYTES;
++}
++function rejectFull(res) {
++  res.writeHead(507);
++  res.end(JSON.stringify({ error: 'relay_voll' }));
++}
++function rejectTooLarge(res) {
++  res.writeHead(413);
++  res.end(JSON.stringify({ error: 'Anfrage zu gross' }));
++}
+ 
+ // ── PEPPER (Haertet den Web-Client-PIN) ────────
+ // Der Web-Client hat keinen Hardware-Keystore wie Android - ein rein lokal
+@@ -172,6 +315,17 @@
+ // bleibt es beim 20-Sekunden-Default, PACKET_ACK_GRACE_MS ist nirgends in der
+ // Produktions-Konfiguration (ecosystem.config.js) gesetzt.
+ const PACKET_ACK_GRACE_MS = Number(process.env.PACKET_ACK_GRACE_MS) || 20 * 1000;
++// Leihfrist eines abgeholten Reconnect-Angebots (siehe GET /reconnect/offer) -
++// laenger als der langsamste realistische Antwort-Aufbau beim Responder
++// (TURN-Zugangsdaten + ICE-Sammeln, zusammen max. ~25s).
++const RECONNECT_LEASE_MS = Number(process.env.RECONNECT_LEASE_MS) || 45 * 1000;
++
++// "<id>_offer" / "<id>_answer_<session>" -> "<id>" (Schluesselschema aus
++// BackgroundSync.js / web App.tsx). Unveraendert zurueck, wenn nichts passt.
++function baseContactId(key) {
++  const m = /^(.+?)_(?:offer|answer_[^_]+)$/.exec(String(key));
++  return m ? m[1] : key;
++}
+ const MAX_FAILS   = 5;              // max Fehlversuche pro IP
+ 
+ // ── PUSH (FCM-Wake, opak) ───────────────────────
+@@ -242,7 +396,6 @@
+ const BLOCK_DURATION_MS = 5 * 60 * 1000; // 5 Minuten
+ 
+ function checkIP(ip) {
+-  if (!knownIPs.has(ip)) knownIPs.add(ip);
+   const blockedUntil = blockedIPs.get(ip);
+   if (blockedUntil) {
+     if (blockedUntil > Date.now()) return false; // noch gesperrt
+@@ -287,9 +440,23 @@
+   return crypto.createHmac('sha256', ipLogSecret).update(ip).digest('hex').slice(0, 8);
+ }
+ 
++// Audit 2026-09-28 ("App verursacht Verbindungsprobleme"): der Zaehler pro
++// IP verfiel bisher NIE - fuenf voellig unabhaengige, harmlose Fehler ueber
++// Tage/Wochen verteilt (z.B. ein abgebrochener Request beim Netzwechsel)
++// sperrten die IP irgendwann fuer 5 Minuten komplett (jede Anfrage 403,
++// inkl. WebSocket) - fuer den Nutzer ein scheinbar zufaelliger Totalausfall.
++// Jetzt zaehlen nur Fehlversuche innerhalb eines gleitenden Zeitfensters.
++// Ein echter Scanner/Angreifer produziert seine Fehler in Sekunden, nicht
++// ueber Tage - fuer den bleibt die Sperre unveraendert wirksam.
++const FAIL_WINDOW_MS = Number(process.env.FAIL_WINDOW_MS) || 10 * 60 * 1000;
++
+ function registerFail(ip) {
+-  const fails = (suspectIPs.get(ip) || 0) + 1;
+-  suspectIPs.set(ip, fails);
++  const now = Date.now();
++  let entry = suspectIPs.get(ip);
++  if (!entry || now - entry.windowStart > FAIL_WINDOW_MS) entry = { count: 0, windowStart: now };
++  entry.count += 1;
++  suspectIPs.set(ip, entry);
++  const fails = entry.count;
+   console.warn(`[⚠️  WARN] Fehlversuch ${fails}/${MAX_FAILS} von ${hashIp(ip)}`);
+   if (fails >= MAX_FAILS) {
+     blockedIPs.set(ip, Date.now() + BLOCK_DURATION_MS);
+@@ -305,7 +472,7 @@
+   let expired = 0;
+   for (const [token, entry] of store) {
+     if (entry.expires < now) {
+-      store.delete(token);
++      storeDelete(token);
+       expired++;
+     }
+   }
+@@ -361,6 +528,7 @@
+   });
+   req.on('end', () => {
+     if (bodyTooLarge) return;
++    try {
+     // ── STATUS ──────────────────────────────────
+     if (req.method === 'GET' && req.url === '/status') {
+       res.end(JSON.stringify({
+@@ -392,13 +560,17 @@
+           res.end(JSON.stringify({ error: 'Ungültige Anfrage' }));
+           return;
+         }
++        const bytes = payloadBytes(payload);
++        if (bytes > MAX_SMALL_PAYLOAD) { rejectTooLarge(res); return; }
++        if (!hasCapacity(bytes)) { rejectFull(res); return; }
+         const token = crypto.randomBytes(16).toString('hex');
+-        store.set(token, {
++        storeSet(token, {
++          kind: 'send',         // siehe /receive/ unten
+           payload,              // bereits verschlüsselt von der App
+           recipient,            // hash des Empfängers
+           expires: Date.now() + EXPIRE_MS,
+           delivered: false,
+-        });
++        }, bytes);
+         console.log(`[📦 IN] Paket gespeichert`);
+         res.end(JSON.stringify({ ok: true, token }));
+       } catch {
+@@ -412,12 +584,18 @@
+       const recipient = req.url.replace('/receive/', '');
+       const packets   = [];
+       for (const [token, entry] of store) {
+-        if (entry.recipient === recipient && !entry.delivered) {
++        // Audit 2026-09-28: pruefte bisher nur entry.recipient - ALLE anderen
++        // Eintragsarten haben aber auch ein recipient-Feld (Reconnect-Angebote,
++        // /packet-Pakete, Pairing-Offers). GET /receive/<contactId>_offer
++        // lieferte und LOESCHTE damit z.B. das Reconnect-Angebot eines fremden
++        // Kontakts, an den Ack-/Lease-Mechanismen vorbei. Jetzt nur noch
++        // Eintraege, die tatsaechlich ueber /send angelegt wurden.
++        if (entry.kind === 'send' && entry.recipient === recipient && !entry.delivered) {
+           packets.push({ token, payload: entry.payload });
+           entry.delivered = true;
+           // Sofort löschen nach Zustellung
+           setTimeout(() => {
+-            store.delete(token);
++            storeDelete(token);
+             console.log(`[🗑️  DEL] Paket zugestellt und gelöscht`);
+           }, 1000);
+         }
+@@ -431,22 +609,40 @@
+         const parts = req.url.split('/');
+         // /transfer/{token}/chunk/{index}
+         const token = parts[2];
+-        const index = parseInt(parts[4]);
++        const index = parseInt(parts[4], 10);
+         const { data, total, mimeType, transferType, chatId } = JSON.parse(body);
++        // Audit 2026-09-28 (Speicher-DoS): Index/Anzahl/Groesse waren
++        // voellig unbegrenzt - siehe SPEICHER-OBERGRENZEN oben.
++        if (!Number.isInteger(index) || index < 0 || index >= MAX_CHUNKS_PER_XFER ||
++            typeof data !== 'string' || !token) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
++        const bytes = data.length;
++        if (bytes > MAX_CHUNK_PAYLOAD) { rejectTooLarge(res); return; }
+         const key = `transfer_${token}`;
+-        if (!store.has(key)) {
+-          store.set(key, {
++        let transfer = store.get(key);
++        if (!transfer) {
++          let transferCount = 0;
++          for (const k of store.keys()) if (k.startsWith('transfer_')) transferCount++;
++          if (transferCount >= MAX_TRANSFERS || !hasCapacity(bytes)) { rejectFull(res); return; }
++          transfer = {
+             chunks: {},
+-            total,
+-            mimeType,
+-            transferType,
+-            chatId,
++            total: Number.isInteger(total) && total > 0 && total <= MAX_CHUNKS_PER_XFER ? total : MAX_CHUNKS_PER_XFER,
++            mimeType: typeof mimeType === 'string' ? mimeType.slice(0, 100) : undefined,
++            transferType: typeof transferType === 'string' ? transferType.slice(0, 20) : undefined,
++            chatId: typeof chatId === 'string' ? chatId.slice(0, 200) : undefined,
+             expires: Date.now() + (24 * 60 * 60 * 1000), // 24 Stunden
+             created: Date.now(),
+-          });
++          };
++          storeSet(key, transfer, 0);
++        } else if (!hasCapacity(bytes, false)) {
++          rejectFull(res); return;
+         }
+-        const transfer = store.get(key);
++        const previous = transfer.chunks[index];
++        if (typeof previous === 'string') { transfer._bytes -= previous.length; storedBytes -= previous.length; }
+         transfer.chunks[index] = data;
++        transfer._bytes += bytes;
++        storedBytes += bytes;
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+ 
+@@ -475,10 +671,10 @@
+         // Alle Transfers für diesen Chat löschen
+         for (const [key] of store) {
+           if (key.startsWith(`transfer_`) && store.get(key)?.chatId === token) {
+-            store.delete(key);
++            storeDelete(key);
+           }
+           // Oder direkt per Token
+-          if (key === `transfer_${token}`) store.delete(key);
++          if (key === `transfer_${token}`) storeDelete(key);
+         }
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+@@ -490,9 +686,15 @@
+     } else if (req.method === 'POST' && req.url === '/phone/register') {
+       try {
+         const { hash, chatId } = JSON.parse(body);
+-        if (!hash || hash.length < 32) { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return; }
++        // Audit 2026-09-28: typeof-Pruefung (ein Objekt mit .length >= 32
++        // rutschte durch) + Obergrenze gegen beliebig lange Schluessel.
++        if (typeof hash !== 'string' || hash.length < 32 || hash.length > 256 ||
++            typeof chatId !== 'string' || !chatId || chatId.length > 200) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
+         const key = `phone_${hash}`;
+         const existing = store.get(key);
++        if (!existing && !hasCapacity(0)) { rejectFull(res); return; }
+         if (existing) {
+           // Chaos-Test-Fund (SECURITY_CHAOS_TESTING.md §8): frueher wurde hier
+           // JEDER zweite (dritte, vierte, ...) Registrant unbedingt zum
+@@ -533,8 +735,13 @@
+     } else if (req.method === 'POST' && req.url === '/phone/lookup') {
+       try {
+         const { hash, chatId } = JSON.parse(body);
++        if (typeof hash !== 'string' || !hash || hash.length > 256 ||
++            typeof chatId !== 'string' || !chatId || chatId.length > 200) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
+         const key = `phone_${hash}`;
+         const entry = store.get(key);
++        if (!entry && !hasCapacity(0)) { rejectFull(res); return; }
+         if (!entry) {
+           // Nicht gefunden – als Initiator hinterlegen
+           store.set(`phone_search_${hash}`, {
+@@ -570,8 +777,8 @@
+         const entry = store.get(key);
+         if (entry?.initiatorId) {
+           const initiatorId = entry.initiatorId;
+-          store.delete(key);
+-          store.delete(`phone_search_${hash}`);
++          storeDelete(key);
++          storeDelete(`phone_search_${hash}`);
+           console.log('[Phone] Match: Responder benachrichtigt');
+           // Responder bekommt initiatorId → wartet auf Offer
+           res.end(JSON.stringify({ found: true, role: 'responder', initiatorId }));
+@@ -583,8 +790,8 @@
+     } else if (req.method === 'DELETE' && req.url.startsWith('/phone/')) {
+       try {
+         const hash = req.url.replace('/phone/', '');
+-        store.delete(`phone_${hash}`);
+-        store.delete(`phone_search_${hash}`);
++        storeDelete(`phone_${hash}`);
++        storeDelete(`phone_search_${hash}`);
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+ 
+@@ -592,6 +799,16 @@
+     } else if (req.method === 'POST' && req.url === '/packet') {
+       try {
+         const { payload, recipient } = JSON.parse(body);
++        // Audit 2026-09-28: vorher komplett ungeprueft (auch leere/Objekt-
++        // Werte) und unbegrenzt - siehe SPEICHER-OBERGRENZEN oben.
++        if (typeof payload !== 'string' || !payload || typeof recipient !== 'string' || !recipient || recipient.length > 200) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
++        if (payload.length > MAX_SMALL_PAYLOAD) { rejectTooLarge(res); return; }
++        if (!hasCapacity(payload.length)) { rejectFull(res); return; }
++        let queuedForRecipient = 0;
++        for (const entry of store.values()) if (entry.kind === 'packet' && entry.recipient === recipient) queuedForRecipient++;
++        if (queuedForRecipient >= MAX_PACKETS_PER_RCPT) { rejectFull(res); return; }
+         // Reiner Zeitstempel-Suffix kollidierte bei zwei POSTs fuer denselben
+         // Empfaenger in derselben Millisekunde (Chaos-Testing-Fund) -
+         // Map.set() ueberschrieb die erste Nachricht dann ersatzlos, bevor sie
+@@ -600,11 +817,12 @@
+         // einer da). Zufaelliges Suffix macht den Key auch unter echter
+         // Nebenlaeufigkeit praktisch eindeutig.
+         const key = `packet_${recipient}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+-        store.set(key, {
++        storeSet(key, {
++          kind: 'packet',
+           payload,
+           recipient,
+           expires: Date.now() + (10 * 60 * 1000), // 10 Minuten
+-        });
++        }, payload.length);
+         notifyWake(recipient);
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+@@ -614,7 +832,11 @@
+       const packets = [];
+       const now = Date.now();
+       for (const [key, entry] of store) {
+-        if (!key.startsWith(`packet_${recipient}_`)) continue;
++        // Audit 2026-09-28: war ein reiner Key-PRAEFIX-Vergleich - GET
++        // /packet/<id> lieferte damit auch Pakete fuer "<id>_answer" usw.
++        // (deren Key beginnt ebenfalls mit packet_<id>_) aus und liess den
++        // Abholer sie per Ack loeschen. Jetzt exakter Empfaengervergleich.
++        if (!key.startsWith('packet_') || entry.recipient !== recipient) continue;
+         // Bereits an eine vorherige Abholung ausgeliefert und deren
+         // Gnadenfenster noch nicht abgelaufen -> nicht erneut ausliefern
+         // (haelt die bestehende "genau einmal pro Abholzyklus"-Garantie auch
+@@ -636,9 +858,9 @@
+           const tokenSet = new Set(tokens);
+           let acked = 0;
+           for (const [key, entry] of store) {
+-            if (!key.startsWith(`packet_${recipient}_`)) continue;
++            if (!key.startsWith('packet_') || entry.recipient !== recipient) continue;
+             if (entry.ackToken && tokenSet.has(entry.ackToken)) {
+-              store.delete(key);
++              storeDelete(key);
+               acked++;
+             }
+           }
+@@ -650,13 +872,23 @@
+     } else if (req.method === 'POST' && req.url === '/reconnect/offer') {
+       try {
+         const { offer, contactId } = JSON.parse(body);
+-        store.set(`reconnect_${contactId}`, {
++        if (typeof offer !== 'string' || !offer || typeof contactId !== 'string' || !contactId || contactId.length > 200) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
++        if (offer.length > MAX_SMALL_PAYLOAD) { rejectTooLarge(res); return; }
++        const key = `reconnect_${contactId}`;
++        if (!hasCapacity(offer.length, !store.has(key))) { rejectFull(res); return; }
++        storeSet(key, {
+           payload:   offer,
+           recipient: contactId,
+           expires:   Date.now() + EXPIRE_RECONNECT,
+           delivered: false,
+-        });
++        }, offer.length);
+         notifyWake(contactId);
++        // Audit 2026-09-28: Clients abonnieren ihre Kontakt-IDs, nicht
++        // "<id>_offer" - dieses Wecksignal kam deshalb bisher nie an, der
++        // Responder fand ein Angebot nur beim naechsten Poll-Tick.
++        notifyWake(baseContactId(contactId));
+         console.log(`[🔄 RECONNECT] Offer gespeichert (33 Tage)`);
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+@@ -664,24 +896,58 @@
+     } else if (req.method === 'GET' && req.url.startsWith('/reconnect/offer/')) {
+       const contactId = req.url.replace('/reconnect/offer/', '');
+       const entry = store.get(`reconnect_${contactId}`);
+-      if (entry) {
+-        store.delete(`reconnect_${contactId}`); // Sofort löschen nach Abholung
++      const now = Date.now();
++      // Audit 2026-09-28 ("Reconnect haengt"): das Angebot wurde hier bisher
++      // SOFORT beim Abholen geloescht. Ging die Antwort auf dem Weg zum
++      // Responder verloren (Netzwechsel, 10s-Client-Timeout, App-Kill) oder
++      // konnte er sie nicht verarbeiten, war das Angebot endgueltig weg -
++      // der Initiator wartete danach bis zu 30 Minuten auf eine Antwort, die
++      // nie kommen konnte, bevor er ein neues Angebot schickte. Jetzt: eine
++      // Abholung "leiht" das Angebot nur fuer RECONNECT_LEASE_MS aus (in
++      // dieser Zeit sieht es niemand sonst - kein doppeltes Verarbeiten).
++      // Geloescht wird es, sobald die zugehoerige Antwort eintrifft (POST
++      // /reconnect/answer weiter unten); kommt keine, ist es nach Ablauf der
++      // Leihfrist wieder abholbar. Clients brauchen dafuer keine Aenderung.
++      if (entry && !(entry.leasedUntil > now)) {
++        entry.leasedUntil = now + RECONNECT_LEASE_MS;
+         res.end(JSON.stringify({ offer: entry.payload }));
+       } else {
+         res.writeHead(404);
+         res.end(JSON.stringify({ offer: null }));
+       }
+ 
++    } else if (req.method === 'DELETE' && req.url.startsWith('/reconnect/offer/')) {
++      // Audit 2026-09-28: die native App (deleteContactCleanup) ruft diesen
++      // Endpunkt beim Loeschen eines Kontakts auf - die Route existierte
++      // aber nicht, jeder Aufruf landete bei "UNBEKANNTE ROUTE" und zaehlte
++      // als Fehlversuch. Mehrere Kontakte auf einmal loeschen (Mehrfach-
++      // auswahl) sperrte die eigene IP so 5 Minuten komplett aus.
++      const contactId = req.url.replace('/reconnect/offer/', '');
++      storeDelete(`reconnect_${contactId}`);
++      res.end(JSON.stringify({ ok: true }));
++
+     } else if (req.method === 'POST' && req.url === '/reconnect/answer') {
+       try {
+         const { answer, contactId } = JSON.parse(body);
+-        store.set(`reconnect_answer_${contactId}`, {
++        if (typeof answer !== 'string' || !answer || typeof contactId !== 'string' || !contactId || contactId.length > 200) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
++        if (answer.length > MAX_SMALL_PAYLOAD) { rejectTooLarge(res); return; }
++        const key = `reconnect_answer_${contactId}`;
++        if (!hasCapacity(answer.length, !store.has(key))) { rejectFull(res); return; }
++        storeSet(key, {
+           payload:   answer,
+           recipient: contactId,
+           expires:   Date.now() + (60 * 60 * 1000), // 1 Stunde
+           delivered: false,
+-        });
++        }, answer.length);
++        // Das beantwortete Angebot ist damit verbraucht (siehe Lease-Kommentar
++        // bei GET /reconnect/offer oben): answerKey = "<id>_answer_<session>",
++        // offerKey = "<id>_offer" (BackgroundSync.js / web App.tsx).
++        const answeredBase = baseContactId(contactId);
++        if (answeredBase !== contactId) storeDelete(`reconnect_${answeredBase}_offer`);
+         notifyWake(contactId);
++        notifyWake(answeredBase);
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+ 
+@@ -689,7 +955,7 @@
+       const contactId = req.url.replace('/reconnect/answer/', '');
+       const entry = store.get(`reconnect_answer_${contactId}`);
+       if (entry) {
+-        store.delete(`reconnect_answer_${contactId}`);
++        storeDelete(`reconnect_answer_${contactId}`);
+         res.end(JSON.stringify({ answer: entry.payload }));
+       } else {
+         // Konsistent zu /reconnect/offer (API-Vertrags-Review): vorher gab
+@@ -707,12 +973,17 @@
+     } else if (req.method === 'POST' && req.url === '/signal/offer') {
+       try {
+         const { offer, token } = JSON.parse(body);
+-        store.set(`offer_${token}`, {
++        if (typeof offer !== 'string' || !offer || typeof token !== 'string' || !token || token.length > 200) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
++        if (offer.length > MAX_SMALL_PAYLOAD) { rejectTooLarge(res); return; }
++        if (!hasCapacity(offer.length, !store.has(`offer_${token}`))) { rejectFull(res); return; }
++        storeSet(`offer_${token}`, {
+           payload:   offer,
+           recipient: token,
+           expires:   Date.now() + EXPIRE_RECONNECT,
+           delivered: false,
+-        });
++        }, offer.length);
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+ 
+@@ -732,12 +1003,17 @@
+     } else if (req.method === 'POST' && req.url === '/signal/answer') {
+       try {
+         const { answer, token } = JSON.parse(body);
+-        store.set(`answer_${token}`, {
++        if (typeof answer !== 'string' || !answer || typeof token !== 'string' || !token || token.length > 200) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
++        if (answer.length > MAX_SMALL_PAYLOAD) { rejectTooLarge(res); return; }
++        if (!hasCapacity(answer.length, !store.has(`answer_${token}`))) { rejectFull(res); return; }
++        storeSet(`answer_${token}`, {
+           payload:   answer,
+           recipient: token,
+           expires:   Date.now() + EXPIRE_RECONNECT,
+           delivered: false,
+-        });
++        }, answer.length);
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+ 
+@@ -766,6 +1042,7 @@
+         // aber die Pruefung soll tatsaechlich tun, was ihr Kommentar/Code
+         // impliziert - explizite typeof-Pruefung zuerst.
+         if (typeof deviceId !== 'string' || deviceId.length < 16) { registerFail(ip); res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return; }
++        if (!pepperStore.has(deviceId) && pepperStore.size >= MAX_PEPPERS) { rejectFull(res); return; }
+         if (pepperStore.has(deviceId)) {
+           // Schon registriert - keinen zweiten Pepper ausgeben (wuerde alte
+           // Daten unlesbar machen, falls der Client aus Versehen nochmal
+@@ -878,10 +1155,14 @@
+     } else if (req.method === 'POST' && req.url === '/push/register') {
+       try {
+         const { contactId, direction, fcmToken } = JSON.parse(body);
+-        if (!contactId || !direction || !fcmToken) {
++        if (typeof contactId !== 'string' || !contactId || contactId.length > 200 ||
++            (direction !== 'to-callee' && direction !== 'to-caller') ||
++            typeof fcmToken !== 'string' || !fcmToken || fcmToken.length > 4096) {
+           res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
+         }
+-        pushTokens.set(`${contactId}_${direction}`, fcmToken);
++        const pushKey = `${contactId}_${direction}`;
++        if (!pushTokens.has(pushKey) && pushTokens.size >= MAX_PUSH_TOKENS) { rejectFull(res); return; }
++        pushTokens.set(pushKey, fcmToken);
+         console.log(`[Push] Token registriert`);
+         res.end(JSON.stringify({ ok: true }));
+       } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); }
+@@ -898,7 +1179,14 @@
+           registerFail(ip);
+           res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
+         }
++        if (typeof contactId !== 'string' || contactId.length > 200 || typeof direction !== 'string' ||
++            direction.length > 20 || typeof type !== 'string' || type.length > 30) {
++          res.writeHead(400); res.end(JSON.stringify({ error: 'ungueltige_anfrage' })); return;
++        }
++        const sigBytes = payloadBytes(payload);
++        if (sigBytes > MAX_SMALL_PAYLOAD) { rejectTooLarge(res); return; }
+         const key = `callsig_${contactId}_${direction}`;
++        if (!hasCapacity(sigBytes, !store.has(key))) { rejectFull(res); return; }
+ 
+         // Live-Test-Fund 2026-09-28 (Nutzer-Bericht: "Ablehnen kommt nicht
+         // sofort an"): store.delete(key) hier loeschte bisher die GESAMTE
+@@ -925,7 +1213,8 @@
+             ? existing.signals.filter(s => s.type !== 'offer' && s.type !== 'answer' && s.type !== 'ice')
+             : [];
+           survivors.push({ type, payload, ts: Date.now() });
+-          store.set(key, { signals: survivors, expires: Date.now() + EXPIRE_CALL });
++          storeSet(key, { signals: survivors, expires: Date.now() + EXPIRE_CALL },
++            survivors.reduce((n, sig) => n + payloadBytes(sig.payload), 0));
+           // Bewusst OHNE contactId/direction geloggt (Sicherheitsreview 5) -
+           // mit beidem waere das hier faktisch ein vollstaendiger, dauerhaft
+           // auf Platte landender Anruf-Verbindungsnachweis (wer hat wann wen
+@@ -944,10 +1233,13 @@
+         }
+ 
+         if (!store.has(key)) {
+-          store.set(key, { signals: [], expires: Date.now() + EXPIRE_CALL });
++          storeSet(key, { signals: [], expires: Date.now() + EXPIRE_CALL }, 0);
+         }
+         const entry = store.get(key);
++        if (entry.signals.length >= MAX_SIGNALS_PER_QUEUE) { rejectFull(res); return; }
+         entry.signals.push({ type, payload, ts: Date.now() });
++        entry._bytes += sigBytes;
++        storedBytes += sigBytes;
+         entry.expires = Date.now() + EXPIRE_CALL; // TTL bei jedem Signal verlängern
+         console.log(`[📞 CALL] ${type}`);
+ 
+@@ -974,7 +1266,7 @@
+         return;
+       }
+       const signals = entry.signals;
+-      store.delete(key); // sofort leeren, wie beim Rest des Relays
++      storeDelete(key); // sofort leeren, wie beim Rest des Relays
+       res.end(JSON.stringify({ signals }));
+ 
+     // ── TURN-ZUGANGSDATEN (zeitlich begrenzt) ───
+@@ -1001,13 +1293,37 @@
+ 
+     // ── UNBEKANNTE ROUTE ────────────────────────
+     } else {
+-      registerFail(ip);
++      // Audit 2026-09-28: Browser fragen von sich aus nach /favicon.ico,
++      // /apple-touch-icon.png, /robots.txt usw., und nach einem Redeploy der
++      // Web-App verweist ein noch offener Tab auf alte, gehashte /assets/-
++      // Dateien. Das sind keine Angriffe - jeder davon zaehlte aber als
++      // Fehlversuch und konnte den Nutzer nach wenigen Seitenaufrufen fuer 5
++      // Minuten komplett aussperren. Solche Anfragen bekommen weiterhin ein
++      // 404, nur ohne registerFail().
++      if (!isHarmlessMiss(req)) registerFail(ip);
+       res.writeHead(404);
+       res.end(JSON.stringify({ error: 'Nicht gefunden' }));
+     }
++    } catch (e) {
++      // Letztes Sicherheitsnetz (Audit 2026-09-28): ein unerwarteter Fehler in
++      // EINEM Request darf nie den ganzen Relay-Prozess (und damit den RAM-
++      // Zustand aller Nutzer) mitreissen.
++      console.error('[Relay] Unerwarteter Fehler im Request-Handler:', e?.message || e);
++      try {
++        if (!res.headersSent) res.writeHead(500);
++        res.end(JSON.stringify({ error: 'interner_fehler' }));
++      } catch {}
++    }
+   });
+ };
+ 
++const HARMLESS_MISS_RE = /^\/(favicon\.ico|robots\.txt|apple-touch-icon[\w.-]*\.png|manifest\.json|site\.webmanifest|browserconfig\.xml|\.well-known\/[\w./-]*|assets\/[\w.-]+)$/;
++function isHarmlessMiss(req) {
++  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
++  const p = String(req.url || '').split('?')[0];
++  return HARMLESS_MISS_RE.test(p);
++}
++
+ // Zweiter Listener auf Port 5356: die Apps (nativ + Web) haben RELAY_URL fest
+ // auf Port 5356 einkompiliert. Unter IPv4 gab es dafuer bisher eine FritzBox-
+ // Portfreigabe mit Uebersetzung (extern 5356 -> intern 3333) - IPv6 kennt
+@@ -1126,7 +1442,7 @@
+   let cleaned = 0;
+   for (const [key, value] of store) {
+     if (value.expires && value.expires < now) {
+-      store.delete(key);
++      storeDelete(key);
+       cleaned++;
+     }
+   }
+@@ -1136,9 +1452,15 @@
+     const sorted = transferKeys.sort((a, b) => 
+       (store.get(a)?.created || 0) - (store.get(b)?.created || 0)
+     );
+-    sorted.slice(0, 20).forEach(k => store.delete(k));
++    sorted.slice(0, 20).forEach(k => storeDelete(k));
+     cleaned += 20;
+   }
++  // Audit 2026-09-28: diese IP-bezogenen Maps wuchsen bisher fuer die
++  // gesamte Prozesslaufzeit (jede IP, die je einen Fehler/Miss hatte, blieb
++  // fuer immer drin) - abgelaufene Eintraege jetzt mit wegraeumen.
++  for (const [k, v] of suspectIPs) if (now - v.windowStart > FAIL_WINDOW_MS) suspectIPs.delete(k);
++  for (const [k, until] of blockedIPs) if (until <= now) blockedIPs.delete(k);
++  for (const [k, v] of phoneLookupMisses) if (now - v.windowStart > PHONE_LOOKUP_MISS_WINDOW_MS) phoneLookupMisses.delete(k);
+   if (cleaned > 0) console.log(`[Cleanup] ${cleaned} abgelaufene Einträge gelöscht`);
+ }, 5 * 60 * 1000);
+ 
+--- a/__tests__/security/relay.audit20260928.test.js
++++ b/__tests__/security/relay.audit20260928.test.js
+@@ -0,0 +1,221 @@
++// Audit 2026-09-28 - Black-Box-Tests gegen eine echte relay.js-Instanz (siehe
++// helpers/relayHarness.js) fuer die in diesem Audit behobenen Funde:
++//   - Prozessabsturz durch kaputte Prozent-Kodierung (GET /%ff) bei aktiver
++//     Web-Auslieferung (WEB_DIST_PATH)
++//   - Pfad-Ausbruch aus WEB_DIST_PATH / Geschwisterverzeichnis
++//   - Selbst-Aussperrung: harmlose Browser-Anfragen (favicon.ico, alte
++//     /assets/-Dateien) und DELETE /reconnect/offer (von der App aufgerufen,
++//     Route fehlte) zaehlten als Fehlversuch -> 5 Minuten IP-Sperre
++//   - Fehlerzaehler ohne Zeitfenster
++//   - Reconnect-Angebot ging beim Abholen sofort verloren (jetzt Leihfrist,
++//     Loeschung erst mit der zugehoerigen Antwort)
++//   - /packet/<id> lieferte per Key-Praefix auch Pakete fuer "<id>_answer"
++//   - /receive/ lieferte (und loeschte) fremde Eintragsarten
++//   - unbegrenzter Speicherverbrauch (Groessen-/Mengen-Obergrenzen)
++jest.setTimeout(30000);
++
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++const http = require('http');
++const { startRelayHarness } = require('./helpers/relayHarness');
++
++function request(baseUrl, method, reqPath, body) {
++  return new Promise((resolve, reject) => {
++    const payload = body === undefined ? null : (typeof body === 'string' ? body : JSON.stringify(body));
++    const url = new URL(baseUrl);
++    const req = http.request({
++      host: url.hostname,
++      port: url.port,
++      method,
++      path: reqPath, // bewusst roh (kein URL-Normalisieren von %2e%2e o.ae.)
++      headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {},
++    }, (res) => {
++      let data = '';
++      res.on('data', (c) => (data += c));
++      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
++    });
++    req.on('error', reject);
++    if (payload) req.write(payload);
++    req.end();
++  });
++}
++const get = (b, p) => request(b, 'GET', p);
++const post = (b, p, body) => request(b, 'POST', p, body);
++const del = (b, p) => request(b, 'DELETE', p);
++const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
++
++describe('Web-Auslieferung (WEB_DIST_PATH)', () => {
++  let harness;
++  let tmpRoot;
++  beforeAll(async () => {
++    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'malachi-audit-'));
++    const dist = path.join(tmpRoot, 'dist');
++    fs.mkdirSync(dist);
++    fs.writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>t</title>');
++    // Geschwisterverzeichnis mit gleichem Namensanfang - darf nie ausgeliefert werden
++    fs.mkdirSync(path.join(tmpRoot, 'dist-secret'));
++    fs.writeFileSync(path.join(tmpRoot, 'dist-secret', 'secret.txt'), 'GEHEIM');
++    harness = await startRelayHarness({ env: { WEB_DIST_PATH: dist } });
++  });
++  afterAll(async () => {
++    await harness.stop();
++    fs.rmSync(tmpRoot, { recursive: true, force: true });
++  });
++
++  test('kaputte Prozent-Kodierung bringt den Relay nicht mehr zum Absturz', async () => {
++    const res = await get(harness.baseUrl, '/%ff');
++    expect(res.status).toBe(404);
++    const status = await get(harness.baseUrl, '/status');
++    expect(status.status).toBe(200);
++  });
++
++  test('index.html wird mit Sicherheits-Headern ausgeliefert', async () => {
++    const res = await get(harness.baseUrl, '/');
++    expect(res.status).toBe(200);
++    expect(res.headers['content-security-policy']).toContain("default-src 'self'");
++    expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
++    expect(res.headers['x-content-type-options']).toBe('nosniff');
++    expect(res.headers['referrer-policy']).toBe('no-referrer');
++    expect(res.headers['cache-control']).toBe('no-store');
++  });
++
++  test('kein Ausbruch aus WEB_DIST_PATH (auch nicht ins Geschwisterverzeichnis)', async () => {
++    for (const p of ['/%2e%2e/dist-secret/secret.txt', '/..%2fdist-secret%2fsecret.txt', '/../dist-secret/secret.txt']) {
++      const res = await get(harness.baseUrl, p);
++      expect(res.body).not.toContain('GEHEIM');
++    }
++  });
++});
++
++describe('Keine Selbst-Aussperrung durch harmlose Anfragen', () => {
++  let harness;
++  beforeAll(async () => { harness = await startRelayHarness(); });
++  afterAll(async () => { await harness.stop(); });
++
++  test('10x favicon/apple-touch-icon/alte Assets -> weiterhin nicht gesperrt', async () => {
++    for (let i = 0; i < 4; i++) {
++      expect((await get(harness.baseUrl, '/favicon.ico')).status).toBe(404);
++      expect((await get(harness.baseUrl, '/apple-touch-icon-precomposed.png')).status).toBe(404);
++      expect((await get(harness.baseUrl, '/assets/index-abc123.js')).status).toBe(404);
++    }
++    expect((await get(harness.baseUrl, '/status')).status).toBe(200);
++  });
++
++  test('DELETE /reconnect/offer/<id> (Kontakt loeschen) existiert und sperrt nicht', async () => {
++    for (let i = 0; i < 8; i++) {
++      const res = await del(harness.baseUrl, `/reconnect/offer/c_test${i}_offer`);
++      expect(res.status).toBe(200);
++    }
++    expect((await get(harness.baseUrl, '/status')).status).toBe(200);
++  });
++});
++
++describe('Fehlerzaehler mit Zeitfenster', () => {
++  let harness;
++  beforeAll(async () => { harness = await startRelayHarness({ env: { FAIL_WINDOW_MS: '400' } }); });
++  afterAll(async () => { await harness.stop(); });
++
++  test('verteilte Einzelfehler sperren nicht mehr, ein Burst schon', async () => {
++    for (let i = 0; i < 6; i++) {
++      await get(harness.baseUrl, '/wp-login.php');
++      await sleep(450); // jedes Mal ausserhalb des Fensters
++    }
++    expect((await get(harness.baseUrl, '/status')).status).toBe(200);
++    for (let i = 0; i < 5; i++) await get(harness.baseUrl, '/wp-login.php');
++    expect((await get(harness.baseUrl, '/status')).status).toBe(403);
++  });
++});
++
++describe('Reconnect-Angebot: Leihfrist statt Sofort-Loeschen', () => {
++  let harness;
++  beforeAll(async () => { harness = await startRelayHarness({ env: { RECONNECT_LEASE_MS: '300' } }); });
++  afterAll(async () => { await harness.stop(); });
++
++  test('verlorene Abholung: Angebot ist nach der Leihfrist wieder abholbar', async () => {
++    expect((await post(harness.baseUrl, '/reconnect/offer', { offer: 'ENC_OFFER_1', contactId: 'c_aaa_offer' })).status).toBe(200);
++    const first = await get(harness.baseUrl, '/reconnect/offer/c_aaa_offer');
++    expect(JSON.parse(first.body).offer).toBe('ENC_OFFER_1');
++    // Waehrend der Leihfrist: fuer niemanden sichtbar (kein Doppel-Verarbeiten)
++    const during = await get(harness.baseUrl, '/reconnect/offer/c_aaa_offer');
++    expect(during.status).toBe(404);
++    await sleep(350);
++    const again = await get(harness.baseUrl, '/reconnect/offer/c_aaa_offer');
++    expect(JSON.parse(again.body).offer).toBe('ENC_OFFER_1');
++  });
++
++  test('die zugehoerige Antwort verbraucht das Angebot endgueltig', async () => {
++    await post(harness.baseUrl, '/reconnect/offer', { offer: 'ENC_OFFER_2', contactId: 'c_bbb_offer' });
++    await get(harness.baseUrl, '/reconnect/offer/c_bbb_offer');
++    expect((await post(harness.baseUrl, '/reconnect/answer', { answer: 'ENC_ANSWER', contactId: 'c_bbb_answer_s3ss10n' })).status).toBe(200);
++    await sleep(350);
++    expect((await get(harness.baseUrl, '/reconnect/offer/c_bbb_offer')).status).toBe(404);
++    const ans = await get(harness.baseUrl, '/reconnect/answer/c_bbb_answer_s3ss10n');
++    expect(JSON.parse(ans.body).answer).toBe('ENC_ANSWER');
++  });
++
++  test('ein neues Angebot ersetzt ein ausgeliehenes sofort', async () => {
++    await post(harness.baseUrl, '/reconnect/offer', { offer: 'OLD', contactId: 'c_ccc_offer' });
++    await get(harness.baseUrl, '/reconnect/offer/c_ccc_offer');
++    await post(harness.baseUrl, '/reconnect/offer', { offer: 'NEW', contactId: 'c_ccc_offer' });
++    const res = await get(harness.baseUrl, '/reconnect/offer/c_ccc_offer');
++    expect(JSON.parse(res.body).offer).toBe('NEW');
++  });
++});
++
++describe('Empfaenger-Trennung bei /packet und /receive', () => {
++  let harness;
++  beforeAll(async () => { harness = await startRelayHarness(); });
++  afterAll(async () => { await harness.stop(); });
++
++  test('/packet/<id> liefert keine Pakete fuer "<id>_answer" mehr', async () => {
++    await post(harness.baseUrl, '/packet', { payload: 'FUER_ANSWER', recipient: 'c_ddd_answer' });
++    const wrong = JSON.parse((await get(harness.baseUrl, '/packet/c_ddd')).body);
++    expect(wrong.packets).toHaveLength(0);
++    const right = JSON.parse((await get(harness.baseUrl, '/packet/c_ddd_answer')).body);
++    expect(right.packets.map((p) => p.payload)).toEqual(['FUER_ANSWER']);
++  });
++
++  test('/receive/ liefert/loescht keine Reconnect-Angebote', async () => {
++    await post(harness.baseUrl, '/reconnect/offer', { offer: 'ENC_OFFER_E', contactId: 'c_eee_offer' });
++    const recv = JSON.parse((await get(harness.baseUrl, '/receive/c_eee_offer')).body);
++    expect(recv.packets).toHaveLength(0);
++    await sleep(1100); // /receive loeschte frueher nach 1s
++    const offer = await get(harness.baseUrl, '/reconnect/offer/c_eee_offer');
++    expect(JSON.parse(offer.body).offer).toBe('ENC_OFFER_E');
++  });
++});
++
++describe('Speicher-Obergrenzen', () => {
++  let harness;
++  beforeAll(async () => { harness = await startRelayHarness({ env: { MAX_STORED_BYTES: String(200 * 1024) } }); });
++  afterAll(async () => { await harness.stop(); });
++
++  test('zu grosses Einzelpaket -> 413', async () => {
++    const res = await post(harness.baseUrl, '/packet', { payload: 'x'.repeat(70 * 1024), recipient: 'c_big' });
++    expect(res.status).toBe(413);
++  });
++
++  test('voller Speicher -> 507 statt Absturz, Relay bleibt erreichbar', async () => {
++    const statuses = [];
++    for (let i = 0; i < 6; i++) {
++      statuses.push((await post(harness.baseUrl, '/packet', { payload: 'y'.repeat(60 * 1024), recipient: `c_fill${i}` })).status);
++    }
++    expect(statuses.slice(0, 3)).toEqual([200, 200, 200]);
++    expect(statuses).toContain(507);
++    expect((await get(harness.baseUrl, '/status')).status).toBe(200);
++  });
++
++  test('abgeholte+bestaetigte Pakete geben den Platz wieder frei', async () => {
++    const pk = JSON.parse((await get(harness.baseUrl, '/packet/c_fill0')).body).packets;
++    expect(pk).toHaveLength(1);
++    await post(harness.baseUrl, '/packet/ack', { recipient: 'c_fill0', tokens: [pk[0].token] });
++    const res = await post(harness.baseUrl, '/packet', { payload: 'z'.repeat(60 * 1024), recipient: 'c_after' });
++    expect(res.status).toBe(200);
++  });
++
++  test('Transfer-Chunk mit ungueltigem Index -> 400', async () => {
++    const res = await post(harness.baseUrl, '/transfer/tok1/chunk/999999', { data: 'abc', total: 1 });
++    expect(res.status).toBe(400);
++  });
++});
+--- a/coturn-setup.sh
++++ b/coturn-setup.sh
+@@ -95,6 +95,40 @@
+ max-port=${TURN_MAX_PORT}
+ no-cli
+ no-multicast-peers
++# ── Audit 2026-09-28: TURN darf NICHT ins eigene Heimnetz relayen ──────────
++# /turn-credentials gibt jedem im Internet gueltige TURN-Zugangsdaten (ohne
++# Konto - so ist die App gebaut). Ohne die folgenden Zeilen konnte damit
++# JEDER diesen TURN-Server als Sprungbrett in das private Netz dahinter
++# benutzen (FritzBox-Oberflaeche 192.168.178.1, SSH des Servers, andere
++# Geraete im WLAN) - bekanntes TURN-Missbrauchsmuster (vgl. CVE-2020-26262).
++# coturn blockiert von sich aus nur Loopback, private Bereiche NICHT.
++# Die eigene LAN-IP bleibt erlaubt, damit TURN-zu-TURN-Relaying zwischen
++# zwei Clients desselben Servers weiter funktioniert.
++denied-peer-ip=0.0.0.0-0.255.255.255
++denied-peer-ip=10.0.0.0-10.255.255.255
++denied-peer-ip=100.64.0.0-100.127.255.255
++denied-peer-ip=127.0.0.0-127.255.255.255
++denied-peer-ip=169.254.0.0-169.254.255.255
++denied-peer-ip=172.16.0.0-172.31.255.255
++denied-peer-ip=192.0.0.0-192.0.0.255
++denied-peer-ip=192.0.2.0-192.0.2.255
++denied-peer-ip=192.168.0.0-192.168.255.255
++denied-peer-ip=198.18.0.0-198.19.255.255
++denied-peer-ip=198.51.100.0-198.51.100.255
++denied-peer-ip=203.0.113.0-203.0.113.255
++denied-peer-ip=224.0.0.0-255.255.255.255
++denied-peer-ip=::1
++denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
++denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
++denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
++denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
++allowed-peer-ip=${LOCAL_IP}
++# WebRTC nutzt keine TCP-Relay-Allokationen (RFC 6062) - abschalten verkleinert
++# die Angriffsflaeche ohne Funktionsverlust. Quoten begrenzen Missbrauch der
++# frei abrufbaren Zugangsdaten als Bandbreiten-Relay.
++no-tcp-relay
++user-quota=12
++total-quota=1200
+ EOF
+ # lt-cred-mech (altes Username/Passwort-Verfahren) entfernt - stand bisher
+ # GLEICHZEITIG mit use-auth-secret in der Config, coturn meldete das beim

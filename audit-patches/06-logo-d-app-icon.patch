@@ -1,0 +1,285 @@
+--- a/android/app/src/main/res/drawable/ic_launcher_bg.xml
++++ b/android/app/src/main/res/drawable/ic_launcher_bg.xml
+@@ -0,0 +1,21 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Logo D (Peer-to-Peer), Hintergrund-Ebene des adaptiven App-Icons. -->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:aapt="http://schemas.android.com/aapt"
++    android:width="108dp"
++    android:height="108dp"
++    android:viewportWidth="108"
++    android:viewportHeight="108">
++    <path android:pathData="M0,0h108v108h-108z">
++        <aapt:attr name="android:fillColor">
++            <gradient
++                android:type="linear"
++                android:startX="0" android:startY="0"
++                android:endX="108" android:endY="108">
++                <item android:offset="0" android:color="#FF101E4A" />
++                <item android:offset="0.5" android:color="#FF071433" />
++                <item android:offset="1" android:color="#FF02060F" />
++            </gradient>
++        </aapt:attr>
++    </path>
++</vector>
+--- a/android/app/src/main/res/drawable/ic_launcher_fg.xml
++++ b/android/app/src/main/res/drawable/ic_launcher_fg.xml
+@@ -0,0 +1,123 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Logo D (Peer-to-Peer), Vordergrund-Ebene des adaptiven App-Icons.
++     Aus showcase/branding/logo-d-centered.svg umgerechnet (Faktor 0.09,
++     Mitte der Komposition = 54/54): Knoten, M und Schloss liegen exakt
++     zentriert und vollstaendig innerhalb der 66dp-Sicherheitszone, damit
++     keine Launcher-Maske (Kreis, Squircle, Tropfen) etwas abschneidet. -->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:aapt="http://schemas.android.com/aapt"
++    android:width="108dp"
++    android:height="108dp"
++    android:viewportWidth="108"
++    android:viewportHeight="108">
++
++    <!-- feine Umlaufbahn -->
++    <path
++        android:pathData="M24.3,54a29.7,29.7 0 1,0 59.4,0a29.7,29.7 0 1,0 -59.4,0"
++        android:strokeColor="#2A36E0FF"
++        android:strokeWidth="0.4" />
++
++    <!-- Leuchten unter dem M (ersetzt den SVG-Weichzeichner) -->
++    <path
++        android:pathData="M33.66,66.6V34.2L54,54L74.34,34.2V66.6"
++        android:strokeColor="#3336E0FF"
++        android:strokeWidth="10"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round" />
++
++    <!-- das M als Verbindungslinie -->
++    <path
++        android:pathData="M33.66,66.6V34.2L54,54L74.34,34.2V66.6"
++        android:strokeWidth="5.22"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round">
++        <aapt:attr name="android:strokeColor">
++            <gradient
++                android:type="linear"
++                android:startX="33.66" android:startY="0"
++                android:endX="74.34" android:endY="0">
++                <item android:offset="0" android:color="#FF36E0FF" />
++                <item android:offset="0.5" android:color="#FF7C8CFF" />
++                <item android:offset="1" android:color="#FF36E0FF" />
++            </gradient>
++        </aapt:attr>
++    </path>
++
++    <!-- Halos der beiden Geraete-Knoten -->
++    <path android:pathData="M25.38,66.6a8.28,8.28 0 1,0 16.56,0a8.28,8.28 0 1,0 -16.56,0">
++        <aapt:attr name="android:fillColor">
++            <gradient android:type="radial" android:centerX="33.66" android:centerY="66.6" android:gradientRadius="8.28">
++                <item android:offset="0" android:color="#7336E0FF" />
++                <item android:offset="1" android:color="#0036E0FF" />
++            </gradient>
++        </aapt:attr>
++    </path>
++    <path android:pathData="M66.06,66.6a8.28,8.28 0 1,0 16.56,0a8.28,8.28 0 1,0 -16.56,0">
++        <aapt:attr name="android:fillColor">
++            <gradient android:type="radial" android:centerX="74.34" android:centerY="66.6" android:gradientRadius="8.28">
++                <item android:offset="0" android:color="#7336E0FF" />
++                <item android:offset="1" android:color="#0036E0FF" />
++            </gradient>
++        </aapt:attr>
++    </path>
++
++    <!-- Knoten unten (Geraete) -->
++    <path android:pathData="M29.52,66.6a4.14,4.14 0 1,0 8.28,0a4.14,4.14 0 1,0 -8.28,0">
++        <aapt:attr name="android:fillColor">
++            <gradient android:type="radial" android:centerX="32.42" android:centerY="64.94" android:gradientRadius="6.62">
++                <item android:offset="0" android:color="#FFE9FDFF" />
++                <item android:offset="0.35" android:color="#FF5DE6FF" />
++                <item android:offset="1" android:color="#FF0A7FD0" />
++            </gradient>
++        </aapt:attr>
++    </path>
++    <path android:pathData="M70.2,66.6a4.14,4.14 0 1,0 8.28,0a4.14,4.14 0 1,0 -8.28,0">
++        <aapt:attr name="android:fillColor">
++            <gradient android:type="radial" android:centerX="73.1" android:centerY="64.94" android:gradientRadius="6.62">
++                <item android:offset="0" android:color="#FFE9FDFF" />
++                <item android:offset="0.35" android:color="#FF5DE6FF" />
++                <item android:offset="1" android:color="#FF0A7FD0" />
++            </gradient>
++        </aapt:attr>
++    </path>
++
++    <!-- Knoten oben -->
++    <path android:pathData="M30.96,34.2a2.7,2.7 0 1,0 5.4,0a2.7,2.7 0 1,0 -5.4,0">
++        <aapt:attr name="android:fillColor">
++            <gradient android:type="radial" android:centerX="32.85" android:centerY="33.12" android:gradientRadius="4.32">
++                <item android:offset="0" android:color="#FFE9FDFF" />
++                <item android:offset="0.35" android:color="#FF5DE6FF" />
++                <item android:offset="1" android:color="#FF0A7FD0" />
++            </gradient>
++        </aapt:attr>
++    </path>
++    <path android:pathData="M71.64,34.2a2.7,2.7 0 1,0 5.4,0a2.7,2.7 0 1,0 -5.4,0">
++        <aapt:attr name="android:fillColor">
++            <gradient android:type="radial" android:centerX="73.53" android:centerY="33.12" android:gradientRadius="4.32">
++                <item android:offset="0" android:color="#FFE9FDFF" />
++                <item android:offset="0.35" android:color="#FF5DE6FF" />
++                <item android:offset="1" android:color="#FF0A7FD0" />
++            </gradient>
++        </aapt:attr>
++    </path>
++
++    <!-- Schloss in der Mitte -->
++    <path
++        android:pathData="M45.36,54a8.64,8.64 0 1,0 17.28,0a8.64,8.64 0 1,0 -17.28,0"
++        android:fillColor="#FF071433"
++        android:strokeWidth="0.9">
++        <aapt:attr name="android:strokeColor">
++            <gradient
++                android:type="linear"
++                android:startX="45.36" android:startY="0"
++                android:endX="62.64" android:endY="0">
++                <item android:offset="0" android:color="#FF36E0FF" />
++                <item android:offset="0.5" android:color="#FF7C8CFF" />
++                <item android:offset="1" android:color="#FF36E0FF" />
++            </gradient>
++        </aapt:attr>
++    </path>
++    <path
++        android:pathData="M51.66,52.38a2.34,2.34 0 1,0 4.68,0a2.34,2.34 0 1,0 -4.68,0M52.92,53.64L55.08,53.64L55.98,58.68L52.02,58.68Z"
++        android:fillColor="#FF7FEFFF" />
++</vector>
+--- a/android/app/src/main/res/drawable/ic_launcher_mono.xml
++++ b/android/app/src/main/res/drawable/ic_launcher_mono.xml
+@@ -0,0 +1,27 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Logo D, einfarbige Ebene fuer "Designte Symbole" (Android 13+): das
++     System faerbt sie passend zum Hintergrundbild ein. Gleiche Geometrie wie
++     ic_launcher_fg.xml; das M endet am Schlossring, damit das Schluesselloch
++     frei bleibt. -->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="108dp"
++    android:height="108dp"
++    android:viewportWidth="108"
++    android:viewportHeight="108">
++    <path
++        android:pathData="M33.66,66.6V34.2L47.8,47.97M60.2,47.97L74.34,34.2V66.6"
++        android:strokeColor="#FF000000"
++        android:strokeWidth="5.22"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round" />
++    <path
++        android:pathData="M29.52,66.6a4.14,4.14 0 1,0 8.28,0a4.14,4.14 0 1,0 -8.28,0M70.2,66.6a4.14,4.14 0 1,0 8.28,0a4.14,4.14 0 1,0 -8.28,0M30.96,34.2a2.7,2.7 0 1,0 5.4,0a2.7,2.7 0 1,0 -5.4,0M71.64,34.2a2.7,2.7 0 1,0 5.4,0a2.7,2.7 0 1,0 -5.4,0"
++        android:fillColor="#FF000000" />
++    <path
++        android:pathData="M45.36,54a8.64,8.64 0 1,0 17.28,0a8.64,8.64 0 1,0 -17.28,0"
++        android:strokeColor="#FF000000"
++        android:strokeWidth="1.8" />
++    <path
++        android:pathData="M51.66,52.38a2.34,2.34 0 1,0 4.68,0a2.34,2.34 0 1,0 -4.68,0M52.92,53.64L55.08,53.64L55.98,58.68L52.02,58.68Z"
++        android:fillColor="#FF000000" />
++</vector>
+--- a/android/app/src/main/res/drawable/ic_stat_malachi.xml
++++ b/android/app/src/main/res/drawable/ic_stat_malachi.xml
+@@ -0,0 +1,24 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Logo D als Statusleisten-/Benachrichtigungssymbol (24dp, einfarbig -
++     Android wertet hier nur die Deckkraft aus). Vorher wurde das bunte
++     App-Icon verwendet, das in der Statusleiste als weisses Viereck erschien.
++     Das M endet am Schloss, das Schluesselloch ist ausgespart (evenOdd). -->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:pathData="M3.68,17.15V3.9L9.47,9.54M14.53,9.54L20.32,3.9V17.15"
++        android:strokeColor="#FFFFFFFF"
++        android:strokeWidth="2.2"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round" />
++    <path
++        android:pathData="M1.78,17.15a1.9,1.9 0 1,0 3.8,0a1.9,1.9 0 1,0 -3.8,0M18.42,17.15a1.9,1.9 0 1,0 3.8,0a1.9,1.9 0 1,0 -3.8,0"
++        android:fillColor="#FFFFFFFF" />
++    <path
++        android:fillType="evenOdd"
++        android:pathData="M8.3,12a3.7,3.7 0 1,0 7.4,0a3.7,3.7 0 1,0 -7.4,0ZM11,11.34a1,1 0 1,0 2,0a1,1 0 1,0 -2,0ZM11.5,11.92L12.5,11.92L12.8,14.02L11.2,14.02Z"
++        android:fillColor="#FFFFFFFF" />
++</vector>
+--- a/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
++++ b/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+@@ -1,5 +1,7 @@
+ <?xml version="1.0" encoding="utf-8"?>
++<!-- Logo D (Peer-to-Peer), zentriert - siehe drawable/ic_launcher_fg.xml. -->
+ <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+-    <background android:drawable="@color/ic_launcher_background"/>
+-    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+-</adaptive-icon>
+\ No newline at end of file
++    <background android:drawable="@drawable/ic_launcher_bg"/>
++    <foreground android:drawable="@drawable/ic_launcher_fg"/>
++    <monochrome android:drawable="@drawable/ic_launcher_mono"/>
++</adaptive-icon>
+--- a/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
++++ b/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+@@ -1,5 +1,7 @@
+ <?xml version="1.0" encoding="utf-8"?>
++<!-- Logo D (Peer-to-Peer), zentriert - siehe drawable/ic_launcher_fg.xml. -->
+ <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+-    <background android:drawable="@color/ic_launcher_background"/>
+-    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+-</adaptive-icon>
+\ No newline at end of file
++    <background android:drawable="@drawable/ic_launcher_bg"/>
++    <foreground android:drawable="@drawable/ic_launcher_fg"/>
++    <monochrome android:drawable="@drawable/ic_launcher_mono"/>
++</adaptive-icon>
+--- a/android/app/src/main/res/mipmap-anydpi/ic_launcher.xml
++++ b/android/app/src/main/res/mipmap-anydpi/ic_launcher.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Android 7.x (API 24/25, kein adaptives Icon): dieselben Vektor-Ebenen
++     als einfache Ebenenliste, damit auch dort Logo D statt der alten
++     PNG-Icons erscheint. Ab Android 8 gilt mipmap-anydpi-v26. -->
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
++    <item android:drawable="@drawable/ic_launcher_bg" />
++    <item android:drawable="@drawable/ic_launcher_fg" />
++</layer-list>
+--- a/android/app/src/main/res/mipmap-anydpi/ic_launcher_round.xml
++++ b/android/app/src/main/res/mipmap-anydpi/ic_launcher_round.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Android 7.x (API 24/25, kein adaptives Icon): dieselben Vektor-Ebenen
++     als einfache Ebenenliste, damit auch dort Logo D statt der alten
++     PNG-Icons erscheint. Ab Android 8 gilt mipmap-anydpi-v26. -->
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
++    <item android:drawable="@drawable/ic_launcher_bg" />
++    <item android:drawable="@drawable/ic_launcher_fg" />
++</layer-list>
+--- a/android/app/src/main/java/com/securecommapp/MalachiService.kt
++++ b/android/app/src/main/java/com/securecommapp/MalachiService.kt
+@@ -172,7 +172,7 @@
+         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+             .setContentTitle("Malachi")
+             .setContentText("Verbindung aktiv – Nachrichten werden empfangen")
+-            .setSmallIcon(R.mipmap.ic_launcher)
++            .setSmallIcon(R.drawable.ic_stat_malachi)
+             .setPriority(NotificationCompat.PRIORITY_LOW)
+             .setOngoing(true)
+             .build()
+--- a/android/app/src/main/java/com/securecommapp/MalachiNotificationModule.kt
++++ b/android/app/src/main/java/com/securecommapp/MalachiNotificationModule.kt
+@@ -69,12 +69,12 @@
+         // Metadatum, das auf einem gesperrten Geraet nicht fuer Umstehende
+         // sichtbar sein soll (entspricht dem bisherigen, namenlosen Text).
+         val publicVersion = NotificationCompat.Builder(context, CHANNEL_ID)
+-            .setSmallIcon(android.R.drawable.ic_dialog_email)
++            .setSmallIcon(R.drawable.ic_stat_malachi)
+             .setContentTitle("Malachi")
+             .setContentText("Neue Nachricht")
+             .build()
+         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+-            .setSmallIcon(android.R.drawable.ic_dialog_email)
++            .setSmallIcon(R.drawable.ic_stat_malachi)
+             .setContentTitle("Malachi")
+             .setContentText(text)
+             .setPriority(NotificationCompat.PRIORITY_HIGH)

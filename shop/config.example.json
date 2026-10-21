@@ -1,0 +1,134 @@
+{
+  "_hinweis": "Vorlage. Kopieren nach /etc/malachi-shop/config.json und anpassen. Schluessel mit _ am Anfang sind Kommentare. Erklaerung aller Felder: ANLEITUNG.md",
+
+  "preisEur": 2.99,
+  "mindestBestaetigungen": 1,
+  "toleranzProzent": 0,
+  "widerrufsZustimmungErforderlich": true,
+  "datenVerzeichnis": "/var/lib/malachi-shop",
+
+  "bestellung": {
+    "gueltigStunden": 24,
+    "adresseReserviertStunden": 72,
+    "unvollstaendigAufbewahrenTage": 30,
+    "bezahlteAufbewahrenTage": 3650,
+    "maxReservierteAdressen": 100,
+    "proStunde": 30,
+    "stoss": 5
+  },
+
+  "lizenz": {
+    "_schluesselDatei": "credential:<name> = systemd LoadCredential (siehe deploy/malachi-shop.service); lokal zum Testen ein Dateipfad",
+    "schluesselDatei": "credential:lizenz-schluessel",
+    "maxAktivierungen": 3,
+    "features": ["pro"],
+    "umzuegeProStunde": 20
+  },
+
+  "zahlungswege": {
+    "standard": "xmr",
+    "pruefIntervallSek": 60,
+    "xmr": {
+      "aktiv": true,
+      "_hauptadresse": "OEFFENTLICHE Hauptadresse des Shop-Wallets (beginnt mit 4). Niemals Seed oder Spend-Key auf den Server!",
+      "hauptadresse": "4_HIER_DIE_MONERO_HAUPTADRESSE_EINTRAGEN",
+      "walletRpcUrl": "http://127.0.0.1:18082/json_rpc",
+      "walletRpcLogin": "credential:wallet-rpc-login",
+      "kontoIndex": 0,
+      "_ersatzKnoten": "Onion-Knoten (host:port), auf die der Shop umschaltet, wenn der Knoten aus wallet-rpc.conf nicht antwortet (Pruefung alle 5 min). Aktuelle Liste: https://monero.fail (Filter: onion), z. B. ueber Tor abrufen.",
+      "ersatzKnoten": []
+    },
+    "btc": {
+      "_hinweis": "Zweiter Zahlungsweg Bitcoin (watch-only zpub, BIP84, bc1q...). Standardmaessig aus. Einrichtung: ANLEITUNG.md Abschnitt 3a. Niemals Seed, zprv/xprv oder private Schluessel auf den Server!",
+      "aktiv": false,
+      "_zpub": "Konto-zpub (Ebene m/84'/0'/0') eines Wallets NUR fuer den Shop - sie zeigt alle Adressen und Zahlungen dieses Wallets",
+      "zpub": "",
+      "_startIndex": "erste Empfangsadresse m/0/<startIndex>, die der Shop vergibt (neues Wallet: 0)",
+      "startIndex": 0,
+      "_gapLimit": "Gap-Limit des Wallets, in dem du die Zahlungen ansiehst (Sparrow/Electrum: 20). Der Shop haelt hoechstens gapLimit-1 unbezahlte Bitcoin-Bestellungen gleichzeitig offen.",
+      "gapLimit": 20,
+      "mempoolOnion": "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion",
+      "mempoolClearnet": "https://mempool.space",
+      "clearnetFallback": false
+    },
+    "extern": {
+      "_hinweis": "Schnittstelle fuer einen externen Zahlungsdienst (Adapter in src/zahlung/anbieter/<name>.js). Es ist kein Anbieter fest eingebaut.",
+      "aktiv": false,
+      "adapter": "",
+      "einstellungen": {}
+    }
+  },
+
+  "kurs": {
+    "mindestQuellen": 2,
+    "maxAbweichungProzent": 5,
+    "cacheSek": 300,
+    "quellen": {
+      "XMR": [
+        { "name": "kraken", "url": "https://api.kraken.com/0/public/Ticker?pair=XMREUR", "pfad": "result.XXMRZEUR.c.0" },
+        { "name": "coingecko", "url": "https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=eur", "pfad": "monero.eur" }
+      ],
+      "BTC": [
+        { "name": "kraken", "url": "https://api.kraken.com/0/public/Ticker?pair=XBTEUR", "pfad": "result.XXBTZEUR.c.0" },
+        { "name": "coingecko", "url": "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur", "pfad": "bitcoin.eur" }
+      ]
+    }
+  },
+
+  "tor": {
+    "socksHost": "127.0.0.1",
+    "socksPort": 9050,
+    "timeoutSek": 60
+  },
+
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8085
+  },
+
+  "api": {
+    "aktiv": true
+  },
+
+  "umsatzsteuer": {
+    "kleinunternehmer": true,
+    "steuersatz": 19,
+    "hinweisText": "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet (Kleinunternehmerregelung)."
+  },
+
+  "buchhaltung": {
+    "rechnungsPraefix": "MAL",
+    "_sicherungSchluessel": "OEFFENTLICHER Sicherungsschluessel (npm run buchhaltung -- sicherungsschluessel). Der private Teil bleibt offline beim Betreiber.",
+    "sicherungSchluessel": "",
+    "sicherungenBehalten": 30
+  },
+
+  "verkauf": {
+    "_hinweis": "manuell = Verkaeufe per Befehl nachtragen. kraken = nur BTC, nur bereits selbst eingezahlte Coins, API-Schluessel OHNE Auszahlungsrecht. Siehe VERKAUF_UND_STEUER.md",
+    "modus": "manuell",
+    "zeitplan": "schwellenwert",
+    "stundeUtc": 3,
+    "mindestAbstandMinuten": 60,
+    "kraken": {
+      "zugang": "credential:kraken-api",
+      "waehrung": "BTC",
+      "schwellenwert": "0.001",
+      "reserve": "0",
+      "nurProbelauf": true
+    }
+  },
+
+  "texte": {
+    "name": "Malachi",
+    "produkt": "Malachi Vollversion",
+    "untertitel": "Privater Peer-to-Peer-Messenger mit Tor"
+  },
+
+  "rechtliches": {
+    "_hinweis": "Texte selbst erstellen bzw. pruefen lassen - siehe RECHT_KRYPTOZAHLUNG.md. Jede Zeile/jeder Absatz ist ein Listeneintrag.",
+    "anbieter": [],
+    "impressum": [],
+    "widerrufsbelehrung": [],
+    "datenschutzZusatz": []
+  }
+}

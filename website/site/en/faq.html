@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Questions &amp; answers – Malachi</title>
+<meta name="description" content="Frequently asked questions about Malachi: contacts without a phone number, delivery without a server, IP addresses, encryption, full version and updates.">
+{{TEIL:meta}}
+</head>
+<body>
+{{TEIL:kopfen}}
+<main id="inhalt" class="rahmen">
+
+<h1>Questions &amp; answers</h1>
+
+<h2>Basics</h2>
+
+<details>
+  <summary>How do I find contacts without a phone number?</summary>
+  <p>Not automatically – and that's intentional. Malachi doesn't upload an address book and has no user directories. You exchange an invitation: ideally in person via QR code, otherwise as a link or code over a channel you trust. Then compare the safety code (shield icon in the chat).</p>
+</details>
+
+<details>
+  <summary>How do messages arrive if there is no server?</summary>
+  <p>Every device is reachable over Tor as its own onion service. That is how your devices find each other and exchange messages; depending on the connection mode they then switch to a direct connection. If your contact isn't reachable right now, the message waits, encrypted, on your device and goes out automatically as soon as you are connected again.</p>
+</details>
+
+<details>
+  <summary>Who can see my IP address?</summary>
+  <p>That depends on the connection mode (Settings → Connection mode). In the default "Fast" mode, two public STUN services run by German providers and – during a direct connection – your contact can see your IP address, but no content. With "Private" only your contact sees it, during a direct connection. With "Maximum anonymity (Tor only)" (full version) nobody sees it. The overview is on the <a href="index.html#who-sees-what">home page</a>.</p>
+</details>
+
+<details>
+  <summary>How is Malachi encrypted?</summary>
+  <p>End-to-end: messages are encrypted on your device and only decrypted at your contact's. Every message gets its own key, which is deleted after use (Double Ratchet). If a device is briefly compromised, the connection recovers with the next messages. The key exchange combines the proven X25519 with ML-KEM-768, a standardised scheme intended to protect against future quantum computers as well.</p>
+</details>
+
+<details>
+  <summary>Is Malachi unbreakable?</summary>
+  <p>No – no software can honestly promise that. Malachi builds on proven, publicly known schemes (including X25519, ML-KEM-768 and XChaCha20-Poly1305) instead of home-made ones. However, Malachi has not been reviewed by an independent auditor yet. No encryption helps against malware on the device or an unlocked phone in someone else's hands.</p>
+</details>
+
+<details>
+  <summary>What is seal mode?</summary>
+  <p>With seal mode you encrypt texts, pictures, voice messages and files that you send over another messenger such as WhatsApp or Signal. The other messenger only sees ciphertext. Seal has its own vault with its own passphrase, its own contacts (paired via QR code) and keeps no history. Encrypting is part of the full version, decrypting is free.</p>
+</details>
+
+<details>
+  <summary>Is Malachi available for iPhone, Windows or in the browser?</summary>
+  <p>Not at the moment. Malachi is only available for Android (version 7.0 and later).</p>
+</details>
+
+<details>
+  <summary>Which languages does the app support?</summary>
+  <p>18: German, English, Spanish, French, Italian, Portuguese (Brazil), Dutch, Polish, Turkish, Russian, Ukrainian, Arabic, Persian, Chinese (simplified), Japanese, Korean, Hindi and Indonesian.</p>
+</details>
+
+<h2>Download and updates</h2>
+
+<details>
+  <summary>How do I know the file is genuine?</summary>
+  <p>Compare the SHA-256 checksum and the certificate fingerprint with the values on the download page – ideally over two routes, such as the normal and the onion address. The instructions are on the <a href="download.html#verify">download page</a>.</p>
+</details>
+
+<details>
+  <summary>How do I get updates?</summary>
+  <p>The app checks for new versions over Tor at most once a day and only downloads one when you tap it; new versions also appear on the <a href="download.html">download page</a>. Simply install them over the old version; your data is kept. Android only accepts an update if it is signed with the same key as the installed app.</p>
+</details>
+
+<details>
+  <summary>Why is there an onion address?</summary>
+  <p>With the onion address you reach this website in the Tor Browser without the server or anyone on the network in between learning your IP address. The content is the same on both addresses.</p>
+</details>
+
+<h2>Full version and purchase</h2>
+
+<details>
+  <summary>What does Malachi cost?</summary>
+  <p>The app is free. The <a href="vollversion.html">full version</a> costs €2.99 once – no subscription, no account.</p>
+</details>
+
+<details>
+  <summary>Why only Monero and Bitcoin?</summary>
+  <p>So you can buy without an account, without bank or card details and without a name. The shop is only reachable over Tor and only learns a device code.</p>
+</details>
+
+<details>
+  <summary>I have a new phone. Is the full version gone?</summary>
+  <p>No. With the order number and recovery code you get it onto the new device in the shop – up to three times in total. That's why you must write down the recovery code when you buy.</p>
+</details>
+
+<details>
+  <summary>What happens to my chats if I lose my phone?</summary>
+  <p>Your chats are only on your device, not in a cloud and not on a server. Without the device they are gone. Protect the app with a PIN; with the full version you can also set everything to be deleted after five wrong PINs.</p>
+</details>
+
+</main>
+{{TEIL:fussen}}
+</body>
+</html>

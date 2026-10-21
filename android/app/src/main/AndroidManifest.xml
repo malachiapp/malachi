@@ -1,0 +1,658 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Standort-Versand (ohne Google): @react-native-community/geolocation
+         nutzt auf Android das plattformeigene LocationManager-API, keine
+         Google Play Services FusedLocationProviderClient. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- War "dataSync" - Live-Test 2026-09-27 zeigte, dass sich die
+         Dienst-Benachrichtigung per Wisch-Geste entfernen liess und dabei den
+         gesamten Dienst (samt P2P-Empfang) beendete, ohne Warnung. Android 14+
+         behandelt "dataSync"/"mediaProcessing" bewusst als kurzlebige,
+         nutzer-wegwischbare Typen mit 6h-Laufzeitlimit (Anti-Missbrauchs-
+         Massnahme, da diese beiden Typen am haeufigsten fuer unbegrenzte
+         Hintergrundarbeit zweckentfremdet wurden). "remoteMessaging" ist der
+         fuer diesen Zweck (durchgehender Nachrichtenempfang) tatsaechlich
+         vorgesehene Typ und unterliegt diesem Zeitlimit/der Wegwisch-Regel
+         nicht - muss nach dem naechsten Release-Build auf dem echten Geraet
+         verifiziert werden (Wegwischen erneut versuchen), da Android das
+         Wegwisch-Verhalten pro Typ nicht dokumentiert öffentlich zusichert. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Stufe 2: HeadlessJsTaskService und MalachiService.onSyncAlarm()
+         halten kurz einen PARTIAL_WAKE_LOCK, damit die CPU waehrend eines
+         Hintergrund-Syncs nicht einschlaeft. Normale Berechtigung (ohne
+         Nutzerdialog); kam bisher nur indirekt ueber Bibliotheks-Manifeste. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Audit 2026-10-19 (A7): nie angefragt (Bildauswahl ueber den System-Picker,
+         Speichern in die Galerie ueber MediaStore) - auch aus Bibliotheken entfernen. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <!-- Produktionsreife-Review (Play-Policy-Teil): FOREGROUND_SERVICE_MICROPHONE
+         und FOREGROUND_SERVICE_PHONE_CALL wurden hier deklariert, aber im
+         gesamten nativen Code nie tatsaechlich verwendet - der einzige Aufruf
+         von startForeground() (MalachiService.kt) laeuft ausschliesslich unter
+         dem bereits korrekt deklarierten "dataSync"-Typ, und der self-managed
+         ConnectionService fuer Anrufe (MalachiConnectionService.kt) startet gar
+         keinen eigenen Foreground-Service (das Telecom-Framework uebernimmt die
+         Anruf-UI). Play markiert ungenutzte "special use"-Foreground-Service-
+         Berechtigungen im Review als Befund und verlangt sonst eine
+         Rechtfertigung in der Play-Console-Deklaration, die es hier mangels
+         echter Verwendung nicht geben kann - entfernt statt unbegruendet
+         deklariert zu lassen. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- REQUEST_INSTALL_PACKAGES (In-App-Updater) steht NUR im Manifest des
+         Web-Flavors (src/web/AndroidManifest.xml) - Google Play verbietet
+         Selbst-Updates. -->
+
+    <application
+      android:name=".MainApplication"
+      android:label="${appLabel}"
+      android:icon="@mipmap/ic_launcher"
+      android:roundIcon="@mipmap/ic_launcher_round"
+      android:allowBackup="false"
+      android:dataExtractionRules="@xml/data_extraction_rules"
+      android:supportsRtl="true"
+      android:usesCleartextTraffic="false"
+      android:theme="@style/AppTheme">
+
+      <!-- Audit 2026-10-19 (A7): Bildschirmfreigabe von react-native-webrtc wird nicht
+           genutzt - Dienst (Foreground-Typ mediaProjection) nicht mit ausliefern. -->
+      <service android:name="com.oney.WebRTCModule.MediaProjectionService" tools:node="remove" />
+
+      <activity
+        android:name=".MainActivity"
+        android:label="${appLabel}"
+        android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+        android:launchMode="singleTask"
+        android:taskAffinity=""
+        android:windowSoftInputMode="adjustResize"
+        android:exported="true">
+        <!-- Der Launcher-Eintrag (MAIN/LAUNCHER) liegt seit "App-Icon passend
+             zum Design" auf den activity-alias-Eintraegen unten (je Icon einer,
+             genau einer aktiv). MainActivity selbst bleibt immer aktiviert und
+             exportiert: Deep Links (malachi://connect) und alle PendingIntents
+             (Benachrichtigungen, Anruf-Vollbild, CallBridge) zielen direkt auf
+             diese Klasse und funktionieren mit jedem Icon. -->
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="malachi" android:host="connect" />
+        </intent-filter>
+      </activity>
+
+      <!-- APP-ICON-ALIASES:BEGIN - GENERIERT von tools/gen-theme-icons.js - nicht von Hand aendern.
+           "App-Icon passend zum Design" (THEMES.md, Abschnitt "App-Icon"):
+           der Launcher-Eintrag liegt auf diesen Aliasen von MainActivity, genau
+           einer ist aktiv - im Manifest nur AppIcon_klassik (bisheriges Icon).
+           AppIconModule.kt schaltet um (erst das neue an, dann das alte aus).
+           Deep Links, Benachrichtigungen und Anrufe zielen weiter direkt auf
+           MainActivity und haengen nicht vom gewaehlten Icon ab. -->
+      <!-- Standard -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="true"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_launcher"
+          android:roundIcon="@mipmap/ic_launcher_round">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Tuerkis -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_teal"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_teal"
+          android:roundIcon="@mipmap/ic_appicon_klassik_teal">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Minze -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_mint"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_mint"
+          android:roundIcon="@mipmap/ic_appicon_klassik_mint">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Gruen -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_green"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_green"
+          android:roundIcon="@mipmap/ic_appicon_klassik_green">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Sand -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_brown"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_brown"
+          android:roundIcon="@mipmap/ic_appicon_klassik_brown">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Gold -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_gold"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_gold"
+          android:roundIcon="@mipmap/ic_appicon_klassik_gold">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Koralle -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_coral"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_coral"
+          android:roundIcon="@mipmap/ic_appicon_klassik_coral">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Rose -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_rose"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_rose"
+          android:roundIcon="@mipmap/ic_appicon_klassik_rose">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Lila -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_lilac"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_lilac"
+          android:roundIcon="@mipmap/ic_appicon_klassik_lilac">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Violett -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_violet"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_violet"
+          android:roundIcon="@mipmap/ic_appicon_klassik_violet">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Blau -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_blue"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_blue"
+          android:roundIcon="@mipmap/ic_appicon_klassik_blue">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Standard, Akzent Silber -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_klassik_silver"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_klassik_silver"
+          android:roundIcon="@mipmap/ic_appicon_klassik_silver">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Graphit -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_graphit"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_graphit"
+          android:roundIcon="@mipmap/ic_appicon_graphit">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Waldnacht -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_wald"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_wald"
+          android:roundIcon="@mipmap/ic_appicon_wald">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Amethyst -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_amethyst"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_amethyst"
+          android:roundIcon="@mipmap/ic_appicon_amethyst">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Bernstein -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_bernstein"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_bernstein"
+          android:roundIcon="@mipmap/ic_appicon_bernstein">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Bordeaux -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_bordeaux"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_bordeaux"
+          android:roundIcon="@mipmap/ic_appicon_bordeaux">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Pergament -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_pergament"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_pergament"
+          android:roundIcon="@mipmap/ic_appicon_pergament">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Gletscher -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_gletscher"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_gletscher"
+          android:roundIcon="@mipmap/ic_appicon_gletscher">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Kirschbluete -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_kirschbluete"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_kirschbluete"
+          android:roundIcon="@mipmap/ic_appicon_kirschbluete">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Lavendel -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_lavendel"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_lavendel"
+          android:roundIcon="@mipmap/ic_appicon_lavendel">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Pistazie -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_pistazie"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_pistazie"
+          android:roundIcon="@mipmap/ic_appicon_pistazie">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Sonnenschein -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_sonnenschein"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_sonnenschein"
+          android:roundIcon="@mipmap/ic_appicon_sonnenschein">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Lagune -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_lagune"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_lagune"
+          android:roundIcon="@mipmap/ic_appicon_lagune">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Pfirsich -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_pfirsich"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_pfirsich"
+          android:roundIcon="@mipmap/ic_appicon_pfirsich">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Malachi Artwork -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_artwork"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_artwork"
+          android:roundIcon="@mipmap/ic_appicon_artwork">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Onyx -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_onyx"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_onyx"
+          android:roundIcon="@mipmap/ic_appicon_onyx">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Marine -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_marine"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_marine"
+          android:roundIcon="@mipmap/ic_appicon_marine">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Schiefer -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_schiefer"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_schiefer"
+          android:roundIcon="@mipmap/ic_appicon_schiefer">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Rauchquarz -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_rauchquarz"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_rauchquarz"
+          android:roundIcon="@mipmap/ic_appicon_rauchquarz">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Elfenbein -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_elfenbein"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_elfenbein"
+          android:roundIcon="@mipmap/ic_appicon_elfenbein">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Champagner -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_champagner"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_champagner"
+          android:roundIcon="@mipmap/ic_appicon_champagner">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Platin -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_platin"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_platin"
+          android:roundIcon="@mipmap/ic_appicon_platin">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- APP-ICON-ALIASES:END -->
+
+      <service
+          android:name=".MalachiService"
+          android:enabled="true"
+          android:exported="false"
+          android:foregroundServiceType="remoteMessaging" />
+
+      <!-- FOREGROUND_SERVICE_PLAN.md Stufe 2: HeadlessJS-Task
+           "MalachiBackgroundSync" (index.js/BackgroundSync.js), periodisch
+           von MalachiService per AlarmManager (MalachiSyncAlarmReceiver)
+           gestartet, nur wenn die App nicht im Vordergrund ist. Nicht
+           exportiert - nur die App selbst startet ihn. -->
+      <!-- tor im eigenen Prozess: nach einem Netzwechsel frisch startbar
+           (siehe MalachiTorProcessService.kt). Nicht exportiert. -->
+      <service
+          android:name="com.securecommapp.tor.MalachiTorProcessService"
+          android:process=":tor"
+          android:exported="false" />
+
+      <service
+          android:name=".MalachiHeadlessTaskService"
+          android:enabled="true"
+          android:exported="false" />
+
+      <receiver
+          android:name=".MalachiSyncAlarmReceiver"
+          android:exported="false" />
+
+      <!-- Startet MalachiService nach Neustart/App-Update wieder, nur falls er
+           vorher (nach abgeschlossenem Setup) laufen sollte - siehe
+           BootReceiver.kt. exported="false" genuegt: beide Broadcasts kommen
+           vom System selbst. -->
+      <receiver
+          android:name=".BootReceiver"
+          android:exported="false">
+          <intent-filter>
+              <action android:name="android.intent.action.BOOT_COMPLETED" />
+              <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+          </intent-filter>
+      </receiver>
+
+      <service
+          android:name="com.securecommapp.calling.MalachiConnectionService"
+          android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
+          android:exported="true">
+          <intent-filter>
+              <action android:name="android.telecom.ConnectionService" />
+          </intent-filter>
+      </service>
+
+      <receiver
+          android:name="com.securecommapp.calling.CallActionReceiver"
+          android:exported="false" />
+
+      <!-- Nutzerwunsch: empfangene Dateien oeffnen/teilen koennen
+           (FileShareModule.kt). Ein rohes file://-URI aus dem eigenen
+           Cache-Verzeichnis ueber einen Intent an eine andere App weiterreichen
+           wirft ab Android 7 (API 24) eine FileUriExposedException - FileProvider
+           wandelt es stattdessen in ein befristet freigegebenes content://-URI um. -->
+      <provider
+          android:name="androidx.core.content.FileProvider"
+          android:authorities="${applicationId}.fileprovider"
+          android:exported="false"
+          android:grantUriPermissions="true">
+          <meta-data
+              android:name="android.support.FILE_PROVIDER_PATHS"
+              android:resource="@xml/file_paths" />
+      </provider>
+
+      <!-- Kein Nutzungs-Telemetrie-Versand von Google ML Kit (PLAY_STORE.md,
+           Datensicherheit). Der QR-Scanner react-native-camera-kit bringt
+           ML Kit mit (com.google.mlkit:barcode-scanning); ML Kit meldet laut
+           Google Nutzungs-/Leistungsdaten ueber "datatransport" an Google
+           (Backend "cct" = firebaselogging). Ohne den hier entfernten
+           Backend-Eintrag findet der Uploader kein Ziel und verwirft die
+           Ereignisse ("Unknown backend ... deleting event batch",
+           transport-runtime Uploader) - der Scanner selbst arbeitet
+           unveraendert offline (Modell ist in der APK enthalten).
+           Nach dem Build pruefen: im gemergten Manifest
+           (app/build/intermediates/merged_manifests/...) darf
+           "backend:com.google.android.datatransport.cct.CctBackendFactory"
+           nicht mehr vorkommen. Gilt fuer beide Varianten. -->
+      <service
+          android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+          android:exported="false">
+          <meta-data
+              android:name="backend:com.google.android.datatransport.cct.CctBackendFactory"
+              tools:node="remove" />
+      </service>
+
+    </application>
+</manifest>

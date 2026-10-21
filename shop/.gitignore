@@ -1,0 +1,13 @@
+# Echte Konfiguration und Geheimnisse nie committen
+config.json
+*.pem
+*.login
+kraken-api.json
+# Abhaengigkeiten werden ueber package-lock.json reproduzierbar installiert
+node_modules/
+# Lokale Daten, Sicherungen, Exporte
+daten/
+sicherungen/
+export/
+*.bin
+*.tmp

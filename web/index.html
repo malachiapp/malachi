@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#04111f" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="description" content="Malachi – der Messenger, bei dem deine Inhalte nur über einen verschlüsselten Kanal zwischen euren Geräten laufen. Ende-zu-Ende verschlüsselt mit Post-Quantum-Schlüsseltausch, ohne Konto, ohne Tracking." />
+  <link rel="icon" type="image/svg+xml" href="/brand/logo-d-centered.svg" />
+  <link rel="stylesheet" href="/src/landing/landing.css" />
+  <title>Malachi – Privat. Direkt. Verschlüsselt.</title>
+</head>
+<body>
+  <a class="skip" href="#inhalt">Zum Inhalt springen</a>
+
+  <header class="nav" id="top">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top" aria-label="Malachi Startseite">
+        <img src="/brand/logo-d-centered.svg" width="36" height="36" alt="" />
+        <span>Malachi</span>
+      </a>
+      <nav class="nav-links" id="nav-links" aria-label="Hauptnavigation">
+        <a href="#funktionen">Funktionen</a>
+        <a href="#so-gehts">So geht's</a>
+        <a href="#aufbau">Aufbau</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <a class="btn btn-primary btn-sm nav-cta" href="#so-gehts">So geht's</a>
+      <button class="menu-btn" type="button" aria-label="Menü" aria-expanded="false" aria-controls="nav-links">
+        <span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <main id="inhalt">
+    <!-- HERO -->
+    <section class="hero">
+      <div class="aurora" aria-hidden="true"></div>
+      <div class="wrap hero-grid">
+        <div class="hero-copy reveal">
+          <p class="eyebrow"><span class="pulse" aria-hidden="true"></span> Ende-zu-Ende · Peer-to-Peer · Post-Quantum</p>
+          <h1>Deine Nachrichten.<br /><span class="grad">Nur zwischen euch.</span></h1>
+          <p class="lead">
+            Malachi verschlüsselt jede Nachricht auf deinem Handy – dreifach, mit einem Schlüssel, den nur eure
+            beiden Geräte kennen – und schickt sie über einen <strong>eigenen Kanal zwischen euren Geräten</strong>.
+            Kein Konto. Kein Telefonbuch-Upload. Kein Tracking.
+          </p>
+          <div class="hero-actions">
+            <span class="btn btn-ghost is-static" title="Die Web-App kommt zurück, sobald sie komplett über Tor laufen kann">Web-App pausiert – kommt mit Tor zurück</span>
+            <span class="btn btn-ghost is-static" title="Die Android-App ist in Vorbereitung">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17.6 9.48l1.84-3.18a.38.38 0 00-.66-.38l-1.86 3.22a11.4 11.4 0 00-9.84 0L5.22 5.92a.38.38 0 00-.66.38l1.84 3.18A10.8 10.8 0 001 18h22a10.8 10.8 0 00-5.4-8.52zM7 15.25a1.25 1.25 0 110-2.5 1.25 1.25 0 010 2.5zm10 0a1.25 1.25 0 110-2.5 1.25 1.25 0 010 2.5z"/></svg>
+              Android-App: bald verfügbar
+            </span>
+          </div>
+          <ul class="hero-points">
+            <li>Inhalte laufen nie über den Server</li>
+            <li>Offline? Wartet verschlüsselt auf deinem Handy</li>
+            <li>Ohne Telefonnummer nutzbar</li>
+          </ul>
+        </div>
+
+        <div class="hero-visual reveal" aria-hidden="true">
+          <svg viewBox="0 0 560 460" class="p2p-art">
+            <defs>
+              <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#36E0FF"/>
+                <stop offset="0.5" stop-color="#8C7CFF"/>
+                <stop offset="1" stop-color="#36E0FF"/>
+              </linearGradient>
+              <linearGradient id="phone" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#12325c"/>
+                <stop offset="1" stop-color="#081a33"/>
+              </linearGradient>
+              <radialGradient id="lockglow" cx="0.5" cy="0.5" r="0.5">
+                <stop offset="0" stop-color="#36E0FF" stop-opacity="0.55"/>
+                <stop offset="1" stop-color="#36E0FF" stop-opacity="0"/>
+              </radialGradient>
+              <filter id="blur6"><feGaussianBlur stdDeviation="6"/></filter>
+            </defs>
+
+            <!-- Verbindungsbogen -->
+            <path id="arc" d="M140 250 C 220 90, 340 90, 420 250" fill="none" stroke="url(#beam)" stroke-width="5" stroke-linecap="round" opacity="0.9"/>
+            <path d="M140 250 C 220 90, 340 90, 420 250" fill="none" stroke="url(#beam)" stroke-width="16" stroke-linecap="round" opacity="0.25" filter="url(#blur6)"/>
+            <!-- wandernde, verschlüsselte Pakete -->
+            <g class="packet"><rect x="-13" y="-9" width="26" height="18" rx="5" fill="#0d2a4a" stroke="#36E0FF" stroke-width="2"/><path d="M-6 -1 h12 M-6 3 h8" stroke="#7FEFFF" stroke-width="2" stroke-linecap="round"/>
+              <animateMotion dur="3.6s" repeatCount="indefinite" rotate="auto"><mpath href="#arc"/></animateMotion></g>
+            <g class="packet"><rect x="-13" y="-9" width="26" height="18" rx="5" fill="#0d2a4a" stroke="#8C7CFF" stroke-width="2"/><path d="M-6 -1 h12 M-6 3 h8" stroke="#CFC7FF" stroke-width="2" stroke-linecap="round"/>
+              <animateMotion dur="3.6s" begin="-1.8s" repeatCount="indefinite" rotate="auto" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#arc"/></animateMotion></g>
+
+            <!-- Schloss in der Mitte -->
+            <circle cx="280" cy="132" r="64" fill="url(#lockglow)"/>
+            <circle cx="280" cy="132" r="34" fill="#071433" stroke="url(#beam)" stroke-width="4"/>
+            <circle cx="280" cy="124" r="9" fill="#7FEFFF"/>
+            <path d="M276 130 L284 130 L287 148 L273 148 Z" fill="#7FEFFF"/>
+
+            <!-- Telefon links -->
+            <g transform="translate(62 230)">
+              <rect width="156" height="206" rx="26" fill="url(#phone)" stroke="#2a4f7c" stroke-width="2"/>
+              <rect x="14" y="16" width="128" height="174" rx="16" fill="#061427"/>
+              <rect x="30" y="40" width="80" height="22" rx="11" fill="#0d2a4a"/>
+              <rect x="50" y="72" width="80" height="22" rx="11" fill="#0A86C8"/>
+              <rect x="30" y="104" width="64" height="22" rx="11" fill="#0d2a4a"/>
+              <circle cx="78" cy="160" r="12" fill="#12325c"/>
+            </g>
+            <!-- Telefon rechts -->
+            <g transform="translate(342 230)">
+              <rect width="156" height="206" rx="26" fill="url(#phone)" stroke="#2a4f7c" stroke-width="2"/>
+              <rect x="14" y="16" width="128" height="174" rx="16" fill="#061427"/>
+              <rect x="46" y="40" width="80" height="22" rx="11" fill="#0A86C8"/>
+              <rect x="30" y="72" width="72" height="22" rx="11" fill="#0d2a4a"/>
+              <rect x="54" y="104" width="72" height="22" rx="11" fill="#0A86C8"/>
+              <circle cx="78" cy="160" r="12" fill="#12325c"/>
+            </g>
+            <!-- Treffpunkt-Server nur als gedimmter Vermittler -->
+
+            <g opacity="0.55" transform="translate(252 330)">
+              <rect width="56" height="70" rx="10" fill="#0b1c35" stroke="#2a4f7c" stroke-dasharray="4 5"/>
+              <path d="M12 22 h32 M12 36 h32 M12 50 h20" stroke="#2a4f7c" stroke-width="4" stroke-linecap="round"/>
+              <text x="28" y="92" text-anchor="middle" font-size="12" fill="#6e93ae" font-family="system-ui, sans-serif">vermittelt nur</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- TECHNIK-STREIFEN -->
+    <section class="strip" aria-label="Eingesetzte Technik">
+      <div class="wrap strip-inner">
+        <span>ML-KEM-768 (Kyber)</span>
+        <span>AES-256-GCM</span>
+        <span>ChaCha20-Poly1305</span>
+        <span>XSalsa20-Poly1305</span>
+        <span>WebRTC · DTLS-SRTP</span>
+        <span>HKDF-Schlüsselableitung</span>
+      </div>
+    </section>
+
+    <!-- FUNKTIONEN -->
+    <section class="section" id="funktionen">
+      <div class="wrap">
+        <header class="section-head reveal">
+          <p class="eyebrow">Funktionen</p>
+          <h2>Alles, was ein Messenger braucht.<br />Nichts, was dich verrät.</h2>
+        </header>
+        <div class="cards">
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><circle cx="5" cy="17" r="2.5"/><circle cx="19" cy="17" r="2.5"/><path d="M7 15.5 12 7l5 8.5"/></svg></div>
+            <h3>Von Gerät zu Gerät</h3>
+            <p>Nachrichten, Bilder, Sprachnachrichten und Dateien gehen über einen verschlüsselten Kanal zwischen euren Geräten – in keine Cloud, auf keinen Server.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg></div>
+            <h3>Dreifach verschlüsselt</h3>
+            <p>Jede Nachricht wird mit drei unabhängigen Verfahren verschlüsselt. Selbst wenn eines fiele, halten die anderen.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3.2 8.3-7 10-3.8-1.7-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+            <h3>Post-Quantum-Schlüsseltausch</h3>
+            <p>Eure Geräte handeln den Schlüssel mit ML-KEM-768 (Kyber) aus – bei jeder neuen Verbindung einen frischen.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/><path d="M3 3l18 18"/></svg></div>
+            <h3>Kein Konto nötig</h3>
+            <p>Verbinden per QR-Code oder Einladungscode. Keine E-Mail, kein Passwort-Server, kein Adressbuch-Upload.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 22c4-2.5 6-6 6-9.5A6 6 0 0 0 12 6a6 6 0 0 0-6 6.5C6 16 8 19.5 12 22z"/><path d="M12 6c0-2 1-3 2-4"/></svg></div>
+            <h3>Secret Chat &amp; Selbstzerstörung</h3>
+            <p>Zeitlich begrenzte Gespräche, Nachrichten mit Ablaufdatum, Einmal-Sprachnachrichten – und in der Android-App sind Screenshots gesperrt.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><path d="M4 5h4l2 5-2.5 1.5a11 11 0 0 0 5 5L14 14l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 3 6a1 1 0 0 1 1-1z"/></svg></div>
+            <h3>Verschlüsselte Anrufe</h3>
+            <p>Sprach- und Videoanrufe laufen per DTLS-SRTP; der Verbindungsaufbau ist zusätzlich Ende-zu-Ende geschützt.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div>
+            <h3>Duress-PIN</h3>
+            <p>Ein zweiter PIN, der unter Zwang wie ein normales Entsperren aussieht – und im Hintergrund alles löscht.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="3"/></svg></div>
+            <h3>Sicherheitscode</h3>
+            <p>Vergleicht den Code auf beiden Geräten. Stimmt er überein, sitzt niemand zwischen euch.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- SO GEHT'S -->
+    <section class="section alt" id="so-gehts">
+      <div class="wrap">
+        <header class="section-head reveal">
+          <p class="eyebrow">So geht's</p>
+          <h2>In 30 Sekunden sicher verbunden.</h2>
+        </header>
+        <ol class="steps">
+          <li class="step reveal">
+            <span class="num">1</span>
+            <h3>Einladung zeigen</h3>
+            <p>Öffne „Verbinden“. Der QR-Code enthält ein Einmal-Geheimnis. Über den Server läuft nur das damit verschlüsselte Verbindungsangebot.</p>
+          </li>
+          <li class="step reveal">
+            <span class="num">2</span>
+            <h3>Scannen</h3>
+            <p>Dein Gegenüber scannt den Code. Eure Geräte verbinden sich und handeln einen frischen Post-Quantum-Schlüssel aus.</p>
+          </li>
+          <li class="step reveal">
+            <span class="num">3</span>
+            <h3>Losschreiben</h3>
+            <p>Ab jetzt ist alles Ende-zu-Ende verschlüsselt. Vergleicht einmal den Sicherheitscode (Schild im Chat) – dann wisst ihr sicher, dass niemand mitliest.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- AUFBAU & TRANSPARENZ -->
+    <section class="section" id="aufbau">
+      <div class="wrap">
+        <header class="section-head reveal">
+          <p class="eyebrow">Aufbau</p>
+          <h2>Streng getrennt.<br />Nur der P2P-Kanal trägt deine Inhalte.</h2>
+          <p class="section-sub">So ist Malachi wirklich gebaut: Deine Inhalte laufen ausschließlich über den verschlüsselten Kanal zwischen euren Geräten. Alles andere hilft nur beim Finden und beim Warten.</p>
+        </header>
+        <div class="cards">
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><circle cx="5" cy="17" r="2.5"/><circle cx="19" cy="17" r="2.5"/><path d="M7 15.5 12 7l5 8.5"/></svg></div>
+            <h3>Der P2P-Kanal</h3>
+            <p>Trägt <strong>alle Inhalte</strong>: Nachrichten, Bilder, Sprachnachrichten, Dateien und Anrufe. Verschlüsselt wird auf deinem Handy, entschlüsselt erst auf dem deines Kontakts.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><path d="M3 12h4M17 12h4"/><rect x="7" y="7" width="10" height="10" rx="2.5"/><path d="M10 12h4"/></svg></div>
+            <h3>Direkt, ohne Umweg</h3>
+            <p>Eure Geräte verbinden sich <strong>direkt miteinander</strong> – keine Weiterleitung über einen Server, auch nicht für verschlüsselte Pakete. Dafür kennt dein Kontakt die IP-Adresse deines Geräts, wie bei jeder echten Direktverbindung.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><path d="M7 3h10M7 21h10M8 3v4l4 5-4 5v4M16 3v4l-4 5 4 5v4"/></svg></div>
+            <h3>Die Sende-Warteschlange</h3>
+            <p>Ist dein Kontakt gerade nicht erreichbar, wartet die Nachricht <strong>verschlüsselt auf deinem Handy</strong> – nicht auf einem Server – und geht automatisch raus, sobald der P2P-Kanal wieder steht.</p>
+          </article>
+          <article class="card reveal">
+            <div class="icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/></svg></div>
+            <h3>Der Treffpunkt-Server</h3>
+            <p>Zwei Geräte finden sich im Internet nicht von allein. Der Server vermittelt nur: das verschlüsselte Verbindungsangebot, ein inhaltsleeres Wecksignal und die Auskunft, unter welcher Adresse dein Gerät erreichbar ist. Inhalte fließen nie über ihn.</p>
+          </article>
+        </div>
+        <p class="fineprint reveal">Auch die <strong>Steuersignale</strong> – „Chat gelöscht“, „Secret Chat gestartet“, „Secret Chat beendet“ und „Gerät zurückgesetzt“ – laufen nur über den P2P-Kanal. Ist dein Kontakt gerade nicht erreichbar, warten sie wie jede Nachricht in der Sende-Warteschlange; ein gelöschter Chat verschwindet bei dir sofort und bei deinem Kontakt, sobald ihr wieder verbunden seid. Einzige Einschränkung: „Gerät zurückgesetzt“ erreicht nur Kontakte, mit denen in diesem Moment eine Verbindung besteht – die Warteschlange wird beim Zurücksetzen ja mitgelöscht.</p>
+
+        <header class="section-head reveal" style="margin-top:72px">
+          <p class="eyebrow">Transparenz</p>
+          <h2>Was der Treffpunkt-Server sieht – und was nie.</h2>
+          <p class="section-sub">Jeder Vermittler sieht zwangsläufig ein paar Metadaten. Hier steht vollständig, welche das bei uns sind.</p>
+        </header>
+        <div class="split">
+          <div class="panel panel-ok reveal">
+            <h3><span class="dot dot-red" aria-hidden="true"></span> Sieht nie</h3>
+            <ul>
+              <li>Inhalte von Nachrichten, Bildern, Sprachnachrichten und Dateien</li>
+              <li>Was in deinen Anrufen gesagt oder gezeigt wird</li>
+              <li>Deine Schlüssel, deinen PIN oder deinen Sicherheitscode</li>
+              <li>Deinen Namen, dein Profilbild und die Namen deiner Kontakte</li>
+              <li>Deinen Standort und deine Telefonnummer im Klartext</li>
+              <li>Ob du einen Chat löschst oder einen Secret Chat startest</li>
+            </ul>
+          </div>
+          <div class="panel panel-info reveal">
+            <h3><span class="dot dot-amber" aria-hidden="true"></span> Sieht, solange er vermittelt</h3>
+            <ul>
+              <li>Die IP-Adresse, von der eine Anfrage kommt</li>
+              <li>Zufällige Kennungen, über die sich zwei Geräte finden – beim Wecksignal die Kennungen deiner Kontakte, nie deren Namen</li>
+              <li>Wann eine Verbindung aufgebaut wird</li>
+              <li>Dass ein Anruf beginnt, angenommen, abgelehnt oder beendet wird</li>
+            </ul>
+            <p class="note">Alles liegt nur im Arbeitsspeicher: Verbindungsangebote, bis sie abgeholt werden, Anrufsignale 2 Minuten. Keine Datenbank, keine Protokolle mit IP-Adressen oder Kennungen im Klartext.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section alt" id="faq">
+      <div class="wrap narrow">
+        <header class="section-head reveal">
+          <p class="eyebrow">FAQ</p>
+          <h2>Häufige Fragen</h2>
+        </header>
+        <div class="faq">
+          <details class="reveal">
+            <summary>Brauche ich eine Telefonnummer?</summary>
+            <p>Nein. Du verbindest dich per QR-Code oder Einladungscode. Die Telefonnummer ist nur eine optionale Abkürzung: Beide Geräte berechnen daraus einen Hash, die Nummer selbst sieht der Server nie. Wer beide Nummern kennt, könnte den Verbindungsaufbau allerdings nachvollziehen – vergleicht dann unbedingt den Sicherheitscode. Am sichersten ist der QR-Code.</p>
+          </details>
+          <details class="reveal">
+            <summary>Was passiert, wenn mein Kontakt offline ist?</summary>
+            <p>Deine Nachricht wartet verschlüsselt in der Sende-Warteschlange auf deinem eigenen Handy und geht automatisch raus, sobald der P2P-Kanal zu deinem Kontakt wieder steht. Bis dahin siehst du eine Sanduhr. Inhalte liegen dabei nie auf einem Server.</p>
+          </details>
+          <details class="reveal">
+            <summary>Kann der Server meine Nachrichten lesen?</summary>
+            <p>Nein. Deine Inhalte laufen gar nicht über den Treffpunkt-Server, sondern über den P2P-Kanal zwischen euren Geräten – verschlüsselt mit einem Schlüssel, den nur eure beiden Geräte kennen. Welche Metadaten der Server beim Vermitteln sieht, steht oben unter „Aufbau“.</p>
+          </details>
+          <details class="reveal">
+            <summary>Gibt es wirklich keinen Umweg über einen Server?</summary>
+            <p>Nein. Malachi nutzt keine Weiterleitung: Nachrichten, Bilder, Sprachnachrichten, Dateien und Anrufe gehen direkt von Gerät zu Gerät. Der Server hilft nur beim Finden. Kommt in einem sehr restriktiven Netz keine Direktverbindung zustande, wartet deine Nachricht verschlüsselt auf deinem Handy, bis es klappt – statt einen Umweg zu nehmen.</p>
+          </details>
+          <details class="reveal">
+            <summary>Sieht mein Kontakt meine IP-Adresse?</summary>
+            <p>Ja – das gehört zu einer echten Direktverbindung. Beim Verbindungsaufbau tauschen eure Geräte ihre Netzwerkadressen aus, verschlüsselt, sodass nur dein Kontakt sie lesen kann. Verbinde dich deshalb nur mit Menschen, die du kennst.</p>
+          </details>
+          <details class="reveal">
+            <summary>Woran erkenne ich, dass niemand mitliest?</summary>
+            <p>Tippe im Chat auf das Schild-Symbol und vergleicht den Sicherheitscode – am besten persönlich oder per Anruf. Stimmen die Codes überein, sitzt niemand dazwischen.</p>
+          </details>
+          <details class="reveal">
+            <summary>Was ist der Duress-PIN?</summary>
+            <p>Ein zweiter PIN für den Notfall. Wirst du gezwungen, die App zu entsperren, gibst du ihn ein: Die App sieht aus wie frisch installiert – deine Daten sind bereits gelöscht.</p>
+          </details>
+          <details class="reveal">
+            <summary>Warum eine Web-App – ist der Browser sicher genug?</summary>
+            <p>Die Web-App verschlüsselt genauso Ende-zu-Ende. Deine Daten im Browser sind zusätzlich mit deinem PIN geschützt. Für höchste Sicherheit empfehlen wir die Android-App mit Hardware-Schlüsselspeicher.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta">
+      <div class="wrap cta-inner reveal">
+        <img src="/brand/logo-d-centered.svg" width="88" height="88" alt="" />
+        <h2>Bereit für private Gespräche?</h2>
+        <p>Malachi kommt als Android-App. Die Web-App ist pausiert, bis sie komplett über Tor laufen kann – ohne Server dazwischen.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div class="brand small">
+        <img src="/brand/logo-c-mono.svg" width="26" height="26" alt="" />
+        <span>Malachi</span>
+      </div>
+      <p>Keine Cookies · Kein Tracking · Keine externen Schriftarten oder Skripte</p>
+      <p class="muted">© 2026 Malachi</p>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/landing/landing.ts"></script>
+</body>
+</html>

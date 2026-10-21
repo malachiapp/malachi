@@ -1,0 +1,23 @@
+# BEISPIEL - Variante B (Tunnel): WireGuard auf dem LAPTOP.
+# Ziel: /etc/wireguard/wg-malachi.conf (root 0600), dann:
+#   sudo apt-get install wireguard-tools
+#   sudo systemctl enable --now wg-quick@wg-malachi
+#
+# Der Laptop baut die Verbindung von innen nach aussen auf - das klappt auch
+# hinter DS-Lite/CGNAT, ohne Portfreigabe. Durch den Tunnel geht NUR der
+# Verkehr zum VPS (AllowedIPs), nicht der restliche Internetverkehr des Laptops.
+#
+# Schluessel erzeugen (auf jedem Rechner einzeln, privater Schluessel bleibt dort):
+#   umask 077; wg genkey | tee privat.key | wg pubkey > oeffentlich.key
+
+[Interface]
+Address = 10.66.0.2/32
+PrivateKey = <PRIVATER_SCHLUESSEL_DES_LAPTOPS>
+
+[Peer]
+# der VPS
+PublicKey = <OEFFENTLICHER_SCHLUESSEL_DES_VPS>
+Endpoint = <IP_ODER_NAME_DES_VPS>:51820
+AllowedIPs = 10.66.0.1/32
+# haelt den Eintrag in NAT-Tabellen (FRITZ!Box, DS-Lite) offen
+PersistentKeepalive = 25

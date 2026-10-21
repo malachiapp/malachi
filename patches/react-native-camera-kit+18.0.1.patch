@@ -1,0 +1,35 @@
+diff --git a/node_modules/react-native-camera-kit/android/src/main/java/com/rncamerakit/CKCamera.kt b/node_modules/react-native-camera-kit/android/src/main/java/com/rncamerakit/CKCamera.kt
+index 1111111..2222222 100644
+--- a/node_modules/react-native-camera-kit/android/src/main/java/com/rncamerakit/CKCamera.kt
++++ b/node_modules/react-native-camera-kit/android/src/main/java/com/rncamerakit/CKCamera.kt
+@@ -393,16 +393,23 @@
+                 val scaleY = vf.height.toFloat() / imageSize.width
+
+                 // 4. filter barcodes inside the frame
++                //
++                // Upstream verlangte, dass die KOMPLETTE skalierte Bounding-Box
++                // im Rahmen liegt. Die Skalierung hier ist aber nur fuer den
++                // Mittelpunkt exakt: PreviewView nutzt FILL_CENTER (uniformer
++                // Scale + seitlicher Crop), waehrend scaleX/scaleY die Achsen
++                // unterschiedlich strecken. Ergebnis: ein QR-Code, der den
++                // gezeichneten Rahmen ausfuellt, liegt exakt auf der Rahmen-
++                // kante - jedes Ueberfuellen oder leichte vertikale Versetzen
++                // faellt raus, also genau das natuerliche Nutzerverhalten
++                // ("Code formatfuellend in den Rahmen halten"). Der Mittelpunkt
++                // bildet dagegen korrekt ab, deshalb wird er geprueft.
+                 val filteredBarcodes = filteredByType.filter { barcode ->
+                     val barcodeBoundingBox = barcode.boundingBox ?: return@filter false
+
+-                    val scaledBarcodeBoundingBox = Rect(
+-                        (barcodeBoundingBox.left * scaleX).toInt(),
+-                        (barcodeBoundingBox.top * scaleY).toInt(),
+-                        (barcodeBoundingBox.right * scaleX).toInt(),
+-                        (barcodeBoundingBox.bottom * scaleY).toInt()
+-                    )
+-                    frameRect.contains(scaledBarcodeBoundingBox)
++                    val centerX = (barcodeBoundingBox.exactCenterX() * scaleX).toInt()
++                    val centerY = (barcodeBoundingBox.exactCenterY() * scaleY).toInt()
++                    frameRect.contains(centerX, centerY)
+                 }
+
+                 // 5. Emit if any left

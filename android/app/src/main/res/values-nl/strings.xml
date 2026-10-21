@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">Berichten</string>
+    <string name="notif_channel_messages_desc">Malachi-berichten</string>
+    <string name="notif_new_message">Nieuw bericht</string>
+    <string name="notif_new_message_from" formatted="true">Nieuw bericht van %1$s</string>
+    <string name="service_channel_name">Malachi-verbinding</string>
+    <string name="service_channel_desc">Houdt de Malachi-verbinding in stand</string>
+    <string name="service_notif_text">Verbinding actief – berichten worden ontvangen</string>
+    <string name="call_channel_name">Oproepen</string>
+    <string name="call_channel_desc">Inkomende en lopende Malachi-oproepen</string>
+    <string name="call_notif_title">Malachi-oproep</string>
+    <string name="call_incoming_text">Inkomende oproep · Malachi</string>
+    <string name="call_ongoing_text">Lopend gesprek · Malachi</string>
+    <string name="call_action_decline">Weigeren</string>
+    <string name="call_action_answer">Opnemen</string>
+    <string name="call_action_hangup">Ophangen</string>
+    <string name="call_wake_text">Inkomende oproep …</string>
+    <string name="call_unknown_contact">Malachi-contact</string>
+</resources>

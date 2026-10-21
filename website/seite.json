@@ -1,0 +1,30 @@
+{
+  "_hinweis": "Oeffentliche Angaben fuer Website und Updates - KEINE Geheimnisse. Erklaerung aller Felder: website/ANLEITUNG.md, Abschnitt 'Was du eintragen musst'.",
+
+  "_onionAdresse": "Onion-Adresse der WEBSITE (nicht des Shops). Gibt website/deploy/install.sh am Ende aus (/var/lib/tor/malachi-web/hostname).",
+  "onionAdresse": "p75bcu4mna6lik35occlsoeoyke46zyikfuq2ugu3wdvu44e5c4wanyd.onion",
+
+  "_shopOnion": "Onion-Adresse des Shops (shop/deploy/install.sh gibt sie aus). Leer = Seite 'Vollversion' meldet 'Shop geht in Kuerze online'.",
+  "shopOnion": "42bajzhrmwmi2hlmohje7nloyp3zbxzpzk4atcgt4cesogatnvbxn5ad.onion",
+
+  "applicationId": "com.securecommapp",
+
+  "_apkZertifikatSha256": "SHA-256 des APK-Signaturzertifikats (Release-Schluessel), wie 'apksigner verify --print-certs' ihn zeigt. Das Veroeffentlichungsskript gibt den Wert beim ersten Lauf aus.",
+  "apkZertifikatSha256": "fbd5d54b7e34af9c1b21910ba52049ad267e22d48140f3ac6a6c740846a9aec0",
+
+  "_updateSchluessel": "OEFFENTLICHER Update-Signierschluessel (Base64url, 32 Byte). Wird von 'node website/werkzeuge/update-schluessel.mjs erzeugen' ausgegeben. Der private Teil bleibt offline auf dem eigenen PC.",
+  "updateSchluessel": "ETAIGUc3F9MDfCh79kCJk4FhnxSLifZqdBwqA6WZ0OM",
+
+  "_minSupportedVersionCode": "Aelteste noch unterstuetzte App-Version (versionCode). Aeltere Versionen zeigt die App als 'nicht mehr unterstuetzt' an.",
+  "minSupportedVersionCode": 1,
+
+  "abis": ["arm64-v8a", "armeabi-v7a", "x86_64"],
+
+  "hochladen": {
+    "_hinweis": "Standardwerte fuer --hochladen: Hetzner-Server (root; malachi-web-aktivieren laeuft per sudo). website/deploy/install.sh legt Eingang und Aktivierungsskript an.",
+    "ziel": "root@46.225.2.50",
+    "sshSchluessel": "~/.ssh/malachi_hetzner",
+    "eingang": "/var/lib/malachi-web/eingang",
+    "aktivieren": "/usr/local/sbin/malachi-web-aktivieren"
+  }
+}

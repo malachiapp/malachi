@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Fragen &amp; Antworten – Malachi</title>
+<meta name="description" content="Häufige Fragen zu Malachi: Kontakte ohne Telefonnummer, Zustellung ohne Server, IP-Adressen, Verschlüsselung, Vollversion und Updates.">
+{{TEIL:meta}}
+</head>
+<body>
+{{TEIL:kopf}}
+<main id="inhalt" class="rahmen">
+
+<h1>Fragen &amp; Antworten</h1>
+
+<h2>Grundlagen</h2>
+
+<details>
+  <summary>Wie finde ich Kontakte ohne Telefonnummer?</summary>
+  <p>Gar nicht automatisch – und das ist Absicht. Malachi lädt kein Adressbuch hoch und kennt keine Nutzerverzeichnisse. Ihr tauscht eine Einladung aus: am besten persönlich per QR-Code, sonst als Link oder Code über einen Weg, dem ihr vertraut. Vergleicht danach den Sicherheitscode (Schild-Symbol im Chat).</p>
+</details>
+
+<details>
+  <summary>Wie kommen Nachrichten an, wenn es keinen Server gibt?</summary>
+  <p>Jedes Gerät ist über Tor als eigener Onion-Dienst erreichbar. Darüber finden sich eure Geräte und tauschen Nachrichten aus; je nach Verbindungsweg wechseln sie danach auf eine direkte Verbindung. Ist dein Kontakt gerade nicht erreichbar, wartet die Nachricht verschlüsselt auf deinem Gerät und geht automatisch raus, sobald ihr wieder verbunden seid.</p>
+</details>
+
+<details>
+  <summary>Wer kann meine IP-Adresse sehen?</summary>
+  <p>Das hängt vom Verbindungsweg ab (Einstellungen → Verbindungsweg). Im Standard „Schnell“ sehen zwei öffentliche STUN-Dienste deutscher Anbieter und – bei einer Direktverbindung – dein Kontakt deine IP-Adresse, aber keine Inhalte. Bei „Privat“ sieht sie nur dein Kontakt bei einer Direktverbindung. Bei „Maximal anonym (nur Tor)“ (Vollversion) sieht sie niemand. Die Übersicht steht auf der <a href="index.html#wer-sieht-was">Startseite</a>.</p>
+</details>
+
+<details>
+  <summary>Wie ist Malachi verschlüsselt?</summary>
+  <p>Ende-zu-Ende: Nachrichten werden auf deinem Gerät ver- und erst beim Kontakt entschlüsselt. Jede Nachricht bekommt einen eigenen Schlüssel, der nach Gebrauch gelöscht wird (Double Ratchet). Wird ein Gerät kurzzeitig ausgespäht, erholt sich die Verbindung mit den nächsten Nachrichten wieder. Der Schlüsseltausch kombiniert das bewährte X25519 mit ML-KEM-768, einem standardisierten Verfahren, das auch gegen künftige Quantencomputer schützen soll.</p>
+</details>
+
+<details>
+  <summary>Ist Malachi unknackbar?</summary>
+  <p>Nein – das kann keine Software ehrlich versprechen. Malachi baut auf bewährten, öffentlich bekannten Verfahren auf (unter anderem X25519, ML-KEM-768 und XChaCha20-Poly1305) statt auf selbst erfundenen. Malachi wurde bisher aber nicht von einer unabhängigen Stelle geprüft. Gegen Schadsoftware auf dem Gerät oder ein entsperrtes Handy in fremden Händen hilft keine Verschlüsselung.</p>
+</details>
+
+<details>
+  <summary>Was ist der Siegel-Modus?</summary>
+  <p>Mit dem Siegel-Modus verschlüsselst du Texte, Bilder, Sprachnachrichten und Dateien, die du über einen anderen Messenger wie WhatsApp oder Signal verschickst. Der andere Messenger sieht nur Geheimtext. Siegel hat einen eigenen Tresor mit eigener Passphrase, eigene Kontakte (gekoppelt per QR-Code) und speichert keinen Verlauf. Verschlüsseln gehört zur Vollversion, Entschlüsseln ist kostenlos.</p>
+</details>
+
+<details>
+  <summary>Gibt es Malachi für iPhone, Windows oder im Browser?</summary>
+  <p>Derzeit nicht. Malachi gibt es nur für Android (ab Version 7.0).</p>
+</details>
+
+<details>
+  <summary>In welchen Sprachen gibt es die App?</summary>
+  <p>In 18: Deutsch, Englisch, Spanisch, Französisch, Italienisch, Portugiesisch (Brasilien), Niederländisch, Polnisch, Türkisch, Russisch, Ukrainisch, Arabisch, Persisch, Chinesisch (vereinfacht), Japanisch, Koreanisch, Hindi und Indonesisch.</p>
+</details>
+
+<h2>Download und Updates</h2>
+
+<details>
+  <summary>Wie erkenne ich, dass die Datei echt ist?</summary>
+  <p>Vergleiche SHA-256-Prüfsumme und Zertifikats-Fingerabdruck mit den Werten auf der Download-Seite – am besten über zwei Wege, etwa die normale und die Onion-Adresse. Die Anleitung steht auf der <a href="download.html#pruefen">Download-Seite</a>.</p>
+</details>
+
+<details>
+  <summary>Wie bekomme ich Updates?</summary>
+  <p>Die App sucht höchstens einmal am Tag über Tor nach einer neuen Version und lädt sie erst, wenn du darauf tippst; neue Versionen erscheinen außerdem auf der <a href="download.html">Download-Seite</a>. Installiere sie einfach über die alte Version; deine Daten bleiben erhalten. Android nimmt ein Update nur an, wenn es mit demselben Schlüssel signiert ist wie die installierte App.</p>
+</details>
+
+<details>
+  <summary>Warum gibt es eine Onion-Adresse?</summary>
+  <p>Über die Onion-Adresse erreichst du diese Website im Tor-Browser, ohne dass der Server oder jemand im Netz dazwischen deine IP-Adresse erfährt. Die Inhalte sind auf beiden Adressen dieselben.</p>
+</details>
+
+<h2>Vollversion und Kauf</h2>
+
+<details>
+  <summary>Was kostet Malachi?</summary>
+  <p>Die App ist kostenlos. Die <a href="vollversion.html">Vollversion</a> kostet einmalig 2,99 € – kein Abo, kein Konto.</p>
+</details>
+
+<details>
+  <summary>Warum nur Monero und Bitcoin?</summary>
+  <p>Damit der Kauf ohne Konto, ohne Bank- oder Kartendaten und ohne Namen möglich ist. Der Shop ist nur über Tor erreichbar und erfährt nur einen Gerätecode.</p>
+</details>
+
+<details>
+  <summary>Ich habe ein neues Handy. Ist die Vollversion weg?</summary>
+  <p>Nein. Mit Bestellnummer und Wiederherstellungscode holst du sie im Shop auf das neue Gerät – insgesamt bis zu dreimal. Deshalb den Wiederherstellungscode beim Kauf unbedingt aufschreiben.</p>
+</details>
+
+<details>
+  <summary>Was passiert mit meinen Chats, wenn ich das Handy verliere?</summary>
+  <p>Deine Chats liegen nur auf deinem Gerät, nicht in einer Cloud und nicht auf einem Server. Ohne das Gerät sind sie weg. Schütze die App mit einer PIN; mit der Vollversion kannst du außerdem festlegen, dass nach fünf falschen PINs alles gelöscht wird.</p>
+</details>
+
+</main>
+{{TEIL:fuss}}
+</body>
+</html>

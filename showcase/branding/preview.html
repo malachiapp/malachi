@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Malachi Logo-Varianten</title>
+<style>
+  :root { --bg:#050d1a; --card:#0b1a30; --line:#1b3a5c; --text:#eaf4fb; --sub:#8fb0c8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding:32px 16px 64px; }
+  h1 { font-size:26px; margin:0 0 4px; letter-spacing:-0.01em; }
+  p.lead { color:var(--sub); margin:0 0 28px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:18px; max-width:1300px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:20px; padding:20px; }
+  .card h2 { font-size:17px; margin:0 0 2px; }
+  .card .why { color:var(--sub); font-size:13px; margin:0 0 16px; min-height:40px; }
+  .hero { display:flex; justify-content:center; padding:10px 0 18px; }
+  .hero img { width:200px; height:200px; }
+  .sizes { display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap; padding:12px; border-radius:14px; background:#020812; }
+  .sizes.light { background:#eef2f6; }
+  .sizes img { display:block; }
+  .masks { display:flex; gap:14px; margin-top:12px; }
+  .masks img { width:72px; height:72px; }
+  .circle { border-radius:50%; }
+  .squircle { border-radius:22%; }
+  .label { font-size:11px; color:var(--sub); text-transform:uppercase; letter-spacing:0.12em; margin:14px 0 6px; }
+  .mono { color:#1CCCF0; }
+  .phone { margin-top:40px; max-width:1300px; }
+  .home { display:grid; grid-template-columns:repeat(4, 72px); gap:22px 26px; padding:28px; border-radius:28px;
+          background:linear-gradient(160deg,#1d3557,#0d1b2a 60%,#3a0d2a); width:fit-content; }
+  .home figure { margin:0; text-align:center; font-size:11px; color:#fff; }
+  .home img { width:72px; height:72px; border-radius:50%; display:block; margin-bottom:6px; }
+  .home .ph { width:72px; height:72px; border-radius:50%; background:rgba(255,255,255,0.14); margin-bottom:6px; }
+</style>
+</head>
+<body>
+  <h1>Malachi Logo-Varianten</h1>
+  <p class="lead">Vier eigenständige Varianten, jede als eigene SVG-Datei. Unten jeweils: groß, klein (Launcher/Store/Favicon), auf hellem Grund und in den Android-Masken (Kreis/Squircle).</p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>A · Glow Bubble</h2>
+      <p class="why">Weiterentwicklung des aktuellen Icons: gleiche Idee, aber mit Tiefe, Verlauf und sauberem Schlüsselloch. Geringstes Risiko, hoher Wiedererkennungswert.</p>
+      <div class="hero"><img src="logo-a-glow.svg" alt="Variante A"></div>
+      <div class="label">Größen (dunkel)</div>
+      <div class="sizes"><img src="logo-a-glow.svg" width="96"><img src="logo-a-glow.svg" width="48"><img src="logo-a-glow.svg" width="32"><img src="logo-a-glow.svg" width="24"><img src="logo-a-glow.svg" width="16"></div>
+      <div class="label">Auf hellem Grund</div>
+      <div class="sizes light"><img src="logo-a-glow.svg" width="64"><img src="logo-a-glow.svg" width="32"></div>
+      <div class="label">Android-Masken</div>
+      <div class="masks"><img class="circle" src="logo-a-glow.svg"><img class="squircle" src="logo-a-glow.svg"></div>
+    </section>
+
+    <section class="card">
+      <h2>B · Shield</h2>
+      <p class="why">Das M im Schild: „Schutz“ ist ohne Worte lesbar. Stark als Store-Icon und Website-Motiv, wirkt seriös und vertrauenswürdig.</p>
+      <div class="hero"><img src="logo-b-shield.svg" alt="Variante B"></div>
+      <div class="label">Größen (dunkel)</div>
+      <div class="sizes"><img src="logo-b-shield.svg" width="96"><img src="logo-b-shield.svg" width="48"><img src="logo-b-shield.svg" width="32"><img src="logo-b-shield.svg" width="24"><img src="logo-b-shield.svg" width="16"></div>
+      <div class="label">Auf hellem Grund</div>
+      <div class="sizes light"><img src="logo-b-shield.svg" width="64"><img src="logo-b-shield.svg" width="32"></div>
+      <div class="label">Android-Masken</div>
+      <div class="masks"><img class="circle" src="logo-b-shield.svg"><img class="squircle" src="logo-b-shield.svg"></div>
+    </section>
+
+    <section class="card">
+      <h2>C · Monogramm (einfarbig)</h2>
+      <p class="why">Einfarbige Fassung für Favicon, Android-Benachrichtigungssymbol (muss einfarbig sein), Druck und Stempel. Bleibt bis 16 px scharf.</p>
+      <div class="hero"><img src="logo-c-mono.svg" alt="Variante C"></div>
+      <div class="label">Größen (dunkel)</div>
+      <div class="sizes"><img src="logo-c-mono.svg" width="96"><img src="logo-c-mono.svg" width="48"><img src="logo-c-mono.svg" width="32"><img src="logo-c-mono.svg" width="24"><img src="logo-c-mono.svg" width="16"></div>
+      <div class="label">Auf hellem Grund</div>
+      <div class="sizes light"><img src="logo-c-mono.svg" width="64"><img src="logo-c-mono.svg" width="32"></div>
+      <div class="label">Android-Masken</div>
+      <div class="masks"><img class="circle" src="logo-c-mono.svg" style="background:#061a33"><img class="squircle" src="logo-c-mono.svg" style="background:#061a33"></div>
+    </section>
+
+    <section class="card">
+      <h2>D · Peer-to-Peer</h2>
+      <p class="why">Das M als Verbindung zweier Geräte, das Schloss in der Mitte. Erzählt die Kernidee „direkt, ohne Server dazwischen“. Stärkstes Marketing-Motiv.</p>
+      <div class="hero"><img src="logo-d-p2p.svg" alt="Variante D"></div>
+      <div class="label">Größen (dunkel)</div>
+      <div class="sizes"><img src="logo-d-p2p.svg" width="96"><img src="logo-d-p2p.svg" width="48"><img src="logo-d-p2p.svg" width="32"><img src="logo-d-p2p.svg" width="24"><img src="logo-d-p2p.svg" width="16"></div>
+      <div class="label">Auf hellem Grund</div>
+      <div class="sizes light"><img src="logo-d-p2p.svg" width="64"><img src="logo-d-p2p.svg" width="32"></div>
+      <div class="label">Android-Masken</div>
+      <div class="masks"><img class="circle" src="logo-d-p2p.svg"><img class="squircle" src="logo-d-p2p.svg"></div>
+    </section>
+  </div>
+
+  <section class="phone">
+    <div class="label">So wirkt es auf dem Startbildschirm (Kreis-Maske wie Pixel)</div>
+    <div class="home">
+      <figure><div class="ph"></div>Kamera</figure>
+      <figure><img src="logo-a-glow.svg">Malachi A</figure>
+      <figure><img src="logo-b-shield.svg">Malachi B</figure>
+      <figure><div class="ph"></div>Karten</figure>
+      <figure><div class="ph"></div>Uhr</figure>
+      <figure><img src="logo-d-p2p.svg">Malachi D</figure>
+      <figure><div class="ph"></div>Fotos</figure>
+      <figure><div class="ph"></div>Einstellungen</figure>
+    </div>
+  </section>
+</body>
+</html>

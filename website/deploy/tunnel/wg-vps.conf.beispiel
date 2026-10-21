@@ -1,0 +1,18 @@
+# BEISPIEL - Variante B (Tunnel): WireGuard auf dem VPS (z. B. kleiner
+# Hetzner-Server). Ziel: /etc/wireguard/wg-malachi.conf (root 0600), dann:
+#   sudo apt-get install wireguard-tools
+#   sudo systemctl enable --now wg-quick@wg-malachi
+# Firewall des VPS: UDP 51820 sowie TCP 80 und 443 eingehend erlauben.
+#
+# Der VPS sieht nur verschluesselten Verkehr (TLS endet auf dem Laptop) und
+# die IP-Adressen der Besucher. Er speichert nichts (siehe vps-nginx-stream).
+
+[Interface]
+Address = 10.66.0.1/24
+ListenPort = 51820
+PrivateKey = <PRIVATER_SCHLUESSEL_DES_VPS>
+
+[Peer]
+# der Laptop "malachi"
+PublicKey = <OEFFENTLICHER_SCHLUESSEL_DES_LAPTOPS>
+AllowedIPs = 10.66.0.2/32

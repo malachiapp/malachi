@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Logo D als Statusleisten-/Benachrichtigungssymbol (24dp, einfarbig -
+     Android wertet hier nur die Deckkraft aus). Vorher wurde das bunte
+     App-Icon verwendet, das in der Statusleiste als weisses Viereck erschien.
+     Das M endet am Schloss, das Schluesselloch ist ausgespart (evenOdd). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M3.68,17.15V3.9L9.47,9.54M14.53,9.54L20.32,3.9V17.15"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M1.78,17.15a1.9,1.9 0 1,0 3.8,0a1.9,1.9 0 1,0 -3.8,0M18.42,17.15a1.9,1.9 0 1,0 3.8,0a1.9,1.9 0 1,0 -3.8,0"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:fillType="evenOdd"
+        android:pathData="M8.3,12a3.7,3.7 0 1,0 7.4,0a3.7,3.7 0 1,0 -7.4,0ZM11,11.34a1,1 0 1,0 2,0a1,1 0 1,0 -2,0ZM11.5,11.92L12.5,11.92L12.8,14.02L11.2,14.02Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

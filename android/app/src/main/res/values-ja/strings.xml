@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Maschinelle Uebersetzung von values/strings.xml (Deutsch), ohne Gewaehr. -->
+<resources>
+    <string name="notif_channel_messages">メッセージ</string>
+    <string name="notif_channel_messages_desc">Malachi のメッセージ</string>
+    <string name="notif_new_message">新しいメッセージ</string>
+    <string name="notif_new_message_from" formatted="true">%1$s さんからの新しいメッセージ</string>
+    <string name="service_channel_name">Malachi 接続</string>
+    <string name="service_channel_desc">Malachi の接続を維持します</string>
+    <string name="service_notif_text">接続中 – メッセージを受信しています</string>
+    <string name="call_channel_name">通話</string>
+    <string name="call_channel_desc">Malachi の着信と通話中の通話</string>
+    <string name="call_notif_title">Malachi の通話</string>
+    <string name="call_incoming_text">着信 · Malachi</string>
+    <string name="call_ongoing_text">通話中 · Malachi</string>
+    <string name="call_action_decline">拒否</string>
+    <string name="call_action_answer">応答</string>
+    <string name="call_action_hangup">終了</string>
+    <string name="call_wake_text">着信 …</string>
+    <string name="call_unknown_contact">Malachi の連絡先</string>
+</resources>

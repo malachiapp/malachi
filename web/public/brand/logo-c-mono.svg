@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Malachi – Variante C „Monogramm“: einfarbig (currentColor), ohne
+       Verlauf. Für Favicon, Android-Benachrichtigungssymbol (muss einfarbig
+       sein), Stempel oder Druck. Bleibt bis 16 px lesbar. -->
+  <defs>
+    <mask id="k">
+      <rect width="512" height="512" fill="#fff"/>
+      <circle cx="256" cy="262" r="15" fill="#000"/>
+      <path d="M249 270 L263 270 L268 300 L244 300 Z" fill="#000"/>
+    </mask>
+  </defs>
+  <g fill="currentColor" style="color:#1CCCF0">
+    <path fill-rule="evenodd"
+      d="M136 88 H376 A72 72 0 0 1 448 160 V304 A72 72 0 0 1 376 376 H236 L140 440 L160 376 H136 A72 72 0 0 1 64 304 V160 A72 72 0 0 1 136 88 Z
+         M140 128 A36 36 0 0 0 104 164 V300 A36 36 0 0 0 140 336 H214 L204 368 L252 336 H372 A36 36 0 0 0 408 300 V164 A36 36 0 0 0 372 128 Z"/>
+    <path mask="url(#k)" d="M164 318 V156 H214 L256 214 L298 156 H348 V318 H304 V236 L278 272 V318 H234 V272 L208 236 V318 Z"/>
+  </g>
+</svg>

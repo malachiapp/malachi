@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sichtbare Texte der nativen Teile (Benachrichtigungen, Anrufe). Deutsch ist
+  der Standard (Quellsprache), values-<sprache>/ uebersetzt dieselben Namen
+  (maschinell, ohne Gewaehr). Android waehlt nach der GERAETESPRACHE - die
+  Sprachwahl in der App (Einstellungen -> Sprache) gilt nur fuer die JS-Oberflaeche.
+-->
+<resources>
+    <string name="app_name" translatable="false">Malachi</string>
+    <string name="notif_channel_messages">Nachrichten</string>
+    <string name="notif_channel_messages_desc">Malachi Nachrichten</string>
+    <string name="notif_new_message">Neue Nachricht</string>
+    <string name="notif_new_message_from" formatted="true">Neue Nachricht von %1$s</string>
+    <string name="service_channel_name">Malachi Verbindung</string>
+    <string name="service_channel_desc">Hält Malachi Verbindung aufrecht</string>
+    <string name="service_notif_text">Verbindung aktiv – Nachrichten werden empfangen</string>
+    <string name="call_channel_name">Anrufe</string>
+    <string name="call_channel_desc">Eingehende und laufende Malachi-Anrufe</string>
+    <string name="call_notif_title">Malachi-Anruf</string>
+    <string name="call_incoming_text">Eingehender Anruf · Malachi</string>
+    <string name="call_ongoing_text">Laufendes Gespräch · Malachi</string>
+    <string name="call_action_decline">Ablehnen</string>
+    <string name="call_action_answer">Annehmen</string>
+    <string name="call_action_hangup">Auflegen</string>
+    <string name="call_wake_text">Eingehender Anruf …</string>
+    <string name="call_unknown_contact">Malachi-Kontakt</string>
+</resources>

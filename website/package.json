@@ -1,0 +1,18 @@
+{
+  "name": "malachi-website",
+  "version": "1.0.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "Statische Malachi-Website (Onion + Clearnet), signierte Update-Manifeste und Veroeffentlichungswerkzeuge. Keine Abhaengigkeiten.",
+  "type": "module",
+  "engines": {
+    "node": ">=18.19"
+  },
+  "scripts": {
+    "test": "node --test werkzeuge/test/werkzeuge.test.mjs",
+    "entwurf": "node werkzeuge/veroeffentlichen.mjs --entwurf",
+    "bauen": "node werkzeuge/veroeffentlichen.mjs",
+    "veroeffentlichen": "node werkzeuge/veroeffentlichen.mjs --hochladen",
+    "schluessel": "node werkzeuge/update-schluessel.mjs"
+  }
+}

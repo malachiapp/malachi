@@ -1,0 +1,10 @@
+[Unit]
+Description=Malachi coturn IPv6-Updater - alle 5 Minuten (analog zum DuckDNS-Cronjob)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=coturn-ipv6-update.service
+
+[Install]
+WantedBy=timers.target

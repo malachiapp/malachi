@@ -1,0 +1,19 @@
+// Automatische Updates fuer den Laptop "malachi" (Website, Onion-Shop, Tor).
+// Ziel: /etc/apt/apt.conf.d/52malachi-unattended-upgrades
+//
+// Debians 50unattended-upgrades installiert bereits Sicherheitsupdates und
+// Punkt-Releases von trixie. Ergaenzt werden "trixie-updates" (z. B.
+// zeitkritische Aktualisierungen) und Aufraeumen.
+//
+// Automatischer Neustart ist bewusst AUS: Ist die Festplatte mit LUKS
+// verschluesselt, wartet der Laptop nach einem Neustart auf die Passphrase
+// und Website/Shop waeren bis dahin offline. Kernel-Updates brauchen deshalb
+// einen geplanten Neustart von Hand (pruefen.sh meldet ihn).
+
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename}-updates,label=Debian";
+};
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";
