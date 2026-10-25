@@ -179,6 +179,34 @@ export async function externalizeEntries(scope, entries, known) {
   return out;
 }
 
+// Speichert einen 1:1-Verlauf (ChatScreen): Medien als verschluesselte
+// Dateien, im Verlauf nur Verweis+Schluessel. storage = EncryptedStorage-
+// kompatibel (getItem/setItem/removeItem).
+//
+// Fehler 2026-10-25 ("Sprachnachrichten bleiben nicht gespeichert"): kamen
+// beim Oeffnen eines Chats neue Nachrichten an, BEVOR der gespeicherte
+// Verlauf geladen war, wurde (a) nur dieser unvollstaendige Stand gespeichert
+// und (b) beim Aufraeumen jede Datei geloescht, auf die er nicht zeigte - also
+// alle aelteren Bilder und Sprachnachrichten. Jetzt: historyIncluded = der
+// Stand enthaelt den geladenen Verlauf. Ohne ihn wird weder gespeichert noch
+// aufgeraeumt (der naechste, vollstaendige Stand speichert gleich danach).
+export async function persistChatHistory({ storage, key, scope, entries, known, historyIncluded, sweep = false }) {
+  if (!historyIncluded || !scope) return { saved: false, swept: 0, stored: null };
+  if (!entries.length) {
+    await storage.removeItem(key);
+    return { saved: true, swept: 0, stored: [] };
+  }
+  const stored = await externalizeEntries(scope, entries, known);
+  await storage.setItem(key, JSON.stringify(stored));
+  let swept = 0;
+  if (sweep) {
+    const keep = new Set(stored.map(m => m.mref).filter(Boolean));
+    for (const r of known.values()) keep.add(r.mref);
+    swept = await sweepScope(scope, keep);
+  }
+  return { saved: true, swept, stored };
+}
+
 // Inhalt eines Eintrags (aus dem RAM oder der Ablage).
 export async function mediaData(scope, m) {
   if (typeof m?.base64 === 'string') return m.base64;

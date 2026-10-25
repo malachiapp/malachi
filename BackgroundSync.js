@@ -53,9 +53,11 @@ import { sendEncryptedAudio } from './AudioCrypto';
 import { sendEncryptedFile } from './FileCrypto';
 import { removeMedia, removeScope as removeMediaScope } from './MediaVault';
 import RTCStore from './RTCStore';
+import * as PinVault from './PinVault';
 import { configureDirectUpgrade, maybeStartUpgrade, onLocalNetworkChange as upgradeOnNetworkChange, resetUpgradeBackoff } from './DirectUpgrade';
 import { loadConnectionMode } from './ConnectionMode';
 import { configureGroupMessaging, onGroupReceipt, isGroupAckId } from './GroupMessaging';
+import { configureGroupIntroPairing, createIntroInvite, joinIntroInvite, resumeIntroPairings } from './GroupIntroPairing';
 import { t } from './i18n';
 
 const noop = () => {};
@@ -98,7 +100,9 @@ export async function updateContacts(mutator) {
     const saved = await AsyncStorage.getItem('contacts');
     const current = saved ? JSON.parse(saved) : [];
     const updated = await mutator(current);
-    if (updated != null) await AsyncStorage.setItem('contacts', JSON.stringify(updated));
+    // PIN-Tresor: Vorschautexte ('last') werden versiegelt gespeichert -
+    // auch aus dem Hintergrund bei gesperrter App (PinVault.sealPreviewsIn).
+    if (updated != null) await AsyncStorage.setItem('contacts', JSON.stringify(await PinVault.sealPreviewsIn(updated)));
     return updated;
   });
   // Muss auch bei einem Fehler weiterlaufen - sonst wuerde ein einziger
@@ -123,7 +127,7 @@ export async function updateGroups(mutator) {
     const saved = await AsyncStorage.getItem('groups');
     const current = saved ? JSON.parse(saved) : [];
     const updated = await mutator(current);
-    if (updated != null) await AsyncStorage.setItem('groups', JSON.stringify(updated));
+    if (updated != null) await AsyncStorage.setItem('groups', JSON.stringify(await PinVault.sealPreviewsIn(updated)));
     return updated;
   });
   groupsWriteChain = run.catch(() => {});
@@ -393,23 +397,45 @@ async function writeChatStatuses(contactId) {
   const updates = pendingChatStatus.get(contactId);
   pendingChatStatus.delete(contactId);
   if (!updates || !updates.size) return withChatLock(contactId, async () => {});
-  return withChatLock(contactId, async () => {
-    const raw = await EncryptedStorage.getItem('chat_' + contactId).catch(() => null);
-    if (!raw) return;
-    let list;
-    try { list = JSON.parse(raw); } catch { return; }
-    if (!Array.isArray(list)) return;
-    let changed = false;
-    const next = list.map((m) => {
-      if (!m || !m.mine || !updates.has(m.id)) return m;
-      const s = mergeSendStatus(m.status, updates.get(m.id));
-      if (s === m.status) return m;
-      changed = true;
-      return { ...m, status: s };
-    });
-    if (changed) await EncryptedStorage.setItem('chat_' + contactId, JSON.stringify(next));
-  });
+  // Ueber den PIN-Tresor: entsperrt sofort, gesperrt versiegelt ins Journal
+  // (eingearbeitet beim naechsten Lesen, siehe applyChatOps).
+  return withChatLock(contactId, () => PinVault.update('chat_' + contactId, { op: 'status', u: [...updates] }).catch(() => {}));
 }
+
+// Zusammenfuehrung fuer 'chat_<id>' (PIN-Tresor-Journal und direkte
+// Aenderungen): Haekchen nachtragen, Nachrichten loeschen. Idempotent - ein
+// Eintrag darf mehrfach angewendet werden.
+export async function applyChatOps(value, ops, key) {
+  let list = [];
+  if (value) {
+    try { list = JSON.parse(value); } catch { return value; }
+    if (!Array.isArray(list)) return value;
+  }
+  const contactId = String(key).slice('chat_'.length);
+  let changed = false;
+  for (const op of ops || []) {
+    if (op?.op === 'status' && Array.isArray(op.u)) {
+      const updates = new Map(op.u);
+      list = list.map((m) => {
+        if (!m || !m.mine || !updates.has(m.id)) return m;
+        const st = mergeSendStatus(m.status, updates.get(m.id));
+        if (st === m.status) return m;
+        changed = true;
+        return { ...m, status: st };
+      });
+    } else if (op?.op === 'delete' && op.id) {
+      const same = (m) => m && m.id != null && String(m.id) === String(op.id);
+      const hit = list.filter(same);
+      if (!hit.length) continue;
+      list = list.filter((m) => !same(m));
+      changed = true;
+      // Audit G1: Datei des geloeschten Mediums gleich mit entfernen.
+      for (const m of hit) if (typeof m.mref === 'string') await removeMedia(contactId, m.mref);
+    }
+  }
+  return changed ? JSON.stringify(list) : value;
+}
+PinVault.registerMerger('chat_', applyChatOps);
 
 export async function onQueueReceipt(contactId, msgId) {
   let removed = null;
@@ -467,7 +493,7 @@ async function sendQueueItem(item, payload, rtc) {
     if (!id) throw new Error('Bild-Uebertragung abgebrochen');
     console.log('[Queue] Bild uebergeben:', item.msgId);
   } else if (item.type === 'audio') {
-    const id = await sendEncryptedAudio(payload.base64, rtc.sharedSecret, send, payload.durationMs, payload.viewOnce, { msgId: item.msgId, sealer, secret: !!item.ephemeral });
+    const id = await sendEncryptedAudio(payload.base64, rtc.sharedSecret, send, payload.durationMs, payload.viewOnce, { msgId: item.msgId, sealer, secret: !!item.ephemeral, wave: payload.wave });
     if (!id) throw new Error('Audio-Uebertragung abgebrochen');
     console.log('[Queue] Audio uebergeben:', item.msgId);
   } else if (item.type === 'file') {
@@ -803,7 +829,7 @@ function wipedTombstone(x) {
 export function wipeContactLocally(contactId, onContactsChanged = noop) {
   onContactsChanged(c => c.map(x => (x.id === contactId ? wipedTombstone(x) : x)));
   updateContacts(cs => cs.map(x => (x.id === contactId ? wipedTombstone(x) : x))).catch(() => {});
-  EncryptedStorage.removeItem('chat_' + contactId).catch(() => {});
+  PinVault.removeItem('chat_' + contactId).catch(() => {});
   removeMediaScope(contactId).catch(() => {});   // Audit G1
   EncryptedStorage.removeItem('timer_' + contactId).catch(() => {});
   EncryptedStorage.removeItem('secret_' + contactId).catch(() => {});
@@ -848,7 +874,20 @@ configureGroupMessaging({
   updateContacts: (m) => updateContacts(m),
   dropFromQueue: (id, p) => dropFromQueue(id, p),
   uiContacts: (u) => uiContactsListener(u),
+  // Vorstellen ueber die Gruppe: Einladung erzeugen bzw. damit koppeln
+  // (GroupIntroPairing.js - Tor, Kontaktanlage).
+  introPairing: {
+    createInvite: (info) => createIntroInvite(info),
+    joinInvite: (info) => { joinIntroInvite(info).catch(() => {}); },
+  },
 });
+configureGroupIntroPairing({
+  updateContacts: (m) => updateContacts(m),
+  uiContacts: (u) => uiContactsListener(u),
+});
+// Offene Vorstellungs-Einladungen nach einem Neustart wieder anmelden bzw.
+// Beitritte fortsetzen (App und Headless-Task laden dieses Modul).
+setTimeout(() => { resumeIntroPairings().catch(() => {}); }, 0);
 
 // Lokale, verschluesselte Sende-Warteschlange (vorher nur in App.tsx) - hier,
 // damit auch requestContactDeletion() (unten) sie benutzen kann. Format-
@@ -908,7 +947,7 @@ export async function queueOffline(contactId, type, payload, secret, msgId, meta
 export function removeContactLocally(contactId) {
   uiContactsListener(c => c.filter(x => x.id !== contactId));
   updateContacts(cs => cs.filter(x => x.id !== contactId)).catch(() => {});
-  for (const prefix of ['chat_', 'timer_', 'secret_', 'secret_ended_', 'shared_secret_', 'shared_secret_prev_', 'system_ts_hwm_', 'avatar_hash_', 'safety_code_seen_']) {
+  for (const prefix of ['chat_', 'vj_chat_', 'timer_', 'secret_', 'secret_ended_', 'shared_secret_', 'shared_secret_prev_', 'system_ts_hwm_', 'avatar_hash_', 'safety_code_seen_']) {
     EncryptedStorage.removeItem(prefix + contactId).catch(() => {});
   }
   removeMediaScope(contactId).catch(() => {});   // Audit G1: Verlaufs-Medien
@@ -933,7 +972,7 @@ export function removeContactLocally(contactId) {
 const PENDING_DELETE_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 export async function requestContactDeletion(contactId) {
   uiContactsListener(c => c.filter(x => x.id !== contactId));
-  for (const prefix of ['chat_', 'timer_', 'secret_', 'secret_ended_']) {
+  for (const prefix of ['chat_', 'vj_chat_', 'timer_', 'secret_', 'secret_ended_']) {
     EncryptedStorage.removeItem(prefix + contactId).catch(() => {});
   }
   removeMediaScope(contactId).catch(() => {});   // Audit G1
@@ -973,22 +1012,13 @@ export async function applyControlSignal(contactId, msg) {
     case 'clear_chat':
       setContacts(c => c.map(x => x.id === contactId ? { ...x, last: '', unread: 0 } : x));
       updateContacts(cs => cs.map(x => x.id === contactId ? { ...x, last: '', unread: 0 } : x)).catch(() => {});
-      await withChatLock(contactId, () => EncryptedStorage.removeItem('chat_' + contactId).catch(() => {}));
+      await withChatLock(contactId, () => PinVault.removeItem('chat_' + contactId).catch(() => {}));
       await removeMediaScope(contactId).catch(() => {});   // Audit G1
       return true;
     case 'delete_message': {
       if (!msg.msgId) return false;
-      await withChatLock(contactId, async () => {
-        const saved = await AsyncStorage.getItem('chat_' + contactId).catch(() => null);
-        if (!saved) return;
-        try {
-          const parsed = JSON.parse(saved);
-          const filtered = parsed.filter(m => m.id !== msg.msgId);
-          if (filtered.length !== parsed.length) await AsyncStorage.setItem('chat_' + contactId, JSON.stringify(filtered)).catch(() => {});
-          // Audit G1: Datei des geloeschten Mediums gleich mit entfernen.
-          for (const m of parsed) if (m.id === msg.msgId && typeof m.mref === 'string') await removeMedia(contactId, m.mref);
-        } catch {}
-      });
+      // PIN-Tresor: bei gesperrter App versiegelt vorgemerkt (applyChatOps).
+      await withChatLock(contactId, () => PinVault.update('chat_' + contactId, { op: 'delete', id: String(msg.msgId) }).catch(() => {}));
       return true;
     }
     case 'secret_start':

@@ -109,6 +109,16 @@ object TelecomHelper {
         activeConnections[contactId] = connection
     }
 
+    /** Lautsprecher fuer laufende Telecom-Anrufe umschalten; false, wenn keiner laeuft. */
+    fun setSpeakerRoute(on: Boolean): Boolean {
+        var applied = false
+        for (connection in activeConnections.values.toList()) {
+            if (connection.state == Connection.STATE_DISCONNECTED) continue
+            if (connection.setSpeaker(on)) applied = true
+        }
+        return applied
+    }
+
     // --- Von CallActionReceiver aufgerufen (Tap auf Annehmen/Ablehnen in der Notification) ---
 
     fun answerFromNotification(contactId: String) {

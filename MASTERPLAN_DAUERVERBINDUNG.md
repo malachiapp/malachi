@@ -77,7 +77,7 @@ Solange beide Geräte Netz haben, besteht zwischen ihnen **ständig ein offener,
 1. **Kopplung „privat“ (nur Tor):** QR-Code/Link enthält Token, Einmal-Geheimnis und Onion-Adresse; gekoppelt wird ausschließlich über Tor. Server sieht nichts. Option „Privat koppeln“ → später Standard.
 2. **Verbindungsaushandlung über Tor:** Stehen sich zwei Kontakte schon einmal per Tor gegenüber, laufen WebRTC-Angebot/-Antwort für die schnellere Direktverbindung über den Tor-Kanal statt über den Treffpunkt. Danach wechselt die Verbindung auf direkt (wie heute).
 3. **Wecksignal entfällt:** Ein laufender Onion-Dienst ist selbst die „Klingel“ – eingehende Tor-Verbindungen wecken die App.
-4. **STUN-Entscheidung:** ohne eigenen Server entweder kein STUN (direkt nur IPv6/gleiches WLAN, sonst Tor) oder bewusst gewählter öffentlicher STUN (IP geht an Dritte) – Abwägung dokumentieren, Nutzer entscheiden lassen.
+4. **STUN-Entscheidung:** ~~ohne eigenen Server entweder kein STUN (direkt nur IPv6/gleiches WLAN, sonst Tor) oder bewusst gewählter öffentlicher STUN (IP geht an Dritte) – Abwägung dokumentieren, Nutzer entscheiden lassen.~~ **Entschieden (25.10.2026, STUN_AUSSTIEG_PLAN.md E1/E2):** kein STUN mehr. Direkt nur über IPv6, gleiches WLAN oder Portfreigabe des eigenen Routers (auch für Anrufe, ICE-Neustarts und spät eintreffende Freigaben), sonst Tor. Umgesetzt im Release nach 1.1.0.
 5. **Was ohne Server wegfällt (bewusst entscheiden):** Web-App (kein Tor im Browser), Kopplung per Telefonnummer. Website kann statisch günstig gehostet werden.
 6. **Messen vor Abschalten:** Erfolgsquote und Dauer von Tor-Kopplung/-Verbindung über Wochen (Phase-0-Logbuch). Erst bei belastbaren Zahlen den Treffpunkt abschalten bzw. nur noch als Rückfall betreiben.
 
@@ -101,7 +101,7 @@ Solange beide Geräte Netz haben, besteht zwischen ihnen **ständig ein offener,
 | Geschwindigkeit Aufbau | 1–3 s | 7–60 s (erster Kontakt langsamer); danach Wechsel auf direkt möglich |
 | Web-App | funktioniert (direkt + Warteschlange) | ohne Server nicht – siehe Phase 8 |
 | Kopplung per Telefonnummer | funktioniert | entfällt ohne Server (QR/Link bleibt) |
-| Direktverbindung IPv4 | eigener STUN | kein STUN (nur IPv6/LAN direkt, sonst Tor) oder öffentlicher STUN (IP an Dritte) |
+| Direktverbindung IPv4 | eigener STUN | kein STUN (entschieden, STUN_AUSSTIEG_PLAN.md): IPv6/LAN/Router-Portfreigabe direkt, sonst Tor |
 | Angriffsfläche | Server ist Ziel (Web-App-Manipulation, Metadaten) | kein eigenes Ziel |
 | Aufwand | läuft | mehrere Umbauschritte + Wochen Messung |
 

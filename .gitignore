@@ -76,6 +76,10 @@ play-service-account*.json
 
 # Secrets - nie committen (siehe secrets.local.js.example fuer die Vorlage)
 secrets.local.js
+# Laufzeitdaten von update-coturn-ip.ps1 (coturn ist stillgelegt, die
+# bisherigen Staende liegen unter archiv/coturn/) - enthalten IP-Adressen
+/.last-coturn-ip.txt
+/coturn-ip-update.log
 firebase-service-account.json
 
 # Lokale APK-Sicherungen und generierte Release-Bundles - keine Build-Artefakte im Git
@@ -96,3 +100,6 @@ Malachi-Betriebshandbuch/
 
 # Oeffentlicher Export (eigenes Git-Repo, wird separat veroeffentlicht)
 Malachi-Open-Source/
+
+# Foerderantraege (persoenliche Angaben) - nur lokal
+Malachi-Foerderung/

@@ -13,6 +13,7 @@ import {
 import { generateKyberKeypair, kyberEncapsulate, kyberDecapsulate } from './HybridCrypto';
 import { encryptMsg, decryptMsg } from './MessageCrypto';
 import RTCStore from './RTCStore';
+import * as ConnectionStats from './ConnectionStats';
 import * as RatchetSession from './RatchetSession';
 import { Buffer } from 'buffer';
 // Fix 2 (SECURITY_CHAOS_TESTING.md §9): vorher an beiden Kyber-Handlern per
@@ -25,85 +26,19 @@ import { Buffer } from 'buffer';
 // UND unter Jest (ein awaiteter `import()` scheitert dort ohne
 // --experimental-vm-modules, ein normaler statischer Import nicht).
 import EncryptedStorage from 'react-native-encrypted-storage';
-import { NativeModules } from 'react-native';
-import { MODE_FAST, MODE_PRIVATE, MODE_TOR_ONLY, connectionModeForDecision, iceServersForMode } from './ConnectionMode';
+import { MODE_TOR_ONLY, connectionModeForDecision } from './ConnectionMode';
+import {
+  PortMappingSession, PORT_MAPPING_MAX_WAIT_MS as MAPPING_WAIT, MAX_LATE_CANDIDATES,
+  hostCandidatesForMapping as hostCandidates, addMappedCandidates as addMapped, mappedCandidateLine, firstMid,
+} from './PortMapping';
 
-// ── Automatische Portfreigabe am Heimrouter (Masterplan Baustein 1) ──────────
-// Nach dem Sammeln der Kandidaten bittet die App den eigenen Router (nur das
-// Standard-Gateway im lokalen Netz), den Port des Kandidaten kurz
-// freizugeben: IPv6 = Firewall-Loch fuer die ohnehin oeffentliche Adresse,
-// IPv4 = Weiterleitung (nur mit echter oeffentlicher IPv4). Erfolgreiche
-// IPv4-Weiterleitungen kommen als zusaetzlicher Kandidat ins Angebot.
-// Native Seite: android/.../net/MalachiPcpModule.kt - zuerst PCP (RFC 6887),
-// fuer IPv4 ersatzweise NAT-PMP (RFC 6886) und UPnP-IGD. Jede Zeile des
-// Ergebnisses nennt in `method` das Protokoll ('pcp'|'natpmp'|'upnp'); das
-// Modul merkt sich, womit freigegeben wurde, und loescht mit demselben.
-// Im Verbindungsweg "Privat (ohne STUN)" ist der Router die EINZIGE Quelle
-// der oeffentlichen IPv4-Adresse - dort wird laenger auf ihn gewartet.
-// (Nachgeschlagen statt beim Laden festgehalten, damit Tests das native
-// Modul ersetzen koennen.)
-const pcpModule = () => NativeModules?.MalachiPcp;
-const PCP_LIFETIME_S = 3600;
-const PCP_RENEW_MS = 25 * 60 * 1000;
-export const PORT_MAPPING_MAX_WAIT_MS = { [MODE_FAST]: 1500, [MODE_PRIVATE]: 4000 };
-let lastPortMappingStatus = null;
-export function getPortMappingStatus() { return lastPortMappingStatus; }
-
-const PRIVATE_V4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
-// Host-Kandidaten, fuer die eine Freigabe Sinn ergibt: globale IPv6-Adressen
-// (nicht link-lokal/ULA) und private IPv4-Adressen hinter einem Router. Bei TCP
-// nur "passive" Kandidaten - nur die nehmen Verbindungen an.
-export function hostCandidatesForMapping(sdp) {
-  const out = [];
-  const seen = new Set();
-  for (const line of String(sdp || '').split(/\r?\n/)) {
-    const m = /^a=candidate:\S+ 1 (udp|tcp) \d+ (\S+) (\d+) typ host(.*)$/i.exec(line);
-    if (!m) continue;
-    const protocol = m[1].toLowerCase();
-    const address = m[2];
-    const port = Number(m[3]);
-    if (protocol === 'tcp' && !/tcptype passive/i.test(m[4])) continue;
-    const v6 = address.includes(':');
-    if (v6 ? /^(fe80|fc|fd)/i.test(address) : !PRIVATE_V4.test(address)) continue;
-    if (!(port > 0 && port < 65536)) continue;
-    const key = protocol + '|' + address + '|' + port;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ protocol, address, port });
-  }
-  return out.slice(0, 8);
-}
-
-// Fuegt fuer erfolgreiche IPv4-Weiterleitungen einen srflx-Kandidaten mit der
-// oeffentlichen Adresse hinzu (IPv6-Pinholes brauchen keinen eigenen
-// Kandidaten - die Host-Adresse ist bereits oeffentlich). Egal ob per PCP,
-// NAT-PMP oder UPnP freigegeben - alle liefern dieselbe Ergebnisform.
-const MAPPING_METHODS = new Set(['pcp', 'natpmp', 'upnp']);
-const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-export function addMappedCandidates(sdp, results) {
-  const lines = [];
-  (results || []).forEach((r, i) => {
-    const ext = r?.externalAddress;
-    if (r?.result !== 'SUCCESS' || typeof ext !== 'string' || !IPV4_RE.test(ext)) return;
-    if (PRIVATE_V4.test(ext) || /^(0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|127\.|169\.254\.|22[4-9]\.|2[3-5]\d\.)/.test(ext)) return;
-    if (!(r.externalPort > 0 && r.externalPort < 65536)) return;
-    if (r.protocol !== 'udp' && r.protocol !== 'tcp') return;
-    if (typeof r.address !== 'string' || !IPV4_RE.test(r.address) || !(r.port > 0 && r.port < 65536)) return;
-    const tag = MAPPING_METHODS.has(r.method) ? r.method : 'pcp';
-    const tcp = r.protocol === 'tcp' ? ' tcptype passive' : '';
-    lines.push(`a=candidate:${tag}${i} 1 ${r.protocol} 1686052607 ${ext} ${r.externalPort} typ srflx raddr ${r.address} rport ${r.port}${tcp}`);
-  });
-  if (!lines.length) return sdp;
-  const eol = sdp.includes('\r\n') ? '\r\n' : '\n';
-  const parts = sdp.split(eol);
-  let idx = parts.findIndex(l => l.startsWith('a=end-of-candidates'));
-  if (idx < 0) {
-    for (let i = parts.length - 1; i >= 0; i--) if (parts[i].startsWith('a=candidate:')) { idx = i + 1; break; }
-  }
-  if (idx < 0) return sdp;
-  parts.splice(idx, 0, ...lines);
-  return parts.join(eol);
-}
+// ── Automatische Portfreigabe am Heimrouter: PortMapping.js ─────────────────
+// Seit dem STUN-Ausstieg die einzige Quelle einer oeffentlichen IPv4-Adresse.
+// Die reinen Hilfen bleiben hier zusaetzlich exportiert (bestehende Aufrufer
+// und Tests, App.tsx: getPortMappingStatus).
+export {
+  hostCandidatesForMapping, addMappedCandidates, getPortMappingStatus, PORT_MAPPING_MAX_WAIT_MS,
+} from './PortMapping';
 
 // ── UNIFORMITÄT (Cover Traffic) ─────────────────
 // Cover Traffic schützt nur, wenn "Nachricht" und "keine Nachricht" für einen
@@ -152,8 +87,10 @@ const KEY_EXCHANGE_TIMEOUT_MS = 8000;
 // ICE-Neustart nach Netzwechsel (DirectUpgrade.js): so lange werden
 // 'disconnected'/'failed' nicht als Abbruch gewertet, weil die Verbindung
 // gerade auf das neue Netz umzieht. Kandidaten fuer den Neustart werden
-// hoechstens ICE_RESTART_GATHER_MS gesammelt.
-const ICE_RESTART_GRACE_MS = 8000;
+// hoechstens ICE_RESTART_GATHER_MS gesammelt. 10 statt 8 s: seit dem
+// STUN-Ausstieg fragt jede Seite beim Neustart zusaetzlich bis zu 1 s den
+// Router (PortMapping.PORT_MAPPING_MAX_WAIT_MS.restart).
+const ICE_RESTART_GRACE_MS = 10000;
 const ICE_RESTART_GATHER_MS = 3000;
 const KYBER_HANDSHAKE_SUBTYPES = new Set(['kyber_pubkey', 'kyber_ciphertext']);
 
@@ -324,37 +261,34 @@ async function isNewerThanLastAcceptedSystemTs(contactId, ts) {
 }
 
 
-// Einziger Netzdienst: STUN (coturn "stun-only", siehe AppConfig.js und
-// server/hetzner/turnserver.conf) - und nur im Verbindungsweg Stufe 1
-// (ConnectionMode.js). Er nennt dem Geraet nur dessen oeffentliche Adresse -
-// keine Inhalte, keine Signale, kein TURN.
-
-// ── NUR DIREKTES P2P (Produktentscheidung 2026-09-29) ──────────────────────
+/// ── NUR DIREKTES P2P (Produktentscheidung 2026-09-29) ──────────────────────
 // Vorher lief jede Verbindung erzwungen ueber den TURN-Server
 // (iceTransportPolicy 'relay'): alle - wenn auch verschluesselten - Inhalte
 // flossen physisch durch den eigenen Server. Vorgabe jetzt: Malachi ist ein
 // echter P2P-Messenger, Inhalte gehen AUSSCHLIESSLICH direkt Geraet <->
 // Geraet. Deshalb:
-//   - keine TURN-Server mehr in der ICE-Konfiguration (auch kein Abruf von
-//     TURN-Zugangsdaten), nur noch STUN: der Server beantwortet dabei nur
-//     "unter welcher Adresse siehst du mich?", es fliessen keine Daten
-//     ueber ihn;
+//   - keine TURN-Server in der ICE-Konfiguration (auch kein Abruf von
+//     TURN-Zugangsdaten);
+//   - seit dem STUN-Ausstieg (STUN_AUSSTIEG_PLAN.md, nach 1.1.0) auch keine
+//     STUN-Server mehr: kein Dritter erfaehrt IP-Adresse, Zeitpunkt oder
+//     Dauer einer Direktverbindung. Die oeffentliche IPv4-Adresse kommt
+//     hoechstens vom eigenen Router (PortMapping.js);
 //   - iceTransportPolicy 'all': direkte Kandidaten (lokales Netz, oeffentliche
-//     IPv6-Adresse, per STUN ermittelte IPv4-Adresse) werden genutzt.
-// Kommt keine Direktverbindung zustande (seltene, sehr restriktive Netze),
-// laufen Nachrichten ueber Tor (TorTransport.js) oder warten verschluesselt
-// in der lokalen Sende-Warteschlange - es gibt bewusst keinen Umweg ueber
-// einen Server. Ausgehandelt wird die Direktverbindung ueber die bestehende,
-// verschluesselte Tor-Verbindung (DirectUpgrade.js). Folge von direktem P2P:
-// die Gegenseite sieht die IP-Adressen des eigenen Geraets (stehen im
-// Verbindungsangebot, das nur sie entschluesseln kann).
+//     IPv6-Adresse, vom Router freigegebene IPv4-Adresse, peer-reflexive
+//     Kandidaten aus den Pruefpaketen) werden genutzt.
+// Kommt keine Direktverbindung zustande, laufen Nachrichten ueber Tor
+// (TorTransport.js) oder warten verschluesselt in der lokalen Sende-
+// Warteschlange - es gibt bewusst keinen Umweg ueber einen Server.
+// Ausgehandelt wird die Direktverbindung ueber die bestehende, verschluesselte
+// Tor-Verbindung (DirectUpgrade.js). Folge von direktem P2P: die Gegenseite
+// sieht die IP-Adressen des eigenen Geraets - schon beim Versuch, denn sie
+// stehen im Verbindungsangebot (das nur sie entschluesseln kann).
 //
-// Verbindungsweg (ConnectionMode.js): Stufe 1 mit eigenem STUN-Server, Stufe 2
-// ganz ohne ICE-Server (oeffentliche Adresse nur vom eigenen Router, siehe
-// _withPortMappings; dazu IPv6-Host- und peer-reflexive Kandidaten), Stufe 3
-// ueberhaupt keine PeerConnection - _pcConfig() wirft dann, damit auch ein
-// uebersehener Aufrufer nie eine Direktverbindung oder WebRTC-Medien aufbaut
-// (die Kandidaten wuerden die IP-Adresse an den Kontakt verraten).
+// Verbindungsweg (ConnectionMode.js): "Direkt, wenn moeglich" ohne ICE-Server;
+// "Maximal anonym (nur Tor)" ueberhaupt keine PeerConnection - _pcConfig()
+// wirft dann, damit auch ein uebersehener Aufrufer nie eine Direktverbindung
+// oder WebRTC-Medien aufbaut (die Kandidaten wuerden die IP-Adresse an den
+// Kontakt verraten).
 const FORCE_RELAY_ONLY = false;
 export class TorOnlyModeError extends Error {
   constructor() {
@@ -365,7 +299,9 @@ export class TorOnlyModeError extends Error {
 export function pcConfigForMode(mode) {
   if (mode === MODE_TOR_ONLY) throw new TorOnlyModeError();
   return {
-    iceServers: iceServersForMode(mode),
+    // Kein STUN, kein TURN - fest, fuer jede PeerConnection (Chat, Anrufe,
+    // Gruppenanrufe). Siehe noStun.static.test.js.
+    iceServers: [],
     iceTransportPolicy: 'all',
     // Auch TCP-Kandidaten: manche Netze sperren UDP, lassen TCP aber durch
     // (Masterplan Baustein 1). libwebrtc sammelt sie standardmaessig schon,
@@ -378,6 +314,25 @@ async function _pcConfig() {
   return pcConfigForMode(await connectionModeForDecision());
 }
 export const pcConfigForCalls = _pcConfig;
+
+// ── Sprache ueber die Direktverbindung (STUN_AUSSTIEG_PLAN.md, WP3a) ────────
+// Kommt die eigene Anruf-PeerConnection nicht zustande, laeuft die Sprache
+// ueber die Verbindung zum Kontakt (CallManager "Sprache ueber den Kanal").
+// Ist das die Direktverbindung, nutzt sie dafuer einen EIGENEN DataChannel auf
+// derselben PeerConnection: ungeordnet und ohne Neusenden (wie RTP) - ein
+// verlorenes Paket haelt so nicht alle folgenden auf (beim geordneten,
+// zuverlaessigen Chat-Kanal gab es dann Ruckler). Keine Neuverhandlung noetig.
+// Die Pakete sind verschluesselt wie jede Nachricht (sealForConnection); auf
+// diesem Kanal wird nur 'call_audio' angenommen. Geoeffnet wird er nur, wenn
+// die Gegenseite ihn im Angebot/in der Antwort angekuendigt hat (ach: 1,
+// DirectUpgrade) - aeltere Versionen (bis 1.1.0) haetten jeden weiteren Kanal
+// faelschlich als Chat-Kanal uebernommen. Ueber Tor bleibt es beim Chat-Kanal.
+export const AUDIO_CHANNEL_LABEL = 'malachi-audio';
+const MAX_AUDIO_CHANNELS = 3;   // eigener + der Gegenseite + Reserve
+// Spaet nachgereichte Kandidaten (siehe addLateRemoteCandidate): so lange
+// wird hoechstens auf die zugehoerige Beschreibung der Gegenseite gewartet.
+const LATE_CANDIDATE_WAIT_MS = 15000;
+const MAX_PENDING_NEGOTIATIONS = 4;
 
 export class WebRTCManager {
   constructor(onMessage, onConnected, onDisconnected) {
@@ -400,6 +355,19 @@ export class WebRTCManager {
     this.transport       = 'direct';
     this._livenessWatch  = null;
     this._iceCheckingTimeout = null;
+    // Router-Portfreigaben dieser Verbindung (PortMapping.js) - erneuert,
+    // solange sie lebt, geloescht in close().
+    this._portMap        = new PortMappingSession();
+    // Spaet eingetroffene Router-Freigabe: (kandidaten, aushandlungsId) -
+    // DirectUpgrade reicht sie als 'direct_cand' an die Gegenseite nach.
+    this.onLateCandidates = null;
+    // Aushandlungs-ID -> { promise, resolve, count }: erfuellt, sobald die
+    // Beschreibung der Gegenseite dieser Aushandlung angewendet ist.
+    this._remoteReady    = new Map();
+    // Sprachkanal (WP3a, siehe AUDIO_CHANNEL_LABEL).
+    this.audioChannel    = null;
+    this._audioChannels  = new Set();
+    this._peerAudioChannel = false;
     // Review-Fund 2026-09-27 ("H3"): onDisc() konnte bisher mehrfach pro
     // Instanz feuern (z.B. 'failed' → onDisc()+close() → dataChannel.close()
     // loest asynchron channel.onclose aus → onDisc() ein zweites Mal). Die
@@ -428,16 +396,25 @@ export class WebRTCManager {
     this._closed = false;
   }
 
-  async createOffer() {
+  // negotiationId: Kennung der Aushandlung (DirectUpgrade) - unter ihr werden
+  // spaet eintreffende Router-Freigaben nachgereicht.
+  async createOffer({ negotiationId = null } = {}) {
     this.isInitiator = true;
     this.pc = new RTCPeerConnection(await _pcConfig());
     this._setupPC();
+    // Von der Gegenseite geoeffnete Kanaele: nur der Sprachkanal (WP3a). Der
+    // Chat-Kanal entsteht hier - ein weiterer darf ihn nie ersetzen.
+    this.pc.ondatachannel = (event) => {
+      if (event?.channel?.label === AUDIO_CHANNEL_LABEL) this._setupAudioChannel(event.channel);
+    };
     this.dataChannel = this.pc.createDataChannel('malachi', { ordered: true });
     this._setupDataChannel(this.dataChannel);
+    this._initialNegotiationId = negotiationId;
+    if (negotiationId) this._expectRemote(negotiationId);
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
     await this._waitForICE();
-    return JSON.stringify({ sdp: await this._withPortMappings(this.pc.localDescription), type: 'offer' });
+    return JSON.stringify({ sdp: await this._withPortMappings(this.pc.localDescription, { negotiationId }), type: 'offer' });
   }
 
   // Tor-Ausweichweg (TorTransport.js): statt einer WebRTC-PeerConnection
@@ -456,32 +433,23 @@ export class WebRTCManager {
     Promise.resolve().then(() => { if (!this._closed) channel.onopen?.(); });
   }
 
-  async _withPortMappings(desc) {
-    const Pcp = pcpModule();
-    if (!Pcp?.map || !desc?.sdp) return desc;
+  // Router um Portfreigaben fuer die Host-Kandidaten der Beschreibung bitten
+  // und erfolgreiche IPv4-Freigaben als Kandidaten einfuegen. Gewartet wird
+  // hoechstens maxWaitMs; eine spaeter eintreffende Freigabe geht ueber
+  // onLateCandidates an die Gegenseite (Luecke L3). Liefert die (ggf.
+  // ergaenzte) Beschreibung.
+  async _withPortMappings(desc, { maxWaitMs = MAPPING_WAIT.offer, negotiationId = null } = {}) {
+    if (!desc?.sdp || !this._portMap.available()) return desc;
     try {
-      const wanted = hostCandidatesForMapping(desc.sdp);
+      const wanted = hostCandidates(desc.sdp);
       if (!wanted.length) return desc;
-      const mode = await connectionModeForDecision();
-      const maxWait = PORT_MAPPING_MAX_WAIT_MS[mode] || PORT_MAPPING_MAX_WAIT_MS[MODE_FAST];
-      const pending = Promise.resolve(Pcp.map(wanted, PCP_LIFETIME_S));
-      let timer = null;
-      const results = await Promise.race([
-        pending,
-        new Promise(r => { timer = setTimeout(() => r(null), maxWait); }),
-      ]);
-      clearTimeout(timer);
-      if (!Array.isArray(results)) {
-        // Router antwortet zu langsam (erste Anfrage im Netz: das native Modul
-        // probiert PCP, NAT-PMP und UPnP nacheinander). Das Angebot geht ohne
-        // die Freigabe raus; kommt sie spaeter doch, wird sie wie jede andere
-        // erneuert und beim Schliessen wieder geloescht - nie verwaist.
-        pending.then((late) => this._adoptPortMappings(late, 'spaet')).catch(() => {});
-        return desc;
-      }
-      const ok = this._adoptPortMappings(results, null);
-      if (!ok.length || this._closed) return desc;
-      const sdp = addMappedCandidates(desc.sdp, ok);
+      const sdpMid = firstMid(desc.sdp);
+      const ok = await this._portMap.request(wanted, {
+        maxWaitMs,
+        onLate: (rows) => this._reportLateCandidates(rows, sdpMid, negotiationId),
+      });
+      if (!ok || !ok.length || this._closed) return desc;
+      const sdp = addMapped(desc.sdp, ok);
       return sdp === desc.sdp ? desc : { type: desc.type, sdp };
     } catch (e) {
       console.log('[Portfreigabe] nicht verfuegbar:', e?.message || e);
@@ -489,70 +457,168 @@ export class WebRTCManager {
     }
   }
 
-  // Merkt sich erfolgreiche Freigaben (Erneuern alle PCP_RENEW_MS, Loeschen
-  // in close()). Ist die Verbindung schon zu, sofort wieder loeschen.
-  // Liefert die erfolgreichen Zeilen.
-  _adoptPortMappings(results, label) {
-    const Pcp = pcpModule();
-    if (!Array.isArray(results) || !Pcp?.map) return [];
-    const ok = results.filter(r => r && r.result === 'SUCCESS');
-    const okMethod = ok.find(r => MAPPING_METHODS.has(r.method))?.method || (ok.length ? 'pcp' : null);
-    // Fehlschlag: zuerst ein ausdrueckliches "nicht erlaubt" melden (FritzBox
-    // ohne "Selbststaendige Portfreigaben") - das kann der Nutzer aendern.
-    const failure = results.find(r => r?.result === 'NOT_AUTHORIZED')?.result || results[0]?.result || 'UNKNOWN';
-    lastPortMappingStatus = { at: Date.now(), result: ok.length ? 'SUCCESS' : failure, method: okMethod };
-    console.log('[Portfreigabe]' + (label ? ' (' + label + ')' : ''), results.map(r =>
-      r.protocol + '/' + (String(r.address).includes(':') ? 'IPv6' : 'IPv4') + ' ' + r.result
-      + (r.method ? ' via ' + r.method : '') + (r.attempts ? ' [' + r.attempts + ']' : '')).join(', '));
-    if (!ok.length) return ok;
-    const fresh = ok.map(r => ({ protocol: r.protocol, address: r.address, port: r.port }));
-    if (this._closed) {
-      Promise.resolve(Pcp.map(fresh, 0)).catch(() => {});
-      return ok;
-    }
-    const key = (m) => m.protocol + '|' + m.address + '|' + m.port;
-    const merged = new Map((this._pcpMappings || []).map(m => [key(m), m]));
-    for (const m of fresh) merged.set(key(m), m);
-    this._pcpMappings = [...merged.values()];
-    if (this._pcpRenew) clearInterval(this._pcpRenew);
-    this._pcpRenew = setInterval(() => {
-      const mod = pcpModule();
-      if (!this._closed && this._pcpMappings && mod?.map) Promise.resolve(mod.map(this._pcpMappings, PCP_LIFETIME_S)).catch(() => {});
-    }, PCP_RENEW_MS);
-    this._pcpRenew?.unref?.();
-    return ok;
+  _reportLateCandidates(rows, sdpMid, negotiationId) {
+    if (this._closed || !negotiationId || typeof this.onLateCandidates !== 'function') return;
+    // Foundation ab 10, damit sie sich nicht mit den Kandidaten im Angebot deckt.
+    const cands = rows.map((r, i) => mappedCandidateLine(r, 10 + i)).filter(Boolean).slice(0, MAX_LATE_CANDIDATES)
+      .map((candidate) => ({ candidate, sdpMid: sdpMid ?? null, sdpMLineIndex: 0 }));
+    if (!cands.length) return;
+    console.log('[Portfreigabe] Freigabe kam nach dem Angebot - wird nachgereicht (' + cands.length + ')');
+    try { this.onLateCandidates(cands, negotiationId); } catch {}
   }
 
-  // Verbindungsweg gewechselt (Stufe 1 <-> 2, DirectUpgrade.applyConnectionMode):
-  // neue ICE-Konfiguration fuer diese bestehende Direktverbindung - wirksam ab
-  // dem naechsten ICE-Neustart (neue Kandidaten ohne bzw. mit STUN).
-  async applyConnectionModeConfig() {
-    if (this._closed || !this.pc || this.transport !== 'direct' || typeof this.pc.setConfiguration !== 'function') return false;
-    const cfg = await _pcConfig();
-    if (this._closed || !this.pc) return false;
-    this.pc.setConfiguration(cfg);
+  // ── Nachgereichte Kandidaten der Gegenseite (DirectUpgrade 'direct_cand') ──
+  // Ein Kandidat darf erst angewendet werden, wenn die Beschreibung der
+  // Gegenseite fuer DIESE Aushandlung gesetzt ist (sonst landet er in der
+  // falschen ICE-Runde und geht beim Neustart verloren). Signale werden
+  // nebeneinander verarbeitet - deshalb hier warten statt verwerfen.
+  _expectRemote(id) {
+    let d = this._remoteReady.get(id);
+    if (d) return d;
+    if (this._remoteReady.size >= MAX_PENDING_NEGOTIATIONS) {
+      // Aelteste vergessen (ein Neustart ersetzt den vorigen).
+      const oldest = this._remoteReady.keys().next().value;
+      this._remoteReady.get(oldest)?.resolve(false);
+      this._remoteReady.delete(oldest);
+    }
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    d = { promise, resolve, count: 0, applied: false };
+    this._remoteReady.set(id, d);
+    return d;
+  }
+
+  _remoteApplied(id) {
+    if (!id) return;
+    const d = this._expectRemote(id);
+    d.applied = true;
+    d.resolve(true);
+  }
+
+  /**
+   * Spaet nachgereichten Router-Kandidaten der Gegenseite anwenden. cand ist
+   * bereits geprueft (PortMapping.isValidMappedCandidate). Hoechstens
+   * MAX_LATE_CANDIDATES je Aushandlung. Liefert true, wenn angewendet.
+   */
+  async addLateRemoteCandidate(negotiationId, cand) {
+    if (this._closed || this.transport !== 'direct' || !this.pc || !negotiationId) return false;
+    const d = this._expectRemote(negotiationId);
+    if (++d.count > MAX_LATE_CANDIDATES) return false;
+    let timer = null;
+    const ready = d.applied ? true : await Promise.race([
+      d.promise,
+      new Promise((r) => { timer = setTimeout(() => r(false), LATE_CANDIDATE_WAIT_MS); timer?.unref?.(); }),
+    ]);
+    clearTimeout(timer);
+    if (!ready || this._closed || !this.pc) return false;
+    try {
+      await this.pc.addIceCandidate({ candidate: cand.candidate, sdpMid: cand.sdpMid ?? null, sdpMLineIndex: cand.sdpMLineIndex ?? null });
+      console.log('[Portfreigabe] Nachgereichter Kandidat der Gegenseite uebernommen');
+      return true;
+    } catch (e) {
+      console.warn('[Portfreigabe] Nachgereichter Kandidat nicht anwendbar:', e?.message || e);
+      return false;
+    }
+  }
+
+  // ── Sprachkanal (WP3a) ────────────────────────────────────────────────────
+  // Hat die Gegenseite den Sprachkanal angekuendigt? (DirectUpgrade, ach: 1)
+  setPeerAudioChannel(supported) { this._peerAudioChannel = supported === true; }
+
+  _setupAudioChannel(channel) {
+    if (!channel || this._closed) { try { channel?.close?.(); } catch {} return; }
+    if (this._audioChannels.size >= MAX_AUDIO_CHANNELS) { try { channel.close(); } catch {} return; }
+    this._audioChannels.add(channel);
+    channel.onmessage = (event) => { this._onAudioChannelMessage(event).catch(() => {}); };
+    // Anders als beim Chat-Kanal: sein Ende beendet NICHT die Verbindung.
+    channel.onclose = () => {
+      this._audioChannels.delete(channel);
+      if (this.audioChannel === channel) this.audioChannel = null;
+    };
+    // Kanaele sind zweiseitig: auch einen von der Gegenseite geoeffneten zum
+    // Senden nehmen, solange wir selbst keinen haben.
+    if (!this.audioChannel) this.audioChannel = channel;
+  }
+
+  // Nur verschluesselte Sprachpakete - alles andere wird verworfen (Steuer-
+  // signale, Chat-Nachrichten usw. gibt es nur ueber den Chat-Kanal mit
+  // seiner Ratchet-/Replay-Pruefung).
+  async _onAudioChannelMessage(event) {
+    if (this._closed || !this.sharedSecret || typeof event?.data !== 'string' || event.data.length > 16384) return;
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (!msg || msg.type !== 'encrypted' || typeof msg.data !== 'string') return;
+    const plaintext = decryptMsg(msg.data, this.sharedSecret);
+    if (!plaintext) return;
+    let inner;
+    try { inner = JSON.parse(plaintext); } catch { return; }
+    if (!inner || typeof inner !== 'object' || inner.type !== 'call_audio') return;
+    if (inner.p !== undefined) delete inner.p;
+    this._lastActivity = Date.now();
+    this.onMessage?.(inner);
+  }
+
+  _ensureAudioChannel() {
+    const cur = this.audioChannel;
+    if (cur && cur.readyState !== 'closing' && cur.readyState !== 'closed') return cur;
+    if (this._audioChannelsCreated >= 2 || typeof this.pc?.createDataChannel !== 'function') return null;
+    this._audioChannelsCreated = (this._audioChannelsCreated || 0) + 1;
+    try {
+      const ch = this.pc.createDataChannel(AUDIO_CHANNEL_LABEL, { ordered: false, maxRetransmits: 0 });
+      this._setupAudioChannel(ch);
+      this.audioChannel = ch;
+      return ch;
+    } catch (e) {
+      console.warn('[Call] Sprachkanal nicht verfuegbar:', e?.message || e);
+      return null;
+    }
+  }
+
+  /**
+   * Sprachpaket ({type:'call_audio', ...}) ueber den Sprachkanal senden.
+   * true = uebernommen; false = nicht moeglich (Tor, Gegenseite ohne
+   * Sprachkanal, Kanal noch nicht offen) - dann nimmt der Aufrufer den
+   * normalen Weg (RTCStore.sendCallAudio).
+   */
+  sendCallAudio(obj) {
+    if (this._closed || this.transport !== 'direct' || !this._peerAudioChannel || !this.sharedSecret) return false;
+    if (!obj || obj.type !== 'call_audio') return false;
+    const ch = this._ensureAudioChannel();
+    if (!ch || ch.readyState !== 'open') return false;
+    sealForConnection(this, obj).then((wire) => {
+      if (wire && !this._closed && ch.readyState === 'open') ch.send(wire);
+    }).catch(() => {});
     return true;
   }
 
   async handleAnswer(answerJSON) {
     const answer = JSON.parse(answerJSON);
     await this.pc.setRemoteDescription(new RTCSessionDescription(answer.sdp));
+    this._remoteApplied(this._initialNegotiationId);
   }
 
-  async createAnswerDirect(offerJSON) {
+  // Eingehender Kanal der Gegenseite (Antwortseite): der Sprachkanal (WP3a)
+  // getrennt, alles andere wie bisher als Chat-Kanal. Vorher ersetzte JEDER
+  // weitere Kanal den Chat-Kanal.
+  _onRemoteDataChannel(channel) {
+    if (channel?.label === AUDIO_CHANNEL_LABEL) { this._setupAudioChannel(channel); return; }
+    this.dataChannel = channel;
+    this._setupDataChannel(this.dataChannel);
+  }
+
+  async createAnswerDirect(offerJSON, { negotiationId = null } = {}) {
     this.isInitiator = false;
     this.pc = new RTCPeerConnection(await _pcConfig());
     this._setupPC();
-    this.pc.ondatachannel = (event) => {
-      this.dataChannel = event.channel;
-      this._setupDataChannel(this.dataChannel);
-    };
+    this.pc.ondatachannel = (event) => this._onRemoteDataChannel(event.channel);
     const offer = JSON.parse(offerJSON);
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer.sdp));
+    this._initialNegotiationId = negotiationId;
+    this._remoteApplied(negotiationId);
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
     await this._waitForICE();
-    return JSON.stringify({ sdp: await this._withPortMappings(this.pc.localDescription) });
+    return JSON.stringify({ sdp: await this._withPortMappings(this.pc.localDescription, { negotiationId }) });
   }
 
   // Historisch gab es hier zusaetzlich einen Nebeneffekt: die lokale Answer-
@@ -569,10 +635,7 @@ export class WebRTCManager {
     this.isInitiator = false;
     this.pc = new RTCPeerConnection(await _pcConfig());
     this._setupPC();
-    this.pc.ondatachannel = (event) => {
-      this.dataChannel = event.channel;
-      this._setupDataChannel(this.dataChannel);
-    };
+    this.pc.ondatachannel = (event) => this._onRemoteDataChannel(event.channel);
     const offer = JSON.parse(offerJSON);
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer.sdp));
     const answer = await this.pc.createAnswer();
@@ -746,17 +809,21 @@ export class WebRTCManager {
       clearTimeout(this._iceRecheckTimer);
       this._iceRecheckTimer = null;
     }
-    if (this._pcpRenew) {
-      clearInterval(this._pcpRenew);
-      this._pcpRenew = null;
+    // Freigaben am Router loeschen (PortMapping.js) - eine danach noch
+    // eintreffende wird dort sofort wieder geloescht.
+    this._portMap.release();
+    // Wartende nachgereichte Kandidaten verwerfen.
+    for (const d of this._remoteReady.values()) d.resolve(false);
+    this._remoteReady.clear();
+    // Sprachkanaele (WP3a) - ihr Ende beendet nichts weiter.
+    for (const ch of [...this._audioChannels]) {
+      ch.onmessage = null;
+      ch.onclose = null;
+      try { ch.close(); } catch {}
     }
-    const Pcp = pcpModule();
-    if (this._pcpMappings && Pcp?.map) {
-      // Freigabe am Router loeschen - das native Modul nimmt dafuer dasselbe
-      // Protokoll (PCP, NAT-PMP oder UPnP), mit dem sie angelegt wurde.
-      Promise.resolve(Pcp.map(this._pcpMappings, 0)).catch(() => {});
-    }
-    this._pcpMappings = null;
+    this._audioChannels.clear();
+    this.audioChannel = null;
+    this.onLateCandidates = null;
     // Review-Fund 2026-09-27 ("H3"): onclose VOR dem close()-Aufruf selbst
     // nullen - dataChannel.close() loest onclose in der Regel asynchron aus,
     // was ohne dies (bei einem der 'failed'/'disconnected'-Pfade unten, die
@@ -903,9 +970,17 @@ export class WebRTCManager {
         const addr = String(c.address || c.ip || '');
         return [c.candidateType, c.protocol, addr.includes(':') ? 'IPv6' : 'IPv4', c.networkType || '-'].join('/');
       };
-      console.log('[WebRTC] Pfad (' + label + '): lokal', describe(byId.get(pair.localCandidateId)),
-        '-> entfernt', describe(byId.get(pair.remoteCandidateId)),
+      const local = byId.get(pair.localCandidateId);
+      const remote = byId.get(pair.remoteCandidateId);
+      console.log('[WebRTC] Pfad (' + label + '): lokal', describe(local),
+        '-> entfernt', describe(remote),
         '| Bytes gesendet/empfangen:', pair.bytesSent, '/', pair.bytesReceived);
+      // Diagnose (ConnectionStats.js, WP0): je Verbindung bzw. ICE-Neustart
+      // einmal die Pfad-Klasse zaehlen - nur der Typ, nie die Adresse.
+      if (!this._pathCounted) {
+        this._pathCounted = true;
+        ConnectionStats.bump('path', ConnectionStats.classifyPath(local, remote));
+      }
     } catch (e) {
       console.log('[WebRTC] Pfad-Statistik nicht verfuegbar:', e?.message || e);
     }
@@ -920,6 +995,7 @@ export class WebRTCManager {
   _beginIceRestart() {
     this._iceRestartUntil = Date.now() + ICE_RESTART_GRACE_MS;
     this._pathLogged = false;
+    this._pathCounted = false;
   }
 
   // true, solange ein ICE-Neustart laeuft - plant dann selbst eine erneute
@@ -944,16 +1020,22 @@ export class WebRTCManager {
     return true;
   }
 
-  async createIceRestartOffer() {
+  // Auch beim Neustart fragt die neue Kandidatenrunde den Router (im neuen
+  // Netz) um eine Portfreigabe - vorher ging ein Pfad, der von einer Freigabe
+  // abhing, beim Netzwechsel verloren (Luecke L2). Kurz gewartet, Spaeteres
+  // wird unter negotiationId nachgereicht.
+  async createIceRestartOffer({ negotiationId = null } = {}) {
     if (this._closed || !this.pc || this.transport !== 'direct') throw new Error('keine Direktverbindung');
     this._beginIceRestart();
+    this._restartNegotiationId = negotiationId;
+    if (negotiationId) this._expectRemote(negotiationId);
     const offer = await this.pc.createOffer({ iceRestart: true });
     await this.pc.setLocalDescription(offer);
     await this._waitForFreshICE();
-    return this._plainLocalDescription();
+    return this._withPortMappings(this._plainLocalDescription(), { maxWaitMs: MAPPING_WAIT.restart, negotiationId });
   }
 
-  async acceptIceRestartOffer(desc) {
+  async acceptIceRestartOffer(desc, { negotiationId = null } = {}) {
     if (this._closed || !this.pc || this.transport !== 'direct') throw new Error('keine Direktverbindung');
     this._beginIceRestart();
     // Beide Seiten haben gleichzeitig neu gestartet: eigenes Angebot
@@ -962,16 +1044,18 @@ export class WebRTCManager {
       await this.pc.setLocalDescription({ type: 'rollback', sdp: '' });
     }
     await this.pc.setRemoteDescription(new RTCSessionDescription(desc));
+    this._remoteApplied(negotiationId);
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
     await this._waitForFreshICE();
-    return this._plainLocalDescription();
+    return this._withPortMappings(this._plainLocalDescription(), { maxWaitMs: MAPPING_WAIT.restart, negotiationId });
   }
 
   async acceptIceRestartAnswer(desc) {
     if (this._closed || !this.pc) return false;
     if (this.pc.signalingState && this.pc.signalingState !== 'have-local-offer') return false;
     await this.pc.setRemoteDescription(new RTCSessionDescription(desc));
+    this._remoteApplied(this._restartNegotiationId);
     return true;
   }
 
@@ -1650,9 +1734,9 @@ export class WebRTCManager {
       // Relay-Kandidaten - robuster als sich auf ein moeglicherweise
       // fehlendes .type-Feld auf react-native-webrtc's Kandidaten-Objekt zu
       // verlassen. Seit der Nur-P2P-Umstellung (2026-09-29, FORCE_RELAY_ONLY
-      // = false) startet schon der erste Kandidat den 1,5s-Timer - in dieser
-      // Zeit kommt der per STUN ermittelte oeffentliche Kandidat
-      // ueblicherweise noch mit in die SDP.
+      // = false) startet schon der erste Kandidat den 1,5s-Timer. Seit dem
+      // STUN-Ausstieg gibt es nur noch Host-Kandidaten - das Sammeln ist dann
+      // meist sofort "complete" (onicegatheringstatechange oben).
       this.pc.onicecandidate = (event) => {
         const c = event?.candidate?.candidate;
         if (c && !firstCandidateTimer && (!FORCE_RELAY_ONLY || / typ relay /.test(c))) {

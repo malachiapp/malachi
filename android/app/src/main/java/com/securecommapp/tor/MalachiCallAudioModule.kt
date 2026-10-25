@@ -41,6 +41,12 @@ import java.util.concurrent.TimeUnit
  * Wiedergabe-Warteschlange wird begrenzt, damit sich bei Tor-Schwankungen
  * keine immer groessere Verzoegerung aufbaut (lieber kurz etwas verwerfen).
  *
+ * Diagnose (STUN_AUSSTIEG_PLAN.md, WP0): stop() liefert drei Zaehler des
+ * Anrufs - empfangene Pakete, wegen Ueberlauf verworfene Pakete und
+ * Leerlaeufe (Warteschlange leer, obwohl schon Sprache lief). Nur Zahlen,
+ * nichts wird gespeichert oder geloggt; JS zaehlt sie lokal
+ * (ConnectionStats.js).
+ *
  * Braucht Android 10+ (Opus-Encoder im System).
  */
 class MalachiCallAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ctx) {
@@ -67,6 +73,10 @@ class MalachiCallAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJav
     private var ns: NoiseSuppressor? = null
     private var previousAudioMode = AudioManager.MODE_NORMAL
     private val playQueue = LinkedBlockingQueue<ByteArray>(200)
+    // Diagnose-Zaehler je Anruf (siehe Klassenkommentar), bei start() geleert.
+    @Volatile private var statFrames = 0
+    @Volatile private var statDropped = 0
+    @Volatile private var statUnderruns = 0
 
     override fun getName() = "MalachiCallAudio"
 
@@ -131,6 +141,7 @@ class MalachiCallAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJav
             am.mode = AudioManager.MODE_IN_COMMUNICATION
 
             playQueue.clear()
+            statFrames = 0; statDropped = 0; statUnderruns = 0
             muted = false
             running = true
             rec.startRecording()
@@ -187,10 +198,14 @@ class MalachiCallAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJav
         val dec = decoder ?: return
         val info = MediaCodec.BufferInfo()
         var pts = 0L
+        var playing = false
         try {
             while (running) {
                 val frame = playQueue.poll(100, TimeUnit.MILLISECONDS)
+                // Leerlauf: es lief schon Sprache, jetzt kam 100 ms lang nichts.
+                if (frame == null && playing && running) { statUnderruns++; playing = false }
                 if (frame != null) {
+                    playing = true
                     val inIdx = dec.dequeueInputBuffer(10_000)
                     if (inIdx >= 0) {
                         dec.getInputBuffer(inIdx)?.apply { clear(); put(frame) }
@@ -240,8 +255,9 @@ class MalachiCallAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJav
         if (!running) return
         val bytes = try { Base64.decode(base64, Base64.NO_WRAP) } catch (_: Exception) { return }
         if (bytes.isEmpty() || bytes.size > 1500) return
+        statFrames++
         // Verzoegerung begrenzen: staut sich mehr als ~400 ms an, aeltestes verwerfen.
-        while (playQueue.size >= MAX_PLAY_QUEUE) playQueue.poll()
+        while (playQueue.size >= MAX_PLAY_QUEUE) { if (playQueue.poll() != null) statDropped++ }
         playQueue.offer(bytes)
     }
 
@@ -249,15 +265,23 @@ class MalachiCallAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJav
 
     @ReactMethod
     fun setSpeaker(on: Boolean) {
-        val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        @Suppress("DEPRECATION")
-        am.isSpeakerphoneOn = on
+        // Gemeinsamer Weg mit CallBridgeModule.setSpeaker (Telecom bzw. AudioManager).
+        com.securecommapp.calling.AudioRouteHelper.setSpeaker(reactApplicationContext, on)
     }
 
+    /** Beendet den Kanal-Anruf und liefert die Diagnose-Zaehler (nur Zahlen). */
     @ReactMethod
     fun stop(promise: Promise) {
+        val wasRunning = running
         releaseAll()
-        promise.resolve(true)
+        promise.resolve(Arguments.createMap().apply {
+            putBoolean("stopped", true)
+            if (wasRunning) {
+                putInt("frames", statFrames)
+                putInt("dropped", statDropped)
+                putInt("underruns", statUnderruns)
+            }
+        })
     }
 
     private fun releaseAll() {

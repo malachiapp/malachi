@@ -289,10 +289,8 @@ describe('Vollversion: nur Pro startet, jeder nimmt teil', () => {
       }
     }
     expect(global.__tracks.find((t) => t.track.dev === 'bob').constraints).toEqual({ audio: true, video: false });
-    // Kein TURN/Relay-Server in der Konfiguration (nur STUN in Stufe 1).
-    for (const p of global.__fakePcs) {
-      for (const s of p.config.iceServers || []) expect(String(s.urls)).toMatch(/^stuns?:/);
-    }
+    // Kein TURN/Relay-Server und seit dem STUN-Ausstieg auch kein STUN.
+    for (const p of global.__fakePcs) expect(p.config.iceServers).toEqual([]);
     // Dave (kein Mitglied) bekam nichts.
     expect(gcallSent('bob', 'dave')).toHaveLength(0);
     expect(snap(D.dave).state).toBe('idle');

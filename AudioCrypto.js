@@ -5,6 +5,7 @@
  */
 import { encryptMsg, secureRandomToken } from './MessageCrypto';
 import { newFileKey, fileKeyToB64, sealMediaChunk } from './MediaKey';
+import { sanitizeWave } from './VoiceWave';
 
 const CHUNK_SIZE = 64 * 1024; // 64KB
 
@@ -47,9 +48,11 @@ export async function sendEncryptedAudio(audioBase64, sharedSecret, sendFn, dura
     }
 
     // End-Marker
+    const wave = sanitizeWave(meta?.wave);   // Wellenform (VoiceWave.js), nur im verschluesselten End-Marker
     const endObj = {
       type: 'audio_end', audioId, total, durationMs, viewOnce,
       ...(meta?.msgId ? { msgId: String(meta.msgId) } : {}),
+      ...(wave ? { wave } : {}),
       ...(meta?.secret ? { secret: true } : {}),   // Audit P1, siehe ImageCrypto.js
     };
     if (fk) {
@@ -116,8 +119,9 @@ export function processAudioChunk(msg) {
     if (!buf || buf.received < buf.total) return null;
     const fullBase64 = buf.chunks.join('');
     audioBuffers.delete(msg.audioId);
+    const wave = sanitizeWave(msg.wave);
     return { audioId: msg.audioId, base64: fullBase64, durationMs: msg.durationMs, viewOnce: !!msg.viewOnce,
-      ...(msg.msgId ? { msgId: String(msg.msgId) } : {}) };
+      ...(msg.msgId ? { msgId: String(msg.msgId) } : {}), ...(wave ? { wave } : {}) };
   }
   return null;
 }

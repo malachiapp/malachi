@@ -36,25 +36,16 @@ function isFreshTimestamp(ts: number): boolean {
   return true;
 }
 
-// LAN-IP statt Domain: Port 3478 ist nie ueber die FritzBox nach aussen
-// weitergeleitet worden (anders als der Relay-Port 3333) - die Domain wuerde
-// Produktions-Fund (Cross-Network-Diagnose) - siehe native WebRTCManager.js
-// fuer die ausfuehrliche Begruendung: eine private LAN-IP war fuer jeden
-// Client ausserhalb des Heimnetzes unerreichbar, ICE blieb bei (damals)
-// erzwungenem Relay-only (FORCE_RELAY_ONLY) ohne jede Fehlermeldung fuer
-// immer bei "checking" haengen. coturn laeuft bereits auf demselben Host
-// wie der Relay (siehe coturn-setup.sh) - jetzt dieselbe Domain.
-// Adresse zentral in AppConfig.ts (Umzug auf neuen Server = eine Zeile).
-import { STUN_URL } from './AppConfig';
-
 // Nur direktes P2P (Produktentscheidung 2026-09-29) - siehe ausfuehrliche
-// Begruendung in WebRTCManager.js (nativ): keine TURN-Server mehr, Inhalte
-// gehen ausschliesslich direkt Geraet <-> Geraet; STUN liefert nur die eigene
-// oeffentliche Adresse, ueber ihn fliessen keine Daten.
+// Begruendung in WebRTCManager.js (nativ): keine TURN-Server, Inhalte gehen
+// ausschliesslich direkt Geraet <-> Geraet. Seit dem STUN-Ausstieg
+// (STUN_AUSSTIEG_PLAN.md) auch kein STUN mehr - der eigene coturn wird
+// abgeschaltet. Die Web-App ist offline; kommt sie zurueck, gilt dieselbe
+// Regel wie nativ: keine ICE-Server (noStun.static.test.js).
 const FORCE_RELAY_ONLY = false;
 
 async function pcConfig(): Promise<RTCConfiguration> {
-  return { iceServers: [{ urls: STUN_URL }], iceTransportPolicy: 'all' };
+  return { iceServers: [], iceTransportPolicy: 'all' };
 }
 export const pcConfigForCalls = pcConfig;
 

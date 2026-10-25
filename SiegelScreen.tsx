@@ -30,6 +30,7 @@ import * as V from './SiegelVault';
 import { INVITE_PREFIX, ACK_PREFIX, MESSAGE_PREFIX, splitForQr, QrAssembler, siegelKind, isSiegelMedia, MAX_MEDIA_BYTES } from './SiegelCrypto';
 import * as SF from './SiegelFiles';
 import { claimAudio, releaseAudio } from './AppFocus';
+import { getVoicePlayer } from './SecureAudio';
 import { getTheme, subscribeTheme } from './Themes';
 import { forceScreenProtection } from './ScreenSecurity';
 import { t } from './i18n';
@@ -37,15 +38,17 @@ import { t } from './i18n';
 // Native Bibliotheken fuer Anhaenge erst bei Bedarf laden.
 const imagePicker = () => require('react-native-image-picker');
 const docPicker = () => require('@react-native-documents/picker');
-// Eigene Instanz (der native Spieler/Rekorder ist trotzdem nur einer, siehe Design).
-let audioLib = null;
-function audio() {
-  if (!audioLib) {
-    const lib = require('react-native-audio-recorder-player');
-    audioLib = { lib, player: new lib.default() };
-  }
-  return audioLib;
-}
+// Sprachnachrichten nur im Arbeitsspeicher (SecureAudio.js) - Zero Trace auch
+// beim Aufnehmen und Abspielen. Nur ohne das native Modul (Rueckfallweg) gibt
+// es noch kurz eine Datei, dann im Siegel-Cache-Ordner.
+const voice = () => getVoicePlayer();
+const SIEGEL_TEMP = {
+  recordPath: () => SF.tempPath('aufnahme.mp4'),
+  playPath: async () => 'wiedergabe.mp4',
+  write: (name, b64) => SF.writeTemp(name, b64),
+  read: (path) => SF.readB64(path),
+  remove: (path) => SF.removeTemp(path),
+};
 const MAX_RECORD_MS = 5 * 60 * 1000;
 // Groesste Siegel-Datei, die geoeffnet wird (16 MB Inhalt + Auffuellung + Kopf).
 const MAX_SIEGEL_FILE = Math.ceil(MAX_MEDIA_BYTES * 1.07) + 70000;
@@ -262,14 +265,12 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
   const recTimer = useRef(null);
   const recStart = useRef(0);
 
-  // Wiedergabe beenden und die (entschluesselte) Cache-Datei sofort loeschen.
+  // Wiedergabe beenden (Rueckfallweg: Cache-Datei sofort loeschen).
   const stopPlayback = () => {
     const p = playPath.current;
     playPath.current = null;
     if (p) {
-      const { player } = audio();
-      player.removePlayBackListener();
-      player.stopPlayer().catch(() => {}).finally(() => SF.removeTemp(p));
+      voice().stop().catch(() => {});
       releaseAudio('siegel');
     }
     setPlaying(false);
@@ -277,13 +278,13 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
   // Audio-Fokus (AppFocus.js): laeuft im Chat gerade eine Sprachnachricht, wird
   // sie beendet, bevor Siegel abspielt/aufnimmt - und umgekehrt.
   const stopSiegelAudio = () => { stopPlayback(); cancelRecording(); };
-  // Laufende Aufnahme verwerfen (Datei geloescht).
+  // Laufende Aufnahme verwerfen (nichts bleibt zurueck).
   const cancelRecording = () => {
     if (recTimer.current) { clearInterval(recTimer.current); recTimer.current = null; }
     const p = recPath.current;
     recPath.current = null;
     if (p) {
-      audio().player.stopRecorder().catch(() => {}).finally(() => SF.removeTemp(p));
+      voice().cancelRecording().catch(() => {});
       releaseAudio('siegel');
     }
     setRecSecs(null);
@@ -648,18 +649,9 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
     mediaTarget.current = to || current?.id || null;
     if (!(await V.holdOpen(micAllowed))) { setError('Ohne Mikrofon keine Sprachnachricht.'); return; }
     await claimAudio('siegel', stopSiegelAudio);
-    const { lib, player } = audio();
-    const p = await SF.tempPath('aufnahme.mp4');
-    recPath.current = p;
+    recPath.current = 'rec_' + Date.now();
     try {
-      await player.startRecorder(p, {
-        AudioSourceAndroid: lib.AudioSourceAndroidType?.MIC,
-        OutputFormatAndroid: lib.OutputFormatAndroidType?.MPEG_4,
-        AudioEncoderAndroid: lib.AudioEncoderAndroidType?.AAC,
-        AudioSamplingRateAndroid: 16000,
-        AudioEncodingBitRateAndroid: 32000,
-        AudioChannelsAndroid: 1,
-      });
+      await voice().startRecording(null, SIEGEL_TEMP);
     } catch (e) {
       cancelRecording();
       throw e;
@@ -674,42 +666,40 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
     }, 1000);
   }, true);
 
-  // Aufnahme beenden: Datei lesen, sofort loeschen, verschluesseln.
+  // Aufnahme beenden und verschluesseln (Inhalt nur im Arbeitsspeicher).
   const stopRecordingAndSeal = () => run(async () => {
     const p = recPath.current;
     if (!p) return;
     recPath.current = null;
     if (recTimer.current) { clearInterval(recTimer.current); recTimer.current = null; }
-    const ms = Date.now() - recStart.current;
+    let ms = Date.now() - recStart.current;
     setRecSecs(null);
     let b64 = '';
     try {
-      await audio().player.stopRecorder();
-      releaseAudio('siegel');
-      b64 = await SF.readB64(p);
+      const rec = await voice().stopRecording();
+      b64 = rec.base64 || '';
+      if (rec.durationMs) ms = rec.durationMs;
     } finally {
-      SF.removeTemp(p);
+      releaseAudio('siegel');
     }
     if (ms < 500 || !b64) return;                  // versehentlich angetippt
     await sendMedia({ kind: 'audio', mime: 'audio/mp4', name: 'Sprachnachricht.mp4', bytes: SF.b64ToBytes(b64) });
   }, true);
 
-  // Sprachnachricht abspielen: nur fuer die Dauer der Wiedergabe als
-  // Cache-Datei (der native Spieler braucht einen Pfad).
+  // Sprachnachricht abspielen - aus dem Arbeitsspeicher (SecureAudio.js).
   const togglePlay = () => run(async () => {
     if (playPath.current) { stopPlayback(); return; }
     if (media?.kind !== 'audio') return;
     await claimAudio('siegel', stopSiegelAudio);
-    const { player } = audio();
-    const p = await SF.writeTemp('wiedergabe.mp4', media.b64);
-    playPath.current = p;
+    const token = 'play_' + Date.now();
+    playPath.current = token;
     setPlaying(true);
-    player.addPlayBackListener((e) => {
-      if (e?.isFinished || (e?.duration > 0 && e.currentPosition >= e.duration)) { stopPlayback(); return; }
-      V.touch();                                   // waehrend der Wiedergabe offen halten
-    });
     try {
-      await player.startPlayer(p);
+      await voice().play(media.b64, (e) => {
+        if (playPath.current !== token) return;
+        if (e.finished) { stopPlayback(); return; }
+        V.touch();                                 // waehrend der Wiedergabe offen halten
+      }, { tempHelpers: SIEGEL_TEMP });
     } catch (e) {
       stopPlayback();
       throw e;

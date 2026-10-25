@@ -23,6 +23,10 @@ const launchImageLibrary = (...args) => withAutoLockSuspended(() => rawLaunchIma
 import { padToBlock, getPortMappingStatus } from './WebRTCManager';
 import { encryptMsg, secureRandomToken } from './MessageCrypto';
 import CallManager, { CallState } from './CallManager';
+import { isCallSpeakerSupported, onCallAudioRoute, AUDIO_ROUTE_SPEAKER } from './CallAudioRoute';
+import { deriveContactId as deriveSharedContactId } from './PairingIds';
+import { sanitizeWave, encodeWave, levelsFor, parseWave, createLevelFeed, effectiveWaveStyle, subscribeWaveStyle, loadWaveStyle, waveStyleSetting, setWaveStyle, resetWaveStyleAfterWipe, fallbackLevels } from './VoiceWave';
+import VoiceWaveView, { LiveRecordingWave } from './VoiceWaveView';
 import { RTCView } from 'react-native-webrtc';
 // @react-native-community/audio-toolkit ersetzt (per Live-Test entdeckt:
 // nach dem RN-0.86-Upgrade landete dessen natives Modul nachweislich nie im
@@ -33,12 +37,13 @@ import { RTCView } from 'react-native-webrtc';
 // Architektur) - inkompatibel mit diesem Projekt (newArchEnabled=false,
 // siehe react-native-webrtc/eigene native Module, die weiterhin auf der
 // alten Architektur basieren).
-import AudioRecorderPlayer, {
-  AudioSourceAndroidType, OutputFormatAndroidType, AudioEncoderAndroidType,
-} from 'react-native-audio-recorder-player';
-const audioRecorderPlayer = new AudioRecorderPlayer();
+// Seit 2026-10-25 nur noch als Rueckfallweg in SecureAudio.js: Aufnahme und
+// Wiedergabe laufen nativ im Arbeitsspeicher, ohne Klartext-Datei im Cache.
+import { getVoicePlayer } from './SecureAudio';
+const voicePlayer = getVoicePlayer();
 import EncryptedStorage from 'react-native-encrypted-storage';
 import RNFS from 'react-native-fs';
+import * as PinVault from './PinVault';
 import NetInfo from '@react-native-community/netinfo';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import Clipboard from '@react-native-clipboard/clipboard';
@@ -46,23 +51,26 @@ import { copySensitive } from './SecureClipboard';
 import { Camera } from 'react-native-camera-kit';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// AsyncStorage-kompatibler Wrapper um EncryptedStorage
+// AsyncStorage-kompatibler Wrapper um EncryptedStorage. Chatverlaeufe
+// ('chat_<id>', 'gchat_<id>') laufen ueber den PIN-Tresor (PinVault.js):
+// zusaetzlich mit dem nur nach PIN/Fingerabdruck verfuegbaren Schluessel
+// verschluesselt; gesperrt wirft das Lesen (VAULT_LOCKED).
 const AsyncStorage = {
-  getItem: (key) => EncryptedStorage.getItem(key),
-  setItem: (key, value) => EncryptedStorage.setItem(key, value),
-  removeItem: (key) => EncryptedStorage.removeItem(key),
+  getItem: (key) => (PinVault.isVaultKey(key) ? PinVault.getItem(key) : EncryptedStorage.getItem(key)),
+  setItem: (key, value) => (PinVault.isVaultKey(key) ? PinVault.setItem(key, value) : EncryptedStorage.setItem(key, value)),
+  removeItem: (key) => (PinVault.isVaultKey(key) ? PinVault.removeItem(key) : EncryptedStorage.removeItem(key)),
   multiGet: async (keys) => {
     const results = await Promise.all(keys.map(async (key) => {
-      const value = await EncryptedStorage.getItem(key);
+      const value = await AsyncStorage.getItem(key);
       return [key, value];
     }));
     return results;
   },
   multiSet: async (pairs) => {
-    await Promise.all(pairs.map(([key, value]) => EncryptedStorage.setItem(key, value)));
+    await Promise.all(pairs.map(([key, value]) => AsyncStorage.setItem(key, value)));
   },
   multiRemove: async (keys) => {
-    await Promise.all(keys.map(key => EncryptedStorage.removeItem(key)));
+    await Promise.all(keys.map(key => AsyncStorage.removeItem(key)));
   },
 };
 
@@ -88,7 +96,8 @@ import { NativeModules, Linking, Share, AppState, PermissionsAndroid, Platform, 
 const { MalachiService, MalachiNotification } = NativeModules;
 import ReactNativeBiometrics from 'react-native-biometrics';
 import RTCStore, { isEphemeral } from './RTCStore';
-import { externalizeEntries, sweepScope, mediaData, removeMedia, removeScope as removeMediaScope, wipeAllMedia } from './MediaVault';
+import { persistChatHistory, mediaData, removeMedia, removeScope as removeMediaScope, wipeAllMedia } from './MediaVault';
+import { loadOwnAvatar, subscribeOwnAvatar, setOwnAvatarFromPicker, removeOwnAvatar, resetOwnAvatarAfterWipe, pendingLegacyAvatarPath } from './OwnAvatar';
 import {
   ensureTorRunning, getTorState, onTorState, loadTorSettings, saveTorSettings, runSelfTest, refreshOnionLookups,
   restartTor, isTorAvailable, parseCustomBridges, TOR_BRIDGE_MODES, DEFAULT_TOR_SETTINGS,
@@ -96,9 +105,15 @@ import {
   wipeTorForReset,
 } from './TorTransport';
 import {
-  MODE_FAST, MODE_PRIVATE, MODE_TOR_ONLY, CONNECTION_MODES, getConnectionMode, loadConnectionMode,
+  MODE_DIRECT, MODE_TOR_ONLY, CONNECTION_MODES, getConnectionMode, loadConnectionMode,
   setConnectionMode, onConnectionModeChange, isTorOnlyMode,
+  shouldShowStunRemovalNotice, markStunRemovalNoticeShown,
 } from './ConnectionMode';
+import {
+  loadConnectionStats, getConnectionStats, onConnectionStatsChange, resetConnectionStats,
+  resetConnectionStatsAfterWipe, startConnectionTimeSampler, statsAsText, statsSummary,
+  setConnectionStatsWriteGuard,
+} from './ConnectionStats';
 import { demoteAllDirectToTor } from './DirectUpgrade';
 import {
   runIncomingCycle, runOutgoingCycle, connectAllNow,
@@ -130,7 +145,7 @@ import { paymentUri, paymentAmount, orderPaymentMethod, PAYMENT_METHODS, CONSENT
 import { PRO_PRICE_EUR, SHOP_ONION } from './AppConfig';
 // Google-Play-Variante (Distribution.js, PLAY_STORE.md): eigene Vollversion-
 // Seite mit Kauf ueber Google Play - ohne Shop, Kryptowaehrung und Geraetecode.
-import { isPlay } from './Distribution';
+import { isPlay, getDistribution, getVersionName } from './Distribution';
 import PlayProScreen from './PlayProScreen';
 // Gruppenchats (Fan-out ueber die 1:1-Kanaele, GROUP_CHAT_DESIGN.md) -
 // Obergrenze GROUP_MAX_MEMBERS steht jetzt in GroupMessaging.js.
@@ -304,11 +319,17 @@ async function generateContactId() {
 // nicht mehr in Benutzung sein koennen.
 const PLAINTEXT_TEMP_RE = /^(play_|malachi_|rn_image_picker_lib_temp_)/;
 async function cleanupSharedFileCache() {
+  // Zuerst ein altes Profilbild uebernehmen (OwnAvatar.js): frueher stand
+  // dort der Pfad einer Cache-Kopie der Bildauswahl - genau die Dateien, die
+  // dieser Durchlauf loescht.
+  await loadOwnAvatar().catch(() => {});
+  const keepAvatar = await pendingLegacyAvatarPath().catch(() => null);
   try {
     const files = await RNFS.readDir(RNFS.CachesDirectoryPath);
     const now = Date.now();
     for (const f of files) {
       if (!f.isFile()) continue;
+      if (keepAvatar && f.path === keepAvatar) continue;   // Uebernahme scheiterte - nicht verlieren
       const isShareCopy = f.name.startsWith('malachi_share_') || /^\d{13}_/.test(f.name);
       const isPlainTemp = !isShareCopy && PLAINTEXT_TEMP_RE.test(f.name);
       if (!isShareCopy && !isPlainTemp) continue;
@@ -611,10 +632,11 @@ function AppInner() {
     };
   }, []);
 
+  // Eigenes Profilbild (OwnAvatar.js): verschluesselt abgelegt, Altbestand
+  // wird uebernommen; Aenderungen aus den Einstellungen kommen per Abo.
   React.useEffect(() => {
-    AsyncStorage.getItem('avatar').then(uri => {
-      if (uri) setAvatar(uri);
-    });
+    loadOwnAvatar().then(setAvatar).catch(() => {});
+    return subscribeOwnAvatar(setAvatar);
   }, []);
 
   // Settings laden
@@ -698,6 +720,13 @@ function AppInner() {
     refreshLicense().then(() => resumePendingPurchase()).catch(() => {});
     // Bildschirmschutz (ScreenSecurity.js): Standard an; "aus" nur mit Vollversion.
     loadScreenProtection().catch(() => {});
+    loadWaveStyle().catch(() => {});   // Sprachnachrichten-Stil (VoiceWave.js)
+    // Verbindungs-Diagnose (ConnectionStats.js, nur lokale Zaehler): laden und
+    // je Minute den Zeitanteil direkt/Tor zaehlen (ohne Zuordnung).
+    loadConnectionStats().catch(() => {});
+    // Waehrend eines Anrufs nichts speichern (Anrufe hinterlassen keine Spuren).
+    setConnectionStatsWriteGuard(() => !!RTCStore.activeCallContactId || isGroupCallBusy());
+    startConnectionTimeSampler(() => RTCStore.connections);
   }, []);
 
   // In-App-Updates der Web-Version (AppUpdater.js): prueft ueber Tor
@@ -967,7 +996,7 @@ function AppInner() {
   // verschluesselter Relay-Fallback, identisches Muster zu delete_chat -
   // siehe dortige Kommentare fuer die Frische-/Replay-Pruefung ueber ts).
   const clearChatMessages = (chatId) => {
-    EncryptedStorage.removeItem('chat_' + chatId).catch(() => {});
+    PinVault.removeItem('chat_' + chatId).catch(() => {});
     removeMediaScope(chatId).catch(() => {});   // Audit G1: Medien-Dateien mit
     setContacts(c => c.map(x => x.id === chatId ? { ...x, last: '', unread: 0 } : x));
     updateContacts(cs => cs.map(x => x.id === chatId ? { ...x, last: '', unread: 0 } : x)).catch(() => {});
@@ -1056,6 +1085,8 @@ function AppInner() {
   const chatRef = useRef(chat);
   chatRef.current = chat;
   const lockNow = () => {
+    // PIN-Tresor: Schluessel sofort aus dem Arbeitsspeicher (PinVault.js).
+    PinVault.lock();
     const cur = screenRef.current;
     if (cur === 'lock' || cur === 'setup') return;
     resumeTargetRef.current = { screen: cur, chat: chatRef.current };
@@ -1067,13 +1098,17 @@ function AppInner() {
         if (!backgroundSinceRef.current) {
           backgroundSinceRef.current = Date.now();
           backgroundGraceRef.current = isAutoLockSuspended() ? AUTO_LOCK_DURING_PICKER_MS : AUTO_LOCK_AFTER_MS;
+          // Der Tresorschluessel bleibt nicht im Speicher, solange die App
+          // im Hintergrund liegt - nach derselben Frist wie der Sperrbildschirm.
+          // (Waehrend eines Anrufs auch: der braucht keine Verlaeufe.)
+          PinVault.scheduleLock(backgroundGraceRef.current);
         }
         return;
       }
       if (next !== 'active') return;
       const since = backgroundSinceRef.current;
       backgroundSinceRef.current = 0;
-      if (!since || Date.now() - since < backgroundGraceRef.current) return;
+      if (!since || Date.now() - since < backgroundGraceRef.current) { PinVault.cancelScheduledLock(); return; }
       if (callManagerRef.current || screenRef.current === 'call' || screenRef.current === 'groupCall') { lockPendingRef.current = true; return; }
       lockNow();
     });
@@ -1090,6 +1125,19 @@ function AppInner() {
     }
     nav('chat', contact);
   };
+  // STUN-Ausstieg (ConnectionMode.js): wer bisher "Schnell (mit STUN)" nutzte
+  // (gespeichert oder als frueherer Standard), erfaehrt einmal nach dem
+  // Entsperren, dass Malachi keine STUN-Dienste mehr fragt.
+  const stunNoticeCheckedRef = useRef(false);
+  React.useEffect(() => {
+    if (screen !== 'home' || stunNoticeCheckedRef.current) return;
+    stunNoticeCheckedRef.current = true;
+    shouldShowStunRemovalNotice().then((show) => {
+      if (!show) return;
+      markStunRemovalNoticeShown();
+      Alert.alert(t('connMode.migrated.title'), t('connMode.migrated.body'));
+    }).catch(() => {});
+  }, [screen]);
   const RESUMABLE_SCREENS = ['home', 'settings', 'connect', 'groups', 'groupCreate', 'groupDetail', 'groupChat'];
   const onUnlocked = () => {
     const target = resumeTargetRef.current;
@@ -1210,6 +1258,7 @@ function AppInner() {
     setChat(null); setContacts([]); setGroups([]); setActiveGroupId(null); setCreatePreselect(null);
     setUsername(''); setAvatar(null); setCustomBgUri(null); setBgColor('#FAFAF8'); setFontSize(14);
     setDeepLinkToken(null);
+    resetOwnAvatarAfterWipe();
   };
 
   const topStripColor = screen === 'lock' || screen === 'setup' ? getLockTheme().bg
@@ -1355,6 +1404,9 @@ function SetupScreen({ onDone }) {
     if (!name.trim()) return;
     await AsyncStorage.setItem('username', name.trim());
     await AsyncStorage.setItem('setup_done', 'true');
+    // Neu eingerichtet: der Hinweis zum STUN-Ausstieg (ConnectionMode.js)
+    // betrifft nur Apps, die schon vorher liefen.
+    await markStunRemovalNoticeShown({ fresh: true });
     const myId = await generateContactId();
     await AsyncStorage.setItem('my_id', myId);
     onDone(name.trim());
@@ -1461,12 +1513,17 @@ async function performWipe() {
   const siegelOk = await withTimeout(siegelWipe().then(() => true, () => false), 5000);
   if (siegelOk !== true) await withTimeout(NativeModules.MalachiSiegelKey?.destroyKey?.() ?? Promise.resolve(), 3000);
 
+  // PIN-Tresor: Datensatz und Chip-Schluessel vernichten - damit sind alle
+  // damit verschluesselten Verlaeufe sofort unlesbar (auch Reste, die das
+  // Loeschen unten nicht erwischen sollte). Mit Zeitgrenze, wie oben.
+  await withTimeout(PinVault.wipe(), 3000);
+
   // Kompletter Wipe.
   // Vorher wurden diese Schlüssel nur aus EncryptedStorage entfernt -
   // sie liegen aber in AsyncStorage. Der "Wipe" hat damit faktisch
   // nichts gelöscht: Kontakte, PIN, Name und ID blieben erhalten.
   const asyncKeys = [
-    'contacts', 'my_id', 'username', 'avatar',
+    'contacts', 'my_id', 'username', 'avatar', 'avatar_ref',
     'app_pin', 'pin_length', 'bio_enabled', 'setup_done',
     'settings',
   ];
@@ -1498,6 +1555,10 @@ async function performWipe() {
   resetLicenseStateAfterWipe();
   // Bildschirmschutz wieder an (die Einstellung lag im geloeschten Speicher).
   resetScreenProtectionAfterWipe();
+  resetWaveStyleAfterWipe();
+  // Verbindungs-Diagnose (ConnectionStats.js): Zaehler lagen im eben
+  // geleerten Speicher - auch den Arbeitsspeicher leeren.
+  resetConnectionStatsAfterWipe();
   // Ebenso das Design: zurueck auf das unveraenderte Standard-Design (die
   // gespeicherte Wahl lag in 'settings', ein eigenes Thema/Akzent im RAM
   // verriete die vorherige Einrichtung).
@@ -1560,7 +1621,42 @@ function withTimeout(promise, ms) {
   ]).finally(() => clearTimeout(t));
 }
 
-function LockScreen({ onUnlock, onWipe }) {
+// Platzhalter fuer "PIN vorhanden" mit PIN-Tresor - keine Ziffernfolge, kann
+// also nie mit einer Eingabe uebereinstimmen.
+const VAULT_PIN = '\u0000vault';
+
+// Nach jedem Entsperren mit PIN-Tresor: gesperrt abgelegte Empfangs-
+// Nachrichten nachholen und den Altbestand EINMAL verschluesseln (Verlaeufe,
+// Vorschautexte, Schluessel der Empfangs-Ablage). Jeder Verlauf wird nach dem
+// Verschluesseln zurueckgelesen und verglichen (PinVault.migrateKeys); bei
+// einer Abweichung bleibt er im Klartext und es wird beim naechsten
+// Entsperren erneut versucht - nie ein Datenverlust.
+let vaultMigration = null;
+export function afterVaultUnlock() {
+  if (!PinVault.isUnlocked()) return Promise.resolve();
+  RTCStore.ensureInboxRestored();
+  if (vaultMigration) return vaultMigration;
+  vaultMigration = (async () => {
+    if ((await EncryptedStorage.getItem('pin_vault_migrated').catch(() => null)) === '1') return;
+    const list = (raw) => { try { const v = JSON.parse(raw || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+    const contacts = list(await EncryptedStorage.getItem('contacts').catch(() => null));
+    const groups = list(await EncryptedStorage.getItem('groups').catch(() => null));
+    const keys = ['chat_default',
+      ...contacts.filter(c => c?.id).map(c => 'chat_' + c.id),
+      ...groups.filter(g => g?.groupId).map(g => 'gchat_' + g.groupId)];
+    const res = await PinVault.migrateKeys(keys);
+    // Vorschautexte werden beim Schreiben versiegelt (BackgroundSync).
+    await updateContacts(cs => cs);
+    await updateGroups(gs => gs);
+    await RTCStore.sealInboxIndex();
+    if (!res.failed) await EncryptedStorage.setItem('pin_vault_migrated', '1');
+    console.log('[PIN-Tresor] Altbestand verschluesselt:', res.migrated, 'Fehler:', res.failed);
+  })().catch((e) => console.warn('[PIN-Tresor] Umstellung:', e?.message || e))
+    .finally(() => { vaultMigration = null; });
+  return vaultMigration;
+}
+
+export function LockScreen({ onUnlock, onWipe }) {
   const [pin,        setPin]     = useState('');
   const [err,        setErr]     = useState('');
   const [att,        setAtt]     = useState(0);
@@ -1568,8 +1664,12 @@ function LockScreen({ onUnlock, onWipe }) {
   const [lockedUntil, setLockedUntil] = useState(0);
   const [pinLen,     setPinLen]  = useState(6);
   const [hasBio,     setHasBio]  = useState(false);
-  const [savedPin,   setSaved]   = useState(null);
-  const [duressPin,  setDuressPin] = useState(null);
+  const [savedPin,   setSaved]   = useState(null);   // Altbestand: PIN im Klartext; mit Tresor nur VAULT_PIN
+  const [duressPin,  setDuressPin] = useState(null); // nur Altbestand (mit Tresor: Pruefwert im Tresor)
+  const [busy,       setBusy]    = useState(false);
+  // PIN-Tresor (PinVault.js): 'present' | 'absent' | 'unknown' | null (laedt)
+  const vaultRef = useRef(null);
+  const bioEnrollRef = useRef(false);
   const [confirmPin, setConfirm] = useState('');
   const [step,       setStep]    = useState('enter'); // enter | setup | confirm
   // Vollversion: nur fuer die Texte der Sperrfristen ("noch X Versuche"
@@ -1586,14 +1686,22 @@ function LockScreen({ onUnlock, onWipe }) {
     Animated.timing(fade, { toValue:1, duration:600, useNativeDriver:true }).start();
     // Gespeicherten PIN laden
     const loadPin = async () => {
-      // PIN liegt im verschlüsselten Speicher (EncryptedStorage). Die
-      // "AsyncStorage" in dieser Datei ist nur ein Alias auf EncryptedStorage
-      // (siehe Definition oben) - eine Migration von einem echten separaten
-      // Klartext-Speicher gibt es hier nicht, daher entfällt dieser Schritt.
+      const l = await AsyncStorage.getItem('pin_length').catch(() => null);
+      if (l) setPinLen(parseInt(l));
+      // PIN-Tresor (seit 2026-10-25): die PIN selbst ist nirgends mehr
+      // gespeichert - geprueft wird, ob sie den Tresorschluessel oeffnet.
+      const vs = await PinVault.vaultState();
+      vaultRef.current = vs;
+      if (vs === 'present' || vs === 'unknown') {
+        // 'unknown' (Speicher gerade nicht lesbar): NIE die Einrichtung
+        // anbieten - die naechste Eingabe versucht es erneut.
+        setSaved(VAULT_PIN);
+        return;
+      }
+      // Altbestand (vor dem Update): PIN noch im verschluesselten Speicher.
+      // Beim ersten erfolgreichen Entsperren wird daraus der Tresor.
       let p = null;
       try { p = await EncryptedStorage.getItem('app_pin'); } catch {}
-      const l = await AsyncStorage.getItem('pin_length');
-      if (l) setPinLen(parseInt(l));
       if (!p) setStep('setup');
       else setSaved(p);
       try {
@@ -1628,7 +1736,45 @@ function LockScreen({ onUnlock, onWipe }) {
     });
   }, []);
 
+  const unlockDone = async () => {
+    setAtt(0);
+    setLockedUntil(0);
+    try {
+      await EncryptedStorage.removeItem('pin_attempts');
+      await EncryptedStorage.removeItem('pin_locked_until');
+    } catch {}
+    onUnlock();
+    afterVaultUnlock();
+    // Fingerabdruck wurde gewuenscht, aber war noch nicht an den Tresor
+    // gebunden: jetzt einrichten (Systemdialog).
+    if (bioEnrollRef.current && PinVault.isUnlocked()) {
+      bioEnrollRef.current = false;
+      PinVault.enrollBiometrics({ title: t('lock.bioEnrollTitle'), subtitle: t('lock.bioEnrollSub'), cancel: t('common.cancel') }).catch(() => {});
+    }
+  };
+
   const tryBiometrics = async () => {
+    if (busy) return;
+    // Mit PIN-Tresor oeffnet der Fingerabdruck den Tresorschluessel (Chip,
+    // CryptoObject) - ein reiner "Ja/Nein"-Dialog reicht nicht mehr.
+    if (vaultRef.current === 'present') {
+      if (!PinVault.hasBiometrics()) {
+        bioEnrollRef.current = true;
+        setErr(t('lock.bioSetupHint'));
+        return;
+      }
+      const r = await PinVault.unlockWithBiometrics({ title: t('lock.bioPrompt'), cancel: t('lock.enterPin') });
+      if (r.ok) { setPin(''); setErr(''); await unlockDone(); return; }
+      if (r.reason === 'invalidated') { bioEnrollRef.current = true; setErr(t('lock.bioInvalidated')); }
+      return;
+    }
+    // Altbestand: nach dem Update einmal mit PIN entsperren (daraus entsteht
+    // der Tresor), danach geht der Fingerabdruck wieder.
+    if (PinVault.isAvailable()) {
+      bioEnrollRef.current = true;
+      setErr(t('lock.bioAfterUpdate'));
+      return;
+    }
     try {
       const { success } = await rnBiometrics.simplePrompt({
         promptMessage: t('lock.bioPrompt'),
@@ -1646,7 +1792,7 @@ function LockScreen({ onUnlock, onWipe }) {
   ]).start();
 
   const tap = async (k) => {
-    if (locked) return; // Gesperrt – keine Eingabe möglich
+    if (locked || busy) return; // Gesperrt bzw. Pruefung laeuft – keine Eingabe
     if (k === '⌫') { setPin(p => p.slice(0,-1)); return; }
     if (pin.length >= pinLen) return;
     const next = pin + k;
@@ -1667,9 +1813,17 @@ function LockScreen({ onUnlock, onWipe }) {
       if (step === 'confirm') {
         // Bestätigung im Setup
         if (next === confirmPin) {
-          await EncryptedStorage.setItem('app_pin', next);
+          // PIN-Tresor anlegen - die PIN selbst wird nicht gespeichert. Nur
+          // wenn das scheitert (kein Sicherheitschip nutzbar), wie bisher.
+          setBusy(true);
+          setErr(t('lock.unlocking'));
+          let created = false;
+          try { await PinVault.create(next); created = true; } catch (e) { console.warn('[PIN-Tresor] Einrichten:', e?.message || e); }
+          setBusy(false);
+          if (!created) await EncryptedStorage.setItem('app_pin', next);
+          vaultRef.current = created ? 'present' : 'absent';
           await AsyncStorage.setItem('pin_length', String(pinLen));
-          setSaved(next);
+          setSaved(created ? VAULT_PIN : next);
           setStep('enter');
           setErr('');
           setPin('');
@@ -1697,23 +1851,63 @@ function LockScreen({ onUnlock, onWipe }) {
       // IMMER ausgewertet - auch ohne bzw. mit ungueltiger Lizenz (Regel und
       // Begruendung: LicenseManager.isDuressPinEntry). Ein eingerichteter
       // Schutz darf nie still abgeschaltet werden.
-      if (isDuressPinEntry(next, duressPin)) {
-        setPin('');
-        performWipe().then(() => onWipe?.());
-        return;
+      let ok = false;
+      if (vaultRef.current === 'present' || vaultRef.current === 'unknown') {
+        // PIN-Tresor: eine Ableitung (Argon2id + Chip) prueft Notfall-PIN
+        // und echte PIN. Die Notfall-PIN liegt nur als Pruefwert vor.
+        setBusy(true);
+        setErr(t('lock.unlocking'));
+        let r;
+        try { r = await PinVault.unlockWithPin(next); } finally { setBusy(false); }
+        setErr('');
+        if (r.duress) {
+          setPin('');
+          performWipe().then(() => onWipe?.());
+          return;
+        }
+        if (r.ok) {
+          vaultRef.current = 'present';
+          ok = true;
+        } else if (r.reason !== 'wrong') {
+          // Technischer Fehler (Chip/Speicher) - kein Fehlversuch.
+          setPin('');
+          setErr(t('lock.vaultError'));
+          return;
+        }
+      } else {
+        if (isDuressPinEntry(next, duressPin)) {
+          setPin('');
+          performWipe().then(() => onWipe?.());
+          return;
+        }
+        if (next === savedPin) {
+          ok = true;
+          // Erstes Entsperren nach dem Update: Tresor aus dieser PIN anlegen,
+          // die Klartext-PIN (und Notfall-PIN) danach aus dem Speicher.
+          if (PinVault.isAvailable()) {
+            setBusy(true);
+            setErr(t('lock.unlocking'));
+            try {
+              await PinVault.create(next, { duressPin });
+              vaultRef.current = 'present';
+              setSaved(VAULT_PIN);
+              setDuressPin(null);
+              await EncryptedStorage.removeItem('app_pin').catch(() => {});
+              await EncryptedStorage.removeItem('duress_pin').catch(() => {});
+            } catch (e) {
+              console.warn('[PIN-Tresor] Umstellung:', e?.message || e);
+            } finally {
+              setBusy(false);
+              setErr('');
+            }
+          }
+        }
       }
 
       // Normales Login
-      if (next === savedPin) {
+      if (ok) {
         setPin('');
-        // Erfolg: Zähler und Sperre zurücksetzen
-        setAtt(0);
-        setLockedUntil(0);
-        try {
-          await EncryptedStorage.removeItem('pin_attempts');
-          await EncryptedStorage.removeItem('pin_locked_until');
-        } catch {}
-        onUnlock();
+        await unlockDone();
       } else {
         const n = att + 1;
         setAtt(n);
@@ -1855,7 +2049,7 @@ function LockScreen({ onUnlock, onWipe }) {
       </View>
 
       {/* Biometrie Button */}
-      {hasBio && step === 'enter' && savedPin && (
+      {hasBio && step === 'enter' && savedPin && !busy && (
         <TouchableOpacity onPress={tryBiometrics} style={{ marginTop:24, alignItems:'center', gap:6 }}>
           <Icon name="unlock" size={22} color={L.textMuted} />
           <Text style={{ fontSize:12, color:L.textMuted }}>{t('lock.useBiometrics')}</Text>
@@ -1953,6 +2147,13 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
     setSearchOpen(true);
     setTimeout(() => searchInputRef.current?.focus(), 50);
   };
+  // Siegel direkt vom Startbildschirm (Nutzerwunsch 2026-10-25: kleiner Knopf
+  // ueber dem "+"). Versiegeln braucht die Vollversion, Entsiegeln nicht -
+  // dieselbe Regel wie in den Einstellungen.
+  const [siegelOpen, setSiegelOpen] = React.useState(false);
+  const [proOpen, setProOpen] = React.useState(false);
+  const [isPro, setIsPro] = React.useState(getLicenseState().pro === true);
+  React.useEffect(() => subscribeLicense((l) => setIsPro(l.pro === true)), []);
   const [filter, setFilterState] = React.useState('all');   // 'all' | 'chats' | 'groups'
   React.useEffect(() => {
     AsyncStorage.getItem(HOME_FILTER_KEY).then((v) => { if (v === 'chats' || v === 'groups' || v === 'all') setFilterState(v); }).catch(() => {});
@@ -2126,7 +2327,7 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
       {!selectMode && !searchOpen && <UpdateBanner palette={P} accent={AC} />}
 
       <FlatList data={rows} keyExtractor={r => r.key}
-        contentContainerStyle={{ paddingVertical:8, paddingBottom:96 }}
+        contentContainerStyle={{ paddingVertical:8, paddingBottom:150 }}
         // Im Filter "Gruppen": oben ein Eintrag zum Anlegen (das "+" unten fuehrt
         // immer zur Kopplung - Nutzerwunsch 2026-10-19).
         ListHeaderComponent={filter === 'groups' && !search && (groups || []).length > 0 ? (
@@ -2201,7 +2402,7 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
                   <View style={{ flexDirection:'row', justifyContent:'space-between', marginBottom:4, gap:8 }}>
                     <View style={{ flexDirection:'row', alignItems:'center', gap:6, flexShrink:1 }}>
                       <Text style={hm.name} numberOfLines={1}>{g.name}</Text>
-                      <Icon name="users" size={12} color={P.textMuted} />
+                      <Icon name={g.mode === 'channel' ? 'radio' : 'users'} size={12} color={P.textMuted} />
                     </View>
                     <View style={{ flexDirection:'row', alignItems:'center', gap:6 }}>
                       {row.pinned && <Icon name="bookmark" size={12} color={P.textMuted} />}
@@ -2210,7 +2411,7 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
                   </View>
                   <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
                     <Text style={{ fontSize:13, color: g.removed ? P.textMuted : P.textSub, flex:1 }} numberOfLines={1}>
-                      {g.removed ? t('groupChat.noLongerMember') : (g.last || t('app.nochKeineNachrichten'))}
+                      {g.removed ? t('groupChat.noLongerMember') : (PinVault.previewText(g.last) || t('app.nochKeineNachrichten'))}
                     </Text>
                     {g.unread > 0 && (
                       <View style={[hm.badge, { backgroundColor:AC }]}>
@@ -2256,7 +2457,7 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
               </View>
               <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
                 <Text style={{ fontSize:13, color: item.wiped ? P.textMuted : item.stale ? P.warning : P.textSub, flex:1, fontStyle: item.wiped ? 'italic' : 'normal' }} numberOfLines={1}>
-                  {item.wiped ? t('home.wiped.last') : item.stale ? t('home.stale') : item.last}
+                  {item.wiped ? t('home.wiped.last') : item.stale ? t('home.stale') : PinVault.previewText(item.last)}
                 </Text>
                 {item.unread > 0 && !item.wiped && (
                   // Audit 2026-09-28: feste Breite 20 - ab dreistelligen
@@ -2347,11 +2548,19 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
           hier ist wieder ein direkter Knopf zum Connect-Screen, kein
           Dropdown mehr. */}
       {!selectMode && (
+        <TouchableOpacity testID="home-siegel" style={hm.fabMini} onPress={() => setSiegelOpen(true)} activeOpacity={0.85}
+          accessibilityRole="button" accessibilityLabel={t('common.siegelMode')}>
+          <Icon name="lock" size={18} color={AC} />
+        </TouchableOpacity>
+      )}
+      {!selectMode && (
         <TouchableOpacity style={[hm.fab, { backgroundColor:AC }]} onPress={onConnect} activeOpacity={0.85}
           accessibilityLabel={t('app.kontaktVerbinden')}>
           <Text style={{ fontSize:28, color:P.onAccent, fontWeight:'300', marginTop:-2 }}>+</Text>
         </TouchableOpacity>
       )}
+      <SiegelScreen visible={siegelOpen} onClose={() => setSiegelOpen(false)} canSeal={isPro} onOpenPro={() => setProOpen(true)} />
+      <ProScreen visible={proOpen} onClose={() => setProOpen(false)} accent={AC} />
     </View>
   );
 }
@@ -2369,6 +2578,11 @@ const hm = themedStyles((t) => ({
   badge:  { minWidth:20, height:20, borderRadius:10, paddingHorizontal:5, alignItems:'center', justifyContent:'center' },
   fab:    { position:'absolute', bottom:24, right:24, width:54, height:54, borderRadius:27,
             alignItems:'center', justifyContent:'center', elevation:4 },
+  // Siegel-Knopf: klein, ueber dem "+" mittig ausgerichtet, als Nebenknopf
+  // (Flaeche statt Akzent), damit "+" die Hauptaktion bleibt.
+  fabMini: { position:'absolute', bottom:24 + 54 + 14, right:24 + 6, width:42, height:42, borderRadius:21,
+             alignItems:'center', justifyContent:'center', elevation:3,
+             backgroundColor:t.surface, borderWidth:0.5, borderColor:t.border },
 }));
 
 // Gruppenchats: Liste, "Neue Gruppe", Gruppeninfo und der Gruppenchat selbst
@@ -2435,6 +2649,18 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   const [connStatus, setConnStatus] = useState('offline');
   const lastConnectedAt = useRef(0);
   const [recording, setRecording] = useState(false);
+  // Pegel waehrend der Aufnahme (VoiceWave.js): fuer die Live-Anzeige und die
+  // Wellenform, die verschluesselt mit der Sprachnachricht reist.
+  const levelFeedRef = useRef(null);
+  if (!levelFeedRef.current) levelFeedRef.current = createLevelFeed();
+  // Wellenform-Stil (Einstellungen -> Design); der zweite Stil gehoert zur Vollversion.
+  const [waveStyle, setWaveStyleState] = useState(() => effectiveWaveStyle(getLicenseState().pro === true));
+  React.useEffect(() => {
+    const update = () => setWaveStyleState(effectiveWaveStyle(getLicenseState().pro === true));
+    const offStyle = subscribeWaveStyle(update);
+    const offLicense = subscribeLicense(update);
+    return () => { offStyle(); try { offLicense?.(); } catch {} };
+  }, []);
   const [recordSecs, setRecordSecs] = useState(0);
   const [audioPreview, setAudioPreview] = useState(null); // {base64, durationMs, path}
   // Kontaktaenderung an die App melden - mit dem FRISCHEN Stand aus dem
@@ -2453,10 +2679,11 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   const [callMode, setCallMode] = useState('audio'); // 'audio' | 'video' - siehe Anruf-Umschalter im Header
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewProgress, setPreviewProgress] = useState({ position: 0, duration: 0 });
   const [playingId, setPlayingId] = useState(null);
   // Fortschritt/Geschwindigkeit fuer die aktuell abspielende Sprachnachricht
   // (playerRef/playingId sind ohnehin schon global - EINE gemeinsame
-  // audioRecorderPlayer-Instanz kann nur eine Wiedergabe gleichzeitig fahren,
+  // Spieler-Instanz (SecureAudio.js) kann nur eine Wiedergabe gleichzeitig fahren,
   // siehe Kommentar bei playAudio). playbackSpeed bleibt bewusst ueber
   // mehrere Wiedergaben hinweg bestehen (einmal auf 1.5x gestellt, gilt das
   // fuer die naechste Sprachnachricht automatisch weiter - wie bei WhatsApp).
@@ -2469,9 +2696,9 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   // Audio-Fokus (AppFocus.js): startet Siegel eine Wiedergabe oder Aufnahme,
   // wird die des Chats hier sauber beendet (es gibt nur EINEN nativen Spieler).
   const stopChatAudio = async () => {
-    try { await audioRecorderPlayer.stopPlayer(); } catch {}
-    try { audioRecorderPlayer.removePlayBackListener(); } catch {}
-    if (playerRef.current) { RNFS.unlink(playerRef.current).catch(() => {}); playerRef.current = null; }
+    await voicePlayer.stop();
+    playerRef.current = null;
+    previewPlayerRef.current = null;
     setPlayingId(null);
     setPlayProgress({ position: 0, duration: 0 });
     setPreviewPlaying(false);
@@ -2693,7 +2920,7 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
           // gleich unten in setMsgs uebernommen wird.
           } else if (msg.type === 'system' && msg.subtype === 'clear_chat') {
             textMsgs.length = 0;
-            EncryptedStorage.removeItem('chat_' + chat.id).catch(() => {});
+            PinVault.removeItem('chat_' + chat.id).catch(() => {});
             removeMediaScope(chat.id).catch(() => {});
 
           // Einzelne Nachricht loeschen (fuer beide Seiten, analog zu
@@ -2797,6 +3024,7 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
               base64:     msg.base64,
               durationMs: msg.durationMs,
               viewOnce:   !!msg.viewOnce,
+              wave:       sanitizeWave(msg.wave),
               mine:       false,
               time:       formatTime(),
               sys:        false,
@@ -2984,7 +3212,7 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
         // Chat vom Gegenueber geleert, live waehrend der Chat offen ist -
         // Kontakt/Pairing/Secret bleiben unangetastet (siehe
         // clearChatMessages()), nur die Nachrichten verschwinden.
-        EncryptedStorage.removeItem('chat_' + chat?.id).catch(() => {});
+        PinVault.removeItem('chat_' + chat?.id).catch(() => {});
         if (chat?.id) removeMediaScope(chat.id).catch(() => {});
         setMsgs([]);
         onLastMessage?.(chat?.id, '');
@@ -3022,6 +3250,7 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
             base64:     msg.base64,
             durationMs: msg.durationMs,
             viewOnce:   !!msg.viewOnce,
+            wave:       sanitizeWave(msg.wave),
             mine:       false, time, sys: false,
           };
           // Live-Test-Fund 2026-09-28: Kontaktlisten-Vorschau zeigte bei einer
@@ -3087,30 +3316,45 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     historyLoadedRef.current = false;
     mediaSweptRef.current = false;
     mediaRefsRef.current = new Map();
+    // historyLoadedRef wird IM State-Update gesetzt, das den geladenen Verlauf
+    // einmischt: Jeder Stand ab diesem Render enthaelt ihn. Erst dann darf der
+    // Verlauf gespeichert und aufgeraeumt werden (persistChatHistory) - vorher
+    // ueberschrieb ein frueher Stand (neue Nachrichten beim Oeffnen) den
+    // Verlauf, und das Aufraeumen loeschte die Dateien aelterer Medien.
+    const applyHistory = (valid) => setMsgs(prev => {
+      historyLoadedRef.current = true;
+      const ids = new Set(valid.map(x => x.id));
+      // Immer ein neues Array: loest das Speichern aus, auch ohne alten Verlauf.
+      return [...valid, ...(prev || []).filter(x => !ids.has(x.id))];
+    });
     AsyncStorage.getItem(storageKey).then((saved) => {
+      let valid = [];
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
             const now = Date.now();
-            const valid = parsed.filter(m => {
+            valid = parsed.filter(m => {
               if (!m.expireAt) return true;
               if (m.expireAt === 'read') return false;
               return m.expireAt > now;
             });
             console.log('[Chat] Nachrichten geladen:', parsed.length, '→ gültig:', valid.length);
-            // Zusammenfuehren statt ersetzen: dauert das Lesen eines grossen
-            // Verlaufs laenger als das Abholen des Empfangspuffers (oben),
-            // ueberschrieb setMsgs(valid) die schon uebernommenen - und aus
-            // der Empfangs-Ablage bereits entfernten - Nachrichten.
-            setMsgs(prev => {
-              const ids = new Set(valid.map(x => x.id));
-              return [...valid, ...(prev || []).filter(x => !ids.has(x.id))];
-            });
           }
         } catch(e) {}
       }
-    }).catch(() => {}).then(() => { historyLoadedRef.current = true; });
+      // Zusammenfuehren statt ersetzen: dauert das Lesen eines grossen
+      // Verlaufs laenger als das Abholen des Empfangspuffers (oben),
+      // ueberschrieb setMsgs(valid) die schon uebernommenen - und aus
+      // der Empfangs-Ablage bereits entfernten - Nachrichten.
+      applyHistory(valid);
+    }).catch((e) => {
+      // PIN-Tresor gesperrt bzw. Verlauf nicht lesbar: NICHT als leer
+      // uebernehmen - sonst ueberschriebe das naechste Speichern den echten
+      // Verlauf (persistChatHistory speichert ohne geladenen Verlauf nie).
+      if (PinVault.isVaultError(e)) { console.warn('[Chat] Verlauf nicht lesbar:', e?.code); return; }
+      applyHistory([]);
+    });
   }, [chat?.id]);
 
   React.useEffect(() => {
@@ -3130,20 +3374,17 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
       // aelterer Stand nie einen neueren ueberschreibt.
       const scope = chat?.id;
       const key = storageKey;
+      // Enthaelt DIESER Stand den geladenen Verlauf? Nur dann speichern und -
+      // einmal je Oeffnen - Dateien ohne Verweis (geloeschte/abgelaufene
+      // Nachrichten) entfernen (Fehler 2026-10-25, siehe persistChatHistory).
+      const historyIncluded = historyLoadedRef.current;
       saveChainRef.current = saveChainRef.current.then(async () => {
-        if (!scope) return;
-        if (!toSave.length) { await AsyncStorage.removeItem(key); return; }
-        const stored = await externalizeEntries(scope, toSave, mediaRefsRef.current);
-        await AsyncStorage.setItem(key, JSON.stringify(stored));
-        // Einmal je Oeffnen: Dateien ohne Verweis (geloeschte/abgelaufene
-        // Nachrichten) entfernen - erst wenn der Verlauf sicher geladen ist.
-        if (historyLoadedRef.current && !mediaSweptRef.current) {
-          mediaSweptRef.current = true;
-          const keep = new Set(stored.map(m => m.mref).filter(Boolean));
-          for (const r of mediaRefsRef.current.values()) keep.add(r.mref);
-          const n = await sweepScope(scope, keep);
-          if (n) console.log('[Medien] Verwaiste Dateien entfernt:', n);
-        }
+        const sweep = historyIncluded && !mediaSweptRef.current;
+        if (sweep) mediaSweptRef.current = true;
+        const res = await persistChatHistory({
+          storage: AsyncStorage, key, scope, entries: toSave, known: mediaRefsRef.current, historyIncluded, sweep,
+        });
+        if (res.swept) console.log('[Medien] Verwaiste Dateien entfernt:', res.swept);
       }).catch((e) => console.warn('[Chat] Verlauf speichern fehlgeschlagen:', e?.message || e));
     }
   }, [msgs]);
@@ -3163,16 +3404,11 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
         console.warn('[Audio] Mikrofon-Permission verweigert');
         return;
       }
-      const path = `${RNFS.CachesDirectoryPath}/malachi_${Date.now()}.mp4`;
-      recorderRef.current = path;
-      await audioRecorderPlayer.startRecorder(path, {
-        AudioSourceAndroid: AudioSourceAndroidType.MIC,
-        OutputFormatAndroid: OutputFormatAndroidType.MPEG_4,
-        AudioEncoderAndroid: AudioEncoderAndroidType.AAC,
-        AudioSamplingRateAndroid: 16000,
-        AudioEncodingBitRateAndroid: 32000,
-        AudioChannelsAndroid: 1,
-      });
+      // Pegel alle 100 ms (Wellenform). Aufnahme nur im Arbeitsspeicher
+      // (SecureAudio.js) - es entsteht keine Audiodatei mehr.
+      levelFeedRef.current.clear();
+      await voicePlayer.startRecording((db) => levelFeedRef.current?.push(db));
+      recorderRef.current = true;
       setRecording(true);
       setRecordSecs(0);
       recordStartRef.current = Date.now();
@@ -3189,22 +3425,28 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   // Aufnahme-Wegen (Vorschau UND Halten-Sofortversand) gemeinsam genutzt.
   const stopRecorderRaw = async () => {
     clearInterval(recordTimerRef.current);
-    const audioPath = await audioRecorderPlayer.stopRecorder();
+    const elapsed = Date.now() - recordStartRef.current;
     recorderRef.current = null;
-    setRecording(false);
-    setRecordSecs(0);
-    const durationMs = Date.now() - recordStartRef.current;
-    console.log('[Audio] Aufnahme gestoppt:', audioPath);
-    // RNFS kommt aus dem statischen Import oben (Simplification-Pass).
-    const base64 = await RNFS.readFile(audioPath, 'base64');
-    return { base64, durationMs, path: audioPath };
+    let rec;
+    try {
+      rec = await voicePlayer.stopRecording();
+    } finally {
+      setRecording(false);
+      setRecordSecs(0);
+    }
+    const durationMs = rec.durationMs || elapsed;
+    const wave = encodeWave(levelFeedRef.current.samples()) || undefined;
+    levelFeedRef.current.clear();
+    console.log('[Audio] Aufnahme gestoppt');
+    return { base64: rec.base64, durationMs, wave };
   };
 
   const stopRecording = async () => {
     try {
-      const { base64, durationMs, path } = await stopRecorderRaw();
-      // Preview anzeigen statt direkt senden
-      setAudioPreview({ base64, durationMs, path });
+      const { base64, durationMs, wave } = await stopRecorderRaw();
+      // Preview anzeigen statt direkt senden. id: Saat der Ersatz-
+      // Wellenform und Kennung der laufenden Vorschau-Wiedergabe.
+      setAudioPreview({ base64, durationMs, wave, id: 'rec_' + Date.now() });
     } catch(e) {
       console.error('[Audio] Stop Fehler:', e);
       setRecording(false);
@@ -3220,11 +3462,11 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   // zum-Stoppen-Weg (stopRecording()) stattdessen.
   const stopRecordingAndSendNow = async () => {
     try {
-      const { base64, durationMs, path } = await stopRecorderRaw();
+      const { base64, durationMs, wave } = await stopRecorderRaw();
       // Zu kurze/versehentliche Aufnahmen (z.B. Wackler beim Loslassen) nicht
       // als leere Sprachnachricht verschicken.
-      if (durationMs < 300) { RNFS.unlink(path).catch(() => {}); return; }
-      await sendAudioNow(base64, durationMs, path, false);
+      if (durationMs < 300 || !base64) return;
+      await sendAudioNow(base64, durationMs, false, wave);
     } catch (e) {
       console.error('[Audio] Sofortversand-Stop Fehler:', e);
       setRecording(false);
@@ -3234,15 +3476,19 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   // Gemeinsamer Sendepfad fuer beide Aufnahme-Wege (Tippen+Vorschau ODER
   // Halten+Sofortversand) - extrahiert, damit stopRecordingAndSendNow() unten
   // nicht die komplette P2P/Warteschlange-Logik dupliziert.
-  const sendAudioNow = async (base64, durationMs, rawRecordingPath, viewOnce) => {
+  const sendAudioNow = async (base64, durationMs, viewOnce, wave) => {
     const msgId = Date.now().toString();
-    // Rohe (unverschlüsselte) Aufnahme-Datei wird nicht mehr gebraucht - der
-    // Inhalt ist bereits als base64 im Speicher und wird ab hier verschlüsselt
+    // Eine rohe Aufnahme-Datei gibt es nicht mehr (SecureAudio.js) - der
+    // Inhalt liegt nur als base64 im Speicher und wird ab hier verschluesselt
     // gesendet/zwischengespeichert (Secrets-Lifecycle-Review, Fund S-5).
-    RNFS.unlink(rawRecordingPath).catch(() => {});
+    // Fehler 2026-10-25: die eigene Sprachnachricht stand ohne Inhalt im
+    // Verlauf - sie wurde nie (verschluesselt) abgelegt und war weder
+    // abspielbar noch nach einem Neustart da. Jetzt wie bei Bildern/Dateien:
+    // Inhalt im Eintrag, beim Speichern als verschluesselte Datei (MediaVault).
     setMsgs(m => [...(m||[]), {
-      id: msgId, type: 'audio', mine: true,
+      id: msgId, type: 'audio', mine: true, base64,
       durationMs, status: 'sending', viewOnce, secret: secretActive || undefined,
+      wave: sanitizeWave(wave),
       time: formatTime(),
       sys: false,
     }]);
@@ -3251,7 +3497,7 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     // sofort gesendet (✓); entfernt erst mit der Empfangsbestaetigung (✓✓).
     // Reisst die Verbindung mitten im Transfer ab, geht die Sprachnachricht
     // bei der naechsten Verbindung komplett neu raus. Nie ueber den Relay.
-    await sendViaOutbox(chat?.id, 'audio', { base64, durationMs, viewOnce }, msgId, {
+    await sendViaOutbox(chat?.id, 'audio', { base64, durationMs, viewOnce, wave: sanitizeWave(wave) }, msgId, {
       ...ephemeralMeta(),
       onQueued: (ok) => setMsgStatus(msgId, ok ? 'pending' : 'failed'),
     });
@@ -3259,11 +3505,12 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
 
   const sendAudioPreview = async () => {
     if (!audioPreview) return;
-    const { base64, durationMs, path: rawRecordingPath } = audioPreview;
+    const { base64, durationMs, wave } = audioPreview;
     const viewOnce = viewOnceAudio;
+    if (previewPlayerRef.current) { voicePlayer.stop(); previewPlayerRef.current = null; setPreviewPlaying(false); }
     setAudioPreview(null);
     setViewOnceAudio(false);
-    await sendAudioNow(base64, durationMs, rawRecordingPath, viewOnce);
+    await sendAudioNow(base64, durationMs, viewOnce, wave);
   };
 
   const playPreview = async () => {
@@ -3272,32 +3519,51 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
       await claimAudio('chat', stopChatAudio);
       // Immer zuerst eine evtl. noch laufende Wiedergabe (Vorschau ODER
       // eine empfangene Nachricht, siehe playAudio()) beenden - EINE
-      // gemeinsame audioRecorderPlayer-Instanz kann nur eine Wiedergabe
+      // gemeinsame Spieler-Instanz (SecureAudio.js) kann nur eine Wiedergabe
       // gleichzeitig fahren. Erneutes Antippen waehrend die Vorschau bereits
       // laeuft: nur stoppen (Toggle), nicht von vorn neu starten.
-      const wasAlreadyPlayingThis = previewPlayerRef.current === audioPreview.path && previewPlaying;
-      await audioRecorderPlayer.stopPlayer().catch(() => {});
-      audioRecorderPlayer.removePlayBackListener();
+      const wasAlreadyPlayingThis = previewPlayerRef.current === audioPreview.id && previewPlaying;
+      await voicePlayer.stop();
+      playerRef.current = null;
+      setPlayingId(null);
       if (wasAlreadyPlayingThis) {
         previewPlayerRef.current = null;
         setPreviewPlaying(false);
         return;
       }
-      previewPlayerRef.current = audioPreview.path;
+      const previewId = audioPreview.id;
+      previewPlayerRef.current = previewId;
       setPreviewPlaying(true);
-      audioRecorderPlayer.addPlayBackListener((e) => {
-        if (e.isFinished || e.currentPosition >= e.duration) {
-          audioRecorderPlayer.stopPlayer().catch(() => {});
-          audioRecorderPlayer.removePlayBackListener();
+      // Aus dem Arbeitsspeicher (SecureAudio.js) - keine Datei.
+      await voicePlayer.play(audioPreview.base64, (e) => {
+        if (previewPlayerRef.current !== previewId) return;
+        if (e.finished) {
           setPreviewPlaying(false);
+          setPreviewProgress({ position: 0, duration: 0 });
           previewPlayerRef.current = null;
+        } else {
+          setPreviewProgress({ position: e.position, duration: e.duration });
         }
       });
-      await audioRecorderPlayer.startPlayer(audioPreview.path);
     } catch(e) {
       console.error('[Audio] Play Fehler:', e);
       setPreviewPlaying(false);
     }
+  };
+
+  // Wellenform der Vorschau angetippt: an diese Stelle springen (startet die
+  // Wiedergabe, falls sie noch nicht laeuft).
+  const seekPreview = async (fraction) => {
+    if (!audioPreview) return;
+    const f = Math.max(0, Math.min(1, fraction));
+    if (!previewPlaying) {
+      await playPreview();
+      if (f < 0.02 || !audioPreview.durationMs) return;
+    }
+    const total = previewProgress.duration || audioPreview.durationMs || 0;
+    if (!total) return;
+    await voicePlayer.seek(f * total);
+    setPreviewProgress((p) => ({ ...p, position: f * total }));
   };
 
   // Design-Feedback: kein Halten-Gestik mehr fuers Mikrofon (Halten ist jetzt
@@ -3349,83 +3615,67 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     }
   };
 
-  const playAudio = async (item) => {
-    let path;
+  const playAudio = async (item, startMs = 0) => {
     try {
       await claimAudio('chat', stopChatAudio);
-      // Aktuell spielendes stoppen - EINE gemeinsame audioRecorderPlayer-
-      // Instanz (siehe auch playPreview()) kann nur eine Wiedergabe
-      // gleichzeitig fahren.
-      if (playerRef.current) {
-        const wasPlayingPath = playerRef.current;
-        await audioRecorderPlayer.stopPlayer().catch(() => {});
-        audioRecorderPlayer.removePlayBackListener();
+      // Aktuell spielendes stoppen - es gibt nur EINEN Spieler (siehe auch
+      // playPreview()). Erneutes Antippen der laufenden Nachricht: stoppen.
+      if (playerRef.current || previewPlayerRef.current) {
+        const wasPlaying = playerRef.current;
+        await voicePlayer.stop();
         playerRef.current = null;
-        RNFS.unlink(wasPlayingPath).catch(() => {});
-        if (playingId === item.id) {
+        previewPlayerRef.current = null;
+        setPreviewPlaying(false);
+        if (wasPlaying === item.id && playingId === item.id) {
           setPlayingId(null);
           setPlayProgress({ position: 0, duration: 0 });
           return;
         }
       }
       setPlayingId(item.id);
-      setPlayProgress({ position: 0, duration: item.durationMs || 0 });
-      // Base64 → Datei (RNFS kommt aus dem statischen Import oben - die
-      // vorherige lokale "RNFSLocal"-Umbenennung existierte offenbar nur, um
-      // die eslint no-shadow-Warnung des redundanten Re-Imports zu umgehen,
-      // statt ihn zu entfernen - Simplification-Pass).
+      setPlayProgress({ position: startMs, duration: item.durationMs || 0 });
       const audioData = await mediaData(chat?.id, item);   // Audit G1: RAM oder Ablage
       if (!audioData) throw new Error('Sprachnachricht nicht mehr verfügbar');
-      path = `${RNFS.CachesDirectoryPath}/play_${item.id}.mp4`;
-      await RNFS.writeFile(path, audioData, 'base64');
-      playerRef.current = path;
-      audioRecorderPlayer.addPlayBackListener((e) => {
-        if (e.isFinished || e.currentPosition >= e.duration) {
-          audioRecorderPlayer.stopPlayer().catch(() => {});
-          audioRecorderPlayer.removePlayBackListener();
+      playerRef.current = item.id;
+      // Wiedergabe aus dem Arbeitsspeicher (SecureAudio.js): die
+      // entschluesselte Sprachnachricht wird nicht mehr als Datei abgelegt.
+      // Die gewaehlte Geschwindigkeit gilt gleich ab dem Start.
+      await voicePlayer.play(audioData, (e) => {
+        if (playerRef.current !== item.id) return;
+        if (e.finished) {
           setPlayingId(null);
           setPlayProgress({ position: 0, duration: 0 });
           playerRef.current = null;
-          // Temp-Datei in BEIDEN Faellen loeschen (Erfolg UND Fehler/Abbruch der
-          // Wiedergabe) - vorher nur im Erfolgsfall, wodurch eine unterbrochene
-          // Wiedergabe die Datei verwaist zurückliess (Secrets-Lifecycle-Review,
-          // Fund S-5).
-          RNFS.unlink(path).catch(() => {});
           // Nutzerwunsch: "Sprachnachrichten, die sich nach Anhören löschen".
-          // Nur fuer empfangene (nicht die eigene) Nachricht - deleteMessage()
-          // loescht ohnehin auf BEIDEN Seiten (P2P-Hinweis + verschluesselter
-          // Relay-Fallback, siehe dortige Kommentare), der Absender muss also
-          // hier nichts Eigenes anstossen.
-          if (item.viewOnce && !item.mine) deleteMessage(item.id);
+          // Nur fuer empfangene (nicht die eigene) Nachricht und nur nach
+          // vollstaendigem Anhoeren - deleteMessage() loescht auf BEIDEN Seiten.
+          if (item.viewOnce && !item.mine && !e.error) deleteMessage(item.id);
         } else {
-          setPlayProgress({ position: e.currentPosition, duration: e.duration });
+          setPlayProgress({ position: e.position, duration: e.duration });
         }
-      });
-      await audioRecorderPlayer.startPlayer(path);
-      // Geschwindigkeit gilt geraeteweit fuer den naechsten Player-Start, nicht
-      // nur fuer den, der sie gesetzt hat - erst NACH startPlayer setzbar (die
-      // Bibliothek braucht einen laufenden Player als Ziel).
-      if (playbackSpeed !== 1) await audioRecorderPlayer.setPlaybackSpeed(playbackSpeed).catch(() => {});
+      }, { startMs, speed: playbackSpeed });
     } catch(e) {
       console.error('[Audio] Play Fehler:', e);
       setPlayingId(null);
       setPlayProgress({ position: 0, duration: 0 });
       playerRef.current = null;
-      // Falls der Fehler vor/während des Schreibens der Temp-Datei auftrat,
-      // trotzdem aufräumen (best effort - die Datei existiert ggf. gar nicht,
-      // path ggf. noch undefined wenn der Fehler davor auftrat).
-      if (path) RNFS.unlink(path).catch(() => {});
     }
   };
 
-  // Tippen auf die Fortschrittsleiste einer Sprachnachricht springt an diese
-  // Stelle - nur wirksam fuer die GERADE abspielende Nachricht (seekToPlayer
-  // hat sonst kein Ziel). fractionX kommt aus dem Touch-Handler der Leiste
-  // (0 = Anfang, 1 = Ende).
+  // Tippen auf die Wellenform einer Sprachnachricht springt an diese Stelle.
+  // fractionX kommt aus dem Touch-Handler (0 = Anfang, 1 = Ende).
   const seekAudio = async (item, fractionX) => {
-    if (playingId !== item.id || !playProgress.duration) return;
-    const target = Math.max(0, Math.min(1, fractionX)) * playProgress.duration;
-    await audioRecorderPlayer.seekToPlayer(target).catch(() => {});
+    const f = Math.max(0, Math.min(1, fractionX));
+    if (playingId !== item.id) {
+      // Wellenform einer gerade nicht laufenden Nachricht angetippt: an dieser
+      // Stelle starten (wie bei anderen Messengern).
+      const start = item.durationMs && f >= 0.02 ? f * item.durationMs : 0;
+      await playAudio(item, start);
+      return;
+    }
+    if (!playProgress.duration) return;
+    const target = f * playProgress.duration;
+    await voicePlayer.seek(target);
     setPlayProgress(p => ({ ...p, position: target }));
   };
 
@@ -3435,7 +3685,7 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     setPlaybackSpeed(next);
     // Nur anwendbar, waehrend tatsaechlich etwas abspielt (siehe playAudio) -
     // sonst gilt sie einfach erst beim naechsten Start.
-    if (playingId) await audioRecorderPlayer.setPlaybackSpeed(next).catch(() => {});
+    if (playingId) await voicePlayer.setSpeed(next);
   };
 
   const pickAndSendImage = async () => {
@@ -3590,56 +3840,23 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   // standardmaessig das plattformeigene LocationManager-API nutzt statt
   // Google Play Services FusedLocationProviderClient (siehe setRNConfiguration
   // weiter unten im Datei-Setup) - kein Google-Dienst sieht den Standort.
-  // Live-Test-Feedback 2026-09-28: Standort kam an, zeigte aber nirgends WO
-  // man sich befindet (nur wer die Koordinaten selbst gelesen hat, sah es).
-  // Kein Google-Geocoding (widerspraeche dem "ohne Google"-Kernpunkt des
-  // Features) - stattdessen OpenStreetMaps freier Nominatim-Dienst, ein
-  // einzelner Best-Effort-Aufruf NUR beim Absenden (der Empfaenger muss
-  // dafuer selbst nie eine Anfrage an einen Dritten stellen). Schlaegt die
-  // Aufloesung fehl oder dauert zu lange, wird trotzdem ganz normal mit den
-  // reinen Koordinaten gesendet - nie blockierend fuers eigentliche Senden.
-  //
-  // Audit 2026-09-28 (Vorgabe "echte Daten nur ueber P2P"): dieser Aufruf ist
-  // der einzige Ort, an dem Standortdaten die App NICHT Ende-zu-Ende
-  // verschluesselt verlassen - bisher mit voller GPS-Genauigkeit (~1 m) an
-  // einen Drittanbieter, zusammen mit der eigenen IP. Fuer eine Strassen-/
-  // Ortsangabe (zoom=16) genuegt eine auf ~100 m gerundete Position; die
-  // EXAKTEN Koordinaten gehen weiterhin nur verschluesselt an den Kontakt.
-  // (Ob die Adressanzeige per Drittanbieter ueberhaupt gewuenscht ist, ist
-  // eine Produktentscheidung - siehe Audit-Bericht.)
-  const reverseGeocode = async (lat, lng) => {
-    const coarse = (v) => (Math.round(v * 1000) / 1000).toFixed(3);
-    // Audit 2026-10-19 (T1/P9): Die Anfrage an OpenStreetMap geht direkt (nicht
-    // ueber Tor) und verraet IP, ungefaehre Position und Zeit. Deshalb nur im
-    // Verbindungsweg "Schnell" und nie im Secret Chat - sonst werden nur die
-    // Koordinaten gesendet (Ende-zu-Ende verschluesselt, ohne Ortsnamen).
-    if (secretActive) return null;
-    const mode = await loadConnectionMode().catch(() => MODE_TOR_ONLY);
-    if (mode !== MODE_FAST) return null;
-    try {
-      const res = await Promise.race([
-        fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coarse(lat)}&lon=${coarse(lng)}&zoom=16&addressdetails=0`,
-          { headers: { 'User-Agent': 'Malachi-Messenger/1.0 (selbst-gehosteter Messenger, kein Tracking)' } }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Nominatim-Timeout')), 5000)),
-      ]);
-      const data = await res.json();
-      return typeof data?.display_name === 'string' ? data.display_name : null;
-    } catch (e) {
-      console.warn('[Location] Reverse-Geocoding fehlgeschlagen (Standort wird trotzdem mit Koordinaten gesendet):', e?.message || e);
-      return null;
-    }
-  };
-
-  const sendLocationMessage = (lat, lng, address) => {
+  // Ortsnamen (STUN-Ausstieg, Entscheidung E5): bis 1.1.0 fragte der Absender
+  // im Verbindungsweg "Schnell" einmal OpenStreetMap-Nominatim nach einem
+  // Ortsnamen - die einzige Stelle, an der Standortdaten (auf ~100 m
+  // gerundet) zusammen mit der IP-Adresse an einen Dritten gingen. Diese
+  // Rueckwaertssuche gibt es nicht mehr: gesendet werden nur die Koordinaten,
+  // Ende-zu-Ende verschluesselt. Ein Ortsname, den eine aeltere Version noch
+  // mitschickt, wird weiter angezeigt (reiner Text, keine Anfrage).
+  const sendLocationMessage = (lat, lng) => {
     const msgId = Date.now().toString();
     const msgTime = formatTime();
     setMsgs(m => [...(m||[]), {
-      id: msgId, text: t('preview.location'), isLocation: true, lat, lng, address,
+      id: msgId, text: t('preview.location'), isLocation: true, lat, lng,
       mine: true, time: msgTime, sys: false, status: 'sending', secret: secretActive || undefined,
     }]);
     if (!secretActive) onLastMessage?.(chat?.id, t('preview.location'));
     const payload = {
-      type: 'text', text: t('preview.location'), isLocation: true, lat, lng, address,
+      type: 'text', text: t('preview.location'), isLocation: true, lat, lng,
       time: Date.now(), msgId, secret: secretActive || undefined,
     };
     // Wie send(): write-ahead ueber die Warteschlange (Zustell-Garantie).
@@ -3661,10 +3878,9 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
       }
       const { default: Geolocation } = await import('@react-native-community/geolocation');
       Geolocation.getCurrentPosition(
-        async (pos) => {
+        (pos) => {
           const { latitude, longitude } = pos.coords;
-          const address = await reverseGeocode(latitude, longitude);
-          sendLocationMessage(latitude, longitude, address);
+          sendLocationMessage(latitude, longitude);
         },
         (err) => {
           console.error('[Location] Fehler:', err?.message || err);
@@ -4221,6 +4437,26 @@ return (
         </TouchableOpacity>
         </View>
 
+      {/* Ueber eine Gruppe vorgestellt (GroupIntroPairing.js): der Admin haette
+          die Einladung lesen koennen - Sicherheitscode-Vergleich empfehlen, bis
+          er einmal geoeffnet wurde. */}
+      {chat?.introducedBy && !chat.introducedBy.checked && (
+        <View testID="intro-chat-banner" style={{ flexDirection:'row', alignItems:'center', gap:10, paddingVertical:10, paddingHorizontal:14,
+          backgroundColor:P.surfaceAlt, borderBottomWidth:0.5, borderBottomColor:P.border }}>
+          <Icon name="user-check" size={15} color={AC} />
+          <Text style={{ flex:1, fontSize:12, color:P.text, lineHeight:17 }}>
+            {t('groups.intro.chatBanner', { admin: chat.introducedBy.admin || t('groups.unknown') })}
+          </Text>
+          <TouchableOpacity accessibilityRole="button" hitSlop={{ top:8, bottom:8, left:8, right:8 }}
+            onPress={() => {
+              onRename?.({ id: chat.id, introducedBy: { ...chat.introducedBy, checked: true } });
+              setSafetyVisible(true);
+            }}>
+            <Text style={{ fontSize:12, fontWeight:'600', color:AC }}>{t('groups.intro.compare')}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <Modal visible={callMenuOpen} transparent animationType="fade" onRequestClose={() => setCallMenuOpen(false)}>
         <TouchableOpacity style={{ flex:1 }} activeOpacity={1} onPress={() => setCallMenuOpen(false)}>
           <View style={{ position:'absolute', right:12, top:58, backgroundColor:P.menuBg, borderRadius:12,
@@ -4299,49 +4535,53 @@ return (
             const fmtMs = (ms) => `${Math.floor((ms||0)/60000)}:${String(Math.floor(((ms||0)%60000)/1000)).padStart(2,'0')}`;
             const fraction = isPlayingThis && playProgress.duration
               ? Math.min(1, playProgress.position / playProgress.duration) : 0;
-            const barColor = item.mine ? P.bubbleMineText : AC;
-            const trackColor = item.mine ? P.bubbleMineTrack : P.bubbleTheirsBorder;
+            // Sprachnachricht (Nutzerwunsch 2026-10-25): Wellenform aus dem echten
+            // Pegel (VoiceWave.js) - Balken oder Pixel-Welle, abgespielter Teil in
+            // Akzentfarbe, Antippen springt an die Stelle. Darunter Zeit,
+            // Geschwindigkeit (waehrend des Abspielens) und Status.
+            const activeColor = item.mine ? P.bubbleMineText : AC;
+            const idleColor = item.mine ? P.bubbleMineTrack : P.bubbleTheirsBorder;
+            const metaColor = item.mine ? P.bubbleMineMeta : P.bubbleTheirsMeta;
+            const waveW = Math.max(120, Math.min(190, Math.round(W * 0.44)));
             return (
             <TouchableOpacity activeOpacity={1} onLongPress={() => confirmDeleteMessage(item.id)}
-              style={[{ maxWidth:W*0.74, marginVertical:3, padding:10,
-              borderRadius:16, flexDirection:'row', alignItems:'center', gap:8 },
+              style={[{ maxWidth:W*0.8, marginVertical:3, paddingTop:8, paddingBottom:6, paddingHorizontal:10, borderRadius:16 },
               item.mine
                 ? { alignSelf:'flex-end', backgroundColor:P.bubbleMine }
                 : { alignSelf:'flex-start', backgroundColor:P.bubbleTheirs, borderWidth:0.5, borderColor:P.bubbleTheirsBorder }]}>
-              <TouchableOpacity onPress={() => playAudio(item)} style={{
-                width:32, height:32, borderRadius:16,
-                backgroundColor: item.mine ? P.bubbleMineSoft : AC,
-                alignItems:'center', justifyContent:'center'
-              }}>
-                <Icon name={isPlayingThis ? 'pause' : 'play'} size={14}
-                  color={item.mine ? P.bubbleMineText : P.onAccent} />
-              </TouchableOpacity>
-              <View style={{ flex:1, gap:4 }}>
-                <TouchableOpacity activeOpacity={0.7}
-                  disabled={!isPlayingThis}
-                  onPress={(e) => seekAudio(item, e.nativeEvent.locationX / 130)}
-                  style={{ width:130, height:14, justifyContent:'center' }}>
-                  <View style={{ height:4, borderRadius:2, backgroundColor:trackColor, overflow:'hidden' }}>
-                    <View style={{ height:4, borderRadius:2, backgroundColor:barColor, width:`${fraction*100}%` }} />
-                  </View>
+              <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
+                <TouchableOpacity onPress={() => playAudio(item)} testID={'voice-play-' + item.id}
+                  accessibilityRole="button" accessibilityLabel={isPlayingThis ? t('voice.pause') : t('voice.play')}
+                  style={{ width:36, height:36, borderRadius:18,
+                    backgroundColor: item.mine ? P.bubbleMineSoft : AC,
+                    alignItems:'center', justifyContent:'center' }}>
+                  <Icon name={isPlayingThis ? 'pause' : 'play'} size={16}
+                    color={item.mine ? P.bubbleMineText : P.onAccent} style={isPlayingThis ? undefined : { marginLeft:2 }} />
                 </TouchableOpacity>
-                <Text style={{ color: item.mine ? P.bubbleMineText : P.bubbleTheirsText, fontSize:12 }}>
-                  {isPlayingThis ? `${fmtMs(playProgress.position)} / ${fmtMs(playProgress.duration)}` : fmtMs(item.durationMs)}
-                  {item.viewOnce ? ' · ⚡' : ''}
+                <VoiceWaveView testID={'voice-wave-' + item.id} levels={levelsFor(item)} progress={fraction}
+                  animate={isPlayingThis} variant={waveStyle} width={waveW} height={30}
+                  activeColor={activeColor} idleColor={idleColor}
+                  onSeek={(f) => seekAudio(item, f)} accessibilityLabel={t('voice.seek')} />
+              </View>
+              <View style={{ flexDirection:'row', alignItems:'center', marginTop:3, marginLeft:46, gap:8 }}>
+                <Text style={{ fontSize:11, color:metaColor, fontVariant:['tabular-nums'] }}>
+                  {isPlayingThis ? fmtMs(playProgress.position) : fmtMs(item.durationMs)}{item.viewOnce ? ' · ⚡' : ''}
+                </Text>
+                {isPlayingThis && (
+                  <TouchableOpacity onPress={cyclePlaybackSpeed} hitSlop={{ top:6, bottom:6, left:6, right:6 }}
+                    accessibilityRole="button" accessibilityLabel={t('voice.speed', { speed: playbackSpeed })}
+                    style={{ paddingHorizontal:7, paddingVertical:1, borderRadius:8,
+                      backgroundColor: item.mine ? P.bubbleMineSoft : P.surfaceAlt }}>
+                    <Text style={{ fontSize:11, fontWeight:'600', color: item.mine ? P.bubbleMineText : P.accentFg }}>
+                      {playbackSpeed}×
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <View style={{ flex:1 }} />
+                <Text style={{ fontSize:11, color:metaColor }}>
+                  {item.time}{item.mine ? '  ' + sendStatusIcon(item.status) : ''}
                 </Text>
               </View>
-              {isPlayingThis && (
-                <TouchableOpacity onPress={cyclePlaybackSpeed} style={{
-                  paddingHorizontal:7, paddingVertical:3, borderRadius:8,
-                  backgroundColor: item.mine ? P.bubbleMineSoft : P.surfaceAlt }}>
-                  <Text style={{ fontSize:11, fontWeight:'600', color: item.mine ? P.bubbleMineText : P.accentFg }}>
-                    {playbackSpeed}x
-                  </Text>
-                </TouchableOpacity>
-              )}
-              <Text style={{ fontSize:11, color: item.mine ? P.bubbleMineMeta : P.bubbleTheirsMeta }}>
-                {item.time}{item.mine ? '  ' + sendStatusIcon(item.status) : ''}
-              </Text>
             </TouchableOpacity>
             );
           }
@@ -4473,11 +4713,9 @@ return (
                 <Text style={{ fontSize: typeof fontSize === 'number' ? fontSize : 15, color: item.mine ? P.bubbleMineText : P.bubbleTheirsText }}>
                   {t('common.location')}
                 </Text>
-                {/* Live-Test-Feedback 2026-09-28: zeigte bisher nirgends WO man
-                    sich befindet - address kommt best-effort per OpenStreetMap-
-                    Nominatim (nicht Google) vom Sender mit, siehe sendLocation()/
-                    reverseGeocode(). Fehlt sie (Aufloesung fehlgeschlagen/zu
-                    langsam), Koordinaten als Fallback anzeigen statt nichts. */}
+                {/* Ortsname nur noch von aelteren Absendern (bis 1.1.0 per
+                    Nominatim, siehe sendLocationMessage) - sonst die
+                    Koordinaten. Malachi selbst fragt keinen Dienst. */}
                 <Text numberOfLines={2} style={{ fontSize:12, marginTop:1, maxWidth:180,
                   color: item.mine ? P.bubbleMineText : P.bubbleTheirsText }}>
                   {item.address || coordsText}
@@ -4549,36 +4787,61 @@ return (
       />
       </View>
 
-      {audioPreview && (
-        <View style={{ flexDirection:'row', padding:12, gap:8, alignItems:'center',
-          backgroundColor: P.surfaceAlt, borderTopWidth:0.5, borderTopColor:P.border }}>
-          <TouchableOpacity onPress={playPreview} style={{ width:40, height:40, borderRadius:20,
-            backgroundColor: AC, alignItems:'center', justifyContent:'center' }}>
-            <Icon name={previewPlaying ? 'pause' : 'play'} size={18} color={P.onAccent} />
-          </TouchableOpacity>
-          <Text style={{ flex:1, color:P.text, fontSize:13 }}>
-            {t('chat.audioPreview', { duration: Math.floor(audioPreview.durationMs/60000) + ':' + String(Math.floor((audioPreview.durationMs%60000)/1000)).padStart(2,'0') })}
-            {viewOnceAudio ? ' · ' + t('chat.viewOnceHint') : ''}
-          </Text>
-          <TouchableOpacity onPress={() => setViewOnceAudio(v => !v)} style={{ padding:8 }}>
-            <Icon name="zap" size={20} color={viewOnceAudio ? AC : P.textMuted} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => {
-            // Verworfene Aufnahme: rohe Klartext-Datei ebenfalls löschen
-            // (Secrets-Lifecycle-Review, Fund S-5), nicht nur die Vorschau
-            // aus dem UI-State entfernen.
-            RNFS.unlink(audioPreview.path).catch(() => {});
-            setAudioPreview(null);
-            setViewOnceAudio(false);
-          }} style={{ padding:8 }}>
-            <Icon name="x" size={20} color={P.danger} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={sendAudioPreview} style={{ width:40, height:40, borderRadius:20,
-            backgroundColor: AC, alignItems:'center', justifyContent:'center' }}>
-            <Icon name="send" size={18} color={P.onAccent} />
-          </TouchableOpacity>
+      {audioPreview && (() => {
+        // Vorschau nach der Aufnahme (Nutzerwunsch 2026-10-25): kleiner Player
+        // mit derselben Wellenform wie spaeter im Chat statt reinem Text.
+        // Links verwerfen, dann Abspielen + Wellenform (antippen = springen) +
+        // Zeit, rechts "loescht sich nach Anhoeren" und Senden.
+        const total = previewProgress.duration || audioPreview.durationMs || 0;
+        const frac = previewPlaying && total ? Math.min(1, previewProgress.position / total) : 0;
+        const fmt = (ms) => Math.floor((ms || 0) / 60000) + ':' + String(Math.floor(((ms || 0) % 60000) / 1000)).padStart(2, '0');
+        // Breite: Bildschirm minus Rand, Knoepfe (36+40+40+44), Zeit und Abstaende.
+        const waveW = Math.max(100, Math.round(W - 24 - 160 - 34 - 40));
+        return (
+        <View style={{ backgroundColor: P.surfaceAlt, borderTopWidth:0.5, borderTopColor:P.border,
+          paddingHorizontal:12, paddingVertical:10 }}>
+          <View style={{ flexDirection:'row', alignItems:'center', gap:8 }}>
+            <TouchableOpacity testID="voice-preview-discard" accessibilityRole="button" accessibilityLabel={t('voice.discard')}
+              onPress={() => {
+                // Verworfene Aufnahme: es gibt keine Datei (SecureAudio.js) -
+                // Wiedergabe beenden, Inhalt verlaesst mit dem State den Speicher.
+                if (previewPlayerRef.current) { voicePlayer.stop(); previewPlayerRef.current = null; }
+                setPreviewPlaying(false);
+                setPreviewProgress({ position: 0, duration: 0 });
+                setAudioPreview(null);
+                setViewOnceAudio(false);
+              }} style={{ width:36, height:36, alignItems:'center', justifyContent:'center' }}>
+              <Icon name="trash-2" size={19} color={P.danger} />
+            </TouchableOpacity>
+            <TouchableOpacity testID="voice-preview-play" onPress={playPreview} accessibilityRole="button"
+              accessibilityLabel={previewPlaying ? t('voice.pause') : t('voice.play')}
+              style={{ width:40, height:40, borderRadius:20, backgroundColor: AC, alignItems:'center', justifyContent:'center' }}>
+              <Icon name={previewPlaying ? 'pause' : 'play'} size={18} color={P.onAccent} style={previewPlaying ? undefined : { marginLeft:2 }} />
+            </TouchableOpacity>
+            <View style={{ flex:1, alignItems:'center' }}>
+              <VoiceWaveView testID="voice-preview-wave" levels={parseWave(audioPreview.wave) || fallbackLevels(audioPreview.id)}
+                progress={frac} animate={previewPlaying} variant={waveStyle} width={waveW} height={28}
+                activeColor={AC} idleColor={P.border} onSeek={seekPreview} accessibilityLabel={t('voice.seek')} />
+            </View>
+            <Text style={{ fontSize:12, color:P.textSub, minWidth:34, textAlign:'right', fontVariant:['tabular-nums'] }}>
+              {fmt(previewPlaying ? previewProgress.position : total)}
+            </Text>
+            <TouchableOpacity testID="voice-preview-viewonce" onPress={() => setViewOnceAudio(v => !v)}
+              accessibilityRole="switch" accessibilityState={{ checked: viewOnceAudio }} accessibilityLabel={t('chat.viewOnceHint')}
+              style={{ width:40, height:40, alignItems:'center', justifyContent:'center' }}>
+              <Icon name="zap" size={19} color={viewOnceAudio ? AC : P.textMuted} />
+            </TouchableOpacity>
+            <TouchableOpacity testID="voice-preview-send" onPress={sendAudioPreview} accessibilityRole="button" accessibilityLabel={t('voice.send')}
+              style={{ width:44, height:44, borderRadius:22, backgroundColor: AC, alignItems:'center', justifyContent:'center' }}>
+              <Icon name="send" size={18} color={P.onAccent} />
+            </TouchableOpacity>
+          </View>
+          {viewOnceAudio && (
+            <Text style={{ fontSize:11, color:P.textMuted, marginTop:4, marginLeft:44 }}>⚡ {t('chat.viewOnceHint')}</Text>
+          )}
         </View>
-      )}
+        );
+      })()}
       {chat?.wiped ? (
         <View style={{ padding:16, alignItems:'center', backgroundColor:P.surface, borderTopWidth:0.5, borderTopColor:P.border }}>
           <Text style={{ fontSize:13, color:P.textMuted, textAlign:'center' }}>
@@ -4591,11 +4854,17 @@ return (
         {recording ? (
           <View style={{ flex:1, flexDirection:'row', alignItems:'center', gap:8,
             backgroundColor:P.surfaceAlt, borderRadius:20, borderWidth:0.5,
-            borderColor:P.danger, paddingHorizontal:14, paddingVertical:8 }}>
+            borderColor:P.danger, paddingHorizontal:14, paddingVertical:6 }}>
             <View style={{ width:8, height:8, borderRadius:4, backgroundColor:P.danger }} />
-            <Text style={{ fontSize:15, color:P.text }}>
-              {t('chat.recording', { time: String(Math.floor(recordSecs/60)).padStart(2,'0') + ':' + String(recordSecs%60).padStart(2,'0') })}
+            <Text style={{ fontSize:14, color:P.text, fontVariant:['tabular-nums'] }}
+              accessibilityLabel={t('chat.recording', { time: String(Math.floor(recordSecs/60)).padStart(2,'0') + ':' + String(recordSecs%60).padStart(2,'0') })}>
+              {String(Math.floor(recordSecs/60)).padStart(2,'0') + ':' + String(recordSecs%60).padStart(2,'0')}
             </Text>
+            {/* Live-Pegel (VoiceWave.js) - zeichnet nur sich selbst neu */}
+            <View style={{ flex:1, alignItems:'flex-end', overflow:'hidden' }}>
+              <LiveRecordingWave testID="voice-live-wave" feed={levelFeedRef.current} variant={waveStyle}
+                width={Math.max(60, Math.round(W - 20 - 3 * 40 - 3 * 8 - 28 - 16 - 46 - 16))} height={24} color={P.danger} />
+            </View>
           </View>
         ) : (
         <TextInput
@@ -4786,6 +5055,27 @@ function CallScreen({ chat, callManager, callState, remoteStream, videoOn, remot
   // Mic-Status zurücksetzen, sobald ein neuer Anruf beginnt.
   React.useEffect(() => { setMicOn(true); }, [callManager]);
 
+  // Lautsprecher (CallAudioRoute.js). Der tatsaechliche Ausgang kommt von
+  // Telecom zurueck - auch wenn er ueber das System (Bluetooth, Benachrichtigung)
+  // gewechselt wird. Videoanrufe laufen wie bei anderen Messengern automatisch
+  // ueber den Lautsprecher, solange man nicht selbst umgeschaltet hat.
+  const [speakerOn, setSpeakerOn] = useState(false);
+  const speakerTouched = React.useRef(false);
+  const speakerSupported = isCallSpeakerSupported();
+  React.useEffect(() => onCallAudioRoute((route) => setSpeakerOn(route === AUDIO_ROUTE_SPEAKER)), []);
+  React.useEffect(() => { setSpeakerOn(false); speakerTouched.current = false; }, [callManager]);
+  const switchSpeaker = async (next, byUser) => {
+    if (byUser) speakerTouched.current = true;
+    setSpeakerOn(next);
+    const ok = await callManager?.setSpeaker?.(next);
+    if (!ok) setSpeakerOn(!next);
+  };
+  const wantsVideo = !!videoOn || isVideoCall;
+  React.useEffect(() => {
+    if (wantsVideo && callState === CallState.ACTIVE && !speakerTouched.current && !speakerOn) switchSpeaker(true, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantsVideo, callState]);
+
   const fmt = s => String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
 
   const statusText = {
@@ -4877,6 +5167,19 @@ function CallScreen({ chat, callManager, callState, remoteStream, videoOn, remot
               onPress={toggleMic} activeOpacity={0.85}>
               <Icon name={micOn ? 'mic' : 'mic-off'} size={22} color={micOn ? P.accentFg : P.onDanger} />
             </TouchableOpacity>
+            {speakerSupported && (
+              <TouchableOpacity
+                testID="call-speaker"
+                style={{ width:56, height:56, borderRadius:28,
+                  backgroundColor: speakerOn ? P.accent : P.surfaceAlt,
+                  alignItems:'center', justifyContent:'center',
+                  borderWidth:0.5, borderColor: speakerOn ? P.accent : P.borderStrong }}
+                accessibilityRole="switch" accessibilityState={{ checked: speakerOn }}
+                accessibilityLabel={speakerOn ? t('groupCall.hoererStattLautsprecher') : t('groupCall.lautsprecher')}
+                onPress={() => switchSpeaker(!speakerOn, true)} activeOpacity={0.85}>
+                <Icon name={speakerOn ? 'volume-2' : 'volume-1'} size={22} color={speakerOn ? P.onAccent : P.accentFg} />
+              </TouchableOpacity>
+            )}
             {callState === CallState.ACTIVE && (
               <TouchableOpacity
                 style={{ width:56, height:56, borderRadius:28,
@@ -4975,13 +5278,8 @@ function ConnectScreen({ onBack, onConnected, deepLinkToken }) {
   // das PSK kennen nur die beiden koppelnden Geraete, das Ergebnis ist voll-
   // entropisch und fuer Dritte nicht vorhersagbar (Sicherheitsreview 3). Der
   // 8-stellige Token allein waere zu kollisionsanfaellig.
-  const deriveContactId = async (token, pskHex) => {
-    if (!NativeModules.KyberModule?.sha256) {
-      throw new Error('SHA-256-Modul nicht verfügbar - Pairing kann sich gerade nicht sicher aufbauen.');
-    }
-    const hex = await NativeModules.KyberModule.sha256('malachi_2026_pairing_' + token + '|' + pskHex);
-    return 'c_' + hex.slice(0, 32);
-  };
+  // Gemeinsam mit der Vorstellung ueber Gruppen (PairingIds.js).
+  const deriveContactId = deriveSharedContactId;
 
   // Tor muss laufen: die Einladung braucht die eigene Onion-Adresse, die
   // Annahme einer Einladung die Verbindung dorthin.
@@ -5270,6 +5568,11 @@ function ConnectScreen({ onBack, onConnected, deepLinkToken }) {
               <Icon name="share-2" size={16} color={AC} />
               <Text style={{ color:P.accentFg, fontSize:14, fontWeight:'500' }}>{t('connect.shareLink')}</Text>
             </TouchableOpacity>
+            {/* Krypto-Review K-02: Wer den Link unterwegs liest oder aendert,
+                kann sich dazwischenschalten - nur der Code-Vergleich deckt das auf. */}
+            <Text testID="connect-share-hint" style={{ color:P.textMuted, fontSize:11, lineHeight:16, textAlign:'center', marginTop:-6 }}>
+              {t('connect.shareHint')}
+            </Text>
 
             {inviteReady && (
               <View style={{ backgroundColor:P.surfaceAlt, borderRadius:12, borderWidth:1,
@@ -5470,8 +5773,9 @@ function torStatusText(st) {
     default: return t('tor.status.off');
   }
 }
-// ── Verbindungsweg (ConnectionMode.js): drei Stufen ───────────────────────
+// ── Verbindungsweg (ConnectionMode.js): zwei Stufen ───────────────────────
 // Jede Stufe sagt ehrlich, wer die IP-Adresse sieht und was sie kostet.
+// (Seit dem STUN-Ausstieg ohne Nummer - es gibt nur noch zwei.)
 const modeInfo = (id, hasCost) => ({
   get label() { return t('connMode.' + id + '.label'); },
   get desc() { return t('connMode.' + id + '.desc'); },
@@ -5479,8 +5783,7 @@ const modeInfo = (id, hasCost) => ({
   get cost() { return hasCost ? t('connMode.' + id + '.cost') : null; },
 });
 const CONNECTION_MODE_INFO = {
-  [MODE_FAST]: modeInfo('fast', false),
-  [MODE_PRIVATE]: modeInfo('private', true),
+  [MODE_DIRECT]: modeInfo('direct', true),
   [MODE_TOR_ONLY]: modeInfo('torOnly', true),
 };
 
@@ -5523,7 +5826,7 @@ function ConnectionModeSection({ accent, pro, onOpenPro }) {
     if (next === MODE_TOR_ONLY && !canSelectTorOnlyMode(pro)) { onOpenPro?.(); return; }
     if (mode === MODE_TOR_ONLY) {
       Alert.alert(t('connMode.leave.title'),
-        (next === MODE_FAST ? t('connMode.leave.bodyFast') : t('connMode.leave.bodyPrivate'))
+        t('connMode.leave.body')
           + (canSelectTorOnlyMode(pro) ? '' : ' ' + t('connMode.leave.proHint')), [
           { text: t('common.cancel'), style: 'cancel' },
           { text: t('connMode.leave.confirm'), style: 'destructive', onPress: () => { apply(next); } },
@@ -5557,7 +5860,7 @@ function ConnectionModeSection({ accent, pro, onOpenPro }) {
                 </View>
                 <View style={{ flex:1 }}>
                   <View style={{ flexDirection:'row', alignItems:'center' }}>
-                    <Text style={{ fontSize:13, color:P.text }}>{t('connMode.level', { n: m, label: info.label })}</Text>
+                    <Text style={{ fontSize:13, color:P.text }}>{info.label}</Text>
                     {locked && !selected && <ProBadge accent={accent} />}
                   </View>
                   <Text style={{ fontSize:11, color:P.textMuted, marginTop:2, lineHeight:15 }}>{info.desc}</Text>
@@ -5578,6 +5881,54 @@ function ConnectionModeSection({ accent, pro, onOpenPro }) {
         })}
       </View>
     </>
+  );
+}
+
+// ── Verbindungs-Diagnose (ConnectionStats.js, STUN_AUSSTIEG_PLAN.md WP0) ───
+// Nur lokale Zaehlwerte - keine Adressen, keine Kontakte, keine Zeitpunkte.
+// "Als Text kopieren" legt sie geschuetzt in die Zwischenablage; Tester
+// schicken sie selbst, wenn sie moechten. Es wird nichts hochgeladen.
+function useConnectionStatsSnapshot() {
+  const [snap, setSnap] = React.useState(getConnectionStats());
+  React.useEffect(() => {
+    let alive = true;
+    loadConnectionStats().then(() => { if (alive) setSnap(getConnectionStats()); }).catch(() => {});
+    const off = onConnectionStatsChange(() => { if (alive) setSnap(getConnectionStats()); });
+    return () => { alive = false; off(); };
+  }, []);
+  return snap;
+}
+
+function ConnectionDiagnosticsSection({ accent, modeLabel }) {
+  const stats = useConnectionStatsSnapshot();
+  const text = statsAsText(stats, { tr: t, modeLabel, appVersion: [getVersionName(), getDistribution()].filter(Boolean).join(' · ') });
+  const copy = () => {
+    copySensitive(text).catch(() => {});
+    Alert.alert(t('common.copied'), t('diag.copied'));
+  };
+  const reset = () => {
+    Alert.alert(t('diag.resetTitle'), t('diag.resetBody'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('diag.reset'), style: 'destructive', onPress: () => { resetConnectionStats().catch(() => {}); } },
+    ]);
+  };
+  return (
+    <View style={{ backgroundColor:P.surface, borderRadius:16, borderWidth:0.5, borderColor:P.border, padding:16, marginBottom:20 }}>
+      <Text style={{ fontSize:11, color:P.textMuted, lineHeight:16 }}>{t('diag.intro')}</Text>
+      <Text selectable={false} style={{ fontSize:11, color:P.textSub, marginTop:10, lineHeight:16, fontFamily: Platform.OS === 'android' ? 'monospace' : undefined }}>
+        {text}
+      </Text>
+      <View style={{ flexDirection:'row', marginTop:12 }}>
+        <TouchableOpacity onPress={copy} testID="diag-copy"
+          style={{ flex:1, borderRadius:12, borderWidth:1, borderColor:accent, paddingVertical:10, alignItems:'center', marginRight:8 }}>
+          <Text style={{ color:accent, fontSize:13, fontWeight:'500' }}>{t('diag.copy')}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={reset} testID="diag-reset"
+          style={{ flex:1, borderRadius:12, borderWidth:1, borderColor:P.border, paddingVertical:10, alignItems:'center' }}>
+          <Text style={{ color:P.textMuted, fontSize:13, fontWeight:'500' }}>{t('diag.reset')}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
@@ -5606,7 +5957,8 @@ function TorSettingsSection({ accent, pro = false, onOpenPro = null }) {
   }, []);
   const ipv6Missing = ipv6 && ipv6.transport === 'wifi' && !(ipv6.globalAddress && ipv6.defaultRoute);
   const PORT_MAPPING_METHOD_LABEL = { pcp: 'PCP', natpmp: 'NAT-PMP', upnp: 'UPnP' };
-  const privateMode = connectionMode === MODE_PRIVATE;
+  // Ohne STUN ist die Router-Freigabe fuer alle der wichtigste Weg zu einer
+  // Direktverbindung ueber IPv4 (ausser IPv6 und gleichem WLAN).
   const pcpText = connectionMode === MODE_TOR_ONLY
     ? t('direct.torOnly')
     : !pcp
@@ -5614,10 +5966,8 @@ function TorSettingsSection({ accent, pro = false, onOpenPro = null }) {
       : pcp.result === 'SUCCESS'
         ? (PORT_MAPPING_METHOD_LABEL[pcp.method] ? t('direct.activeWith', { method: PORT_MAPPING_METHOD_LABEL[pcp.method] }) : t('direct.active'))
         : pcp.result === 'NOT_AUTHORIZED'
-          ? t('direct.notAuthorized') + ' ' + (privateMode ? t('direct.notAuthorizedPrivate') : t('direct.notAuthorizedOptional'))
-          : privateMode
-            ? t('direct.unsupportedPrivate')
-            : t('direct.unsupported');
+          ? t('direct.notAuthorized') + ' ' + t('direct.notAuthorizedHint')
+          : t('direct.unsupportedHint');
   const validDraft = parseCustomBridges(draft).length;
   return (
     <>
@@ -6365,6 +6715,10 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
   const [fontSize, setFont]     = useState(currentFont || 'normal');
   const [wipeModal, setWipe]       = useState(false);
   const [sheet, setSheet]          = useState(null);
+  // Sprachnachrichten-Stil (VoiceWave.js): Balken oder Pixel-Welle; der zweite
+  // Stil ist Teil der Vollversion (ohne sie gilt immer der Standard).
+  const [waveStyleSel, setWaveStyleSel] = useState(waveStyleSetting());
+  React.useEffect(() => subscribeWaveStyle(setWaveStyleSel), []);
   const [avatar, setAvatar]        = useState(null);
   const [renameUser, setRenameUser] = useState(false);
   const [newUsername, setNewName]   = useState('');
@@ -6380,6 +6734,7 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
   const [proOpen, setProOpen] = useState(false);
   const [siegelOpen, setSiegelOpen] = useState(false);
   const pro = lic.pro === true;
+  const shownWaveStyle = pro ? waveStyleSel : effectiveWaveStyle(false);
   // Ausklappbare Kategorien (SettingsGroup) - hoechstens eine offen.
   const [openGroup, setOpenGroup] = useState(null);
   // Bildschirmschutz (ScreenSecurity.js): an/aus, "aus" nur mit Vollversion.
@@ -6402,14 +6757,22 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
   const [torSt, setTorSt] = useState(getTorState());
   React.useEffect(() => onTorState(setTorSt), []);
   const modeShort = (CONNECTION_MODE_INFO[connectionMode]?.label || '').split(' (')[0];
+  const diagStats = useConnectionStatsSnapshot();
+  const diagSummary = statsSummary(diagStats, t);
   const torShort = torSt.status === 'ON' ? t('app.torShortOn') : torSt.status === 'STARTING' ? t('app.torShortStarting') : torSt.status === 'ERROR' ? t('app.torNichtVerbunden') : t('app.torShortOff');
 
   React.useEffect(() => {
-    AsyncStorage.getItem('avatar').then(uri => {
-      if (uri) setAvatar(uri);
-    });
-    EncryptedStorage.getItem('duress_pin').then(p => setDuress(!!p)).catch(() => {});
+    // Mit PIN-Tresor liegt die Notfall-PIN nur als Pruefwert im Tresor.
+    PinVault.ready().then(async (r) => {
+      if (r) setDuress(PinVault.hasDuressPin());
+      else setDuress(!!(await EncryptedStorage.getItem('duress_pin').catch(() => null)));
+    }).catch(() => {});
     return subscribeLicense(setLic);
+  }, []);
+  // Eigenes Profilbild (OwnAvatar.js) - dieselbe Quelle wie die Kopfzeile.
+  React.useEffect(() => {
+    loadOwnAvatar().then(setAvatar).catch(() => {});
+    return subscribeOwnAvatar(setAvatar);
   }, []);
 
   // Duress-PIN-Zeile: Entfernen ist immer erlaubt; Einrichten nur mit Pro -
@@ -6439,6 +6802,26 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
     if (!canConfigureDuressPin(await isProVerified())) {
       setDuressPinModal(false);
       setProOpen(true);
+      return;
+    }
+    // PIN-Tresor: die echte PIN ist nicht mehr gespeichert. Laenge aus
+    // 'pin_length' (Standard 6, wie im Sperrbildschirm); ob die Eingabe die
+    // echte PIN ist, prueft der Tresor (sie wuerde ihn oeffnen).
+    if (await PinVault.ready().then((r) => !!r).catch(() => false)) {
+      const len = parseInt(await AsyncStorage.getItem('pin_length').catch(() => null), 10) || 6;
+      if (duressPinInput.length !== len) {
+        setDuressPinError(t('settings.duress.lengthMismatch', { n: len }));
+        return;
+      }
+      setDuressPinError(t('lock.unlocking'));
+      const r = await PinVault.setDuressPin(duressPinInput);
+      if (r === 'same') { setDuressPinError(t('settings.duress.samePin')); return; }
+      if (r !== 'ok') { setDuressPinError(t('lock.vaultError')); return; }
+      await EncryptedStorage.removeItem('duress_pin').catch(() => {});
+      setDuress(true);
+      setDuressPinModal(false);
+      setDuressPinInput('');
+      setDuressPinError('');
       return;
     }
     const realPin = await EncryptedStorage.getItem('app_pin').catch(() => null);
@@ -6485,6 +6868,7 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
   };
 
   const clearDuressPin = async () => {
+    await PinVault.clearDuressPin().catch(() => {});
     await EncryptedStorage.removeItem('duress_pin').catch(() => {});
     setDuress(false);
   };
@@ -6494,7 +6878,7 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
       { text: t('common.cancel'), style: 'cancel' },
       { text: t('common.remove'), style: 'destructive', onPress: () => {
         setAvatar(null);
-        AsyncStorage.removeItem('avatar');
+        removeOwnAvatar().catch(() => {});
         onAvatarChange?.(null);
         // Allen Kontakten mitteilen
         const ES = require('react-native-encrypted-storage').default;
@@ -6515,13 +6899,15 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
     ]);
   };
 
+  // Profilbild verkleinert (512 px) und verschluesselt ablegen (OwnAvatar.js) -
+  // vorher blieb nur der Pfad einer Cache-Kopie, die der Start-Sweep loeschte.
   const pickAvatar = () => {
-    launchImageLibrary({ mediaType:'photo', quality:0.8, includeBase64:false },
-      (response) => {
+    launchImageLibrary({ mediaType:'photo', quality:0.8, includeBase64:true, maxWidth:512, maxHeight:512 },
+      async (response) => {
         if (response.assets && response.assets[0]) {
-          const uri = response.assets[0].uri;
+          const uri = await setOwnAvatarFromPicker(response.assets[0]).catch(() => null);
+          if (!uri) return;
           setAvatar(uri);
-          AsyncStorage.setItem('avatar', uri);
           onAvatarChange?.(uri);
           // Avatar-Hash sofort löschen → beim nächsten Reconnect neu senden
           const ES = require('react-native-encrypted-storage').default;
@@ -6657,6 +7043,9 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
           <View style={{ height:0.5, backgroundColor:P.surfaceAlt, marginHorizontal:16 }} />
           <SettingsRow label={t('settings.fontSize')} value={fontLabel}
             onPress={() => setSheet('font')} />
+          <View style={{ height:0.5, backgroundColor:P.surfaceAlt, marginHorizontal:16 }} />
+          <SettingsRow label={t('settings.voiceStyle')} value={t('voiceStyle.' + shownWaveStyle)}
+            onPress={() => setSheet('voiceStyle')} />
         </DesignSection>
         </SettingsGroup>
 
@@ -6746,6 +7135,13 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
           <TorSettingsSection accent={curAC} pro={pro} onOpenPro={() => setProOpen(true)} />
         </SettingsGroup>
 
+        {/* DIAGNOSE (ConnectionStats.js): lokale Verbindungszaehler, nichts wird gesendet */}
+        <SettingsGroup id="diagnose" icon="activity" title={t('diag.title')} accent={curAC}
+          summary={diagSummary}
+          openId={openGroup} onToggle={setOpenGroup}>
+          <ConnectionDiagnosticsSection accent={curAC} modeLabel={modeShort} />
+        </SettingsGroup>
+
         {/* UPDATES (UpdateUI.tsx) - nur Web-Version, in der Play-Version gar nicht. */}
         {isUpdaterAvailable() && (
           <SettingsGroup id="updates" icon="download" title={t('app.updates')} accent={curAC}
@@ -6803,6 +7199,38 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
             {fontSize === f.key && <Text style={{ fontSize:18, color:curAC }}>✓</Text>}
           </TouchableOpacity>
         ))}
+      </SettingsSheet>
+
+      {/* SHEET: SPRACHNACHRICHTEN-STIL (VoiceWave.js) - mit Live-Vorschau */}
+      <SettingsSheet title={t('settings.voiceStyle')} visible={sheet==='voiceStyle'} onClose={() => setSheet(null)}>
+        {['bars', 'pixel'].map((style) => {
+          const locked = style !== 'bars' && !pro;
+          const selected = shownWaveStyle === style;
+          return (
+            <TouchableOpacity key={style} testID={'voice-style-' + style}
+              accessibilityRole="button" accessibilityState={{ selected }}
+              onPress={() => {
+                if (locked) { setSheet(null); setProOpen(true); return; }
+                setWaveStyle(style).catch(() => {});
+                setSheet(null);
+              }}
+              style={{ flexDirection:'row', alignItems:'center', paddingVertical:14, gap:12,
+                borderBottomWidth:0.5, borderBottomColor:P.border }}>
+              <View style={{ flex:1 }}>
+                <View style={{ flexDirection:'row', alignItems:'center' }}>
+                  <Text style={{ fontSize:15, color:P.text }}>{t('voiceStyle.' + style)}</Text>
+                  {locked && <ProBadge accent={curAC} />}
+                </View>
+                <Text style={{ fontSize:11, color:P.textMuted, marginTop:2 }}>{t('voiceStyle.' + style + 'Desc')}</Text>
+                <View style={{ marginTop:8 }}>
+                  <VoiceWaveView levels={fallbackLevels('vorschau')} progress={0.4} animate={style === 'pixel'}
+                    variant={style} width={180} height={26} activeColor={curAC} idleColor={P.border} />
+                </View>
+              </View>
+              {selected && <Text style={{ fontSize:18, color:curAC }}>✓</Text>}
+            </TouchableOpacity>
+          );
+        })}
       </SettingsSheet>
 
       {/* SHEET: SPRACHE */}

@@ -67,6 +67,12 @@ class CallBridgeModule(reactContext: ReactApplicationContext) : ReactContextBase
         TelecomHelper.endCall(reactApplicationContext, contactId)
     }
 
+    /** Lautsprecher an/aus (AudioRouteHelper); liefert, ob umgeschaltet wurde. */
+    @ReactMethod
+    fun setSpeaker(on: Boolean, promise: Promise) {
+        promise.resolve(AudioRouteHelper.setSpeaker(reactApplicationContext, on))
+    }
+
     // React-Native-Boilerplate für NativeEventEmitter (kein Zusatzverhalten nötig)
     @ReactMethod
     fun addListener(eventName: String) {}

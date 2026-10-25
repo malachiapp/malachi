@@ -134,8 +134,8 @@ android {
         applicationId "com.securecommapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode 3
+        versionName "1.2.0"
         manifestPlaceholders = [appLabel: "@string/app_name"]
         // Audit 2026-09-28: `./gradlew assembleRelease -PmalachiDemo` baut eine
         // NEBEN der echten App installierbare Demo-Version (eigene App-ID
@@ -243,17 +243,26 @@ android {
 dependencies {
     implementation("com.facebook.react:react-android")
     implementation 'org.bouncycastle:bcprov-jdk18on:1.80'
+    // PIN-Tresor (vault/MalachiPinKeyModule.kt): Fingerabdruck-Dialog mit
+    // CryptoObject. Dieselbe Version, die react-native-biometrics mitbringt.
+    implementation 'androidx.biometric:biometric:1.1.0'
     // Kein Firebase/FCM mehr (Release 2026-10): die App ist serverlos, Push
     // wurde nicht mehr genutzt - Firebase meldete sich aber beim Start bei
     // Google an (Installations-ID/Token). Komplett entfernt.
     // Tor-Ausweichweg (siehe tor/MalachiTorModule.kt): Tor selbst (Guardian
     // Project), dessen Steuerprotokoll und die Bridge-Transporte obfs4/
     // Snowflake/meek/WebTunnel (IPtProxy). Alle Open Source, Maven Central.
-    // tor-android bewusst 0.4.8.x (LTS-Linie): ab 0.4.9 wird compileSdk 37
-    // verlangt, die App baut (AGP 8.12) mit 36.
-    // kotlin-stdlib ausgeschlossen: TorService ist reines Java (geprueft), die
-    // mitgezogene 2.3er-Bibliothek waere fuer den Kotlin-2.1-Compiler unlesbar.
-    implementation("info.guardianproject:tor-android:0.4.8.22") {
+    // tor-android 0.4.9.x (Okt. 2026): 0.4.8 ist seit 1.6.2026 ohne
+    // Sicherheitsupdates, das Tor Project schaltet die Unterstuetzung im Netz
+    // ab (blog.torproject.org/sunsetting-tor-048) - mit 0.4.8 gingen Kopplung,
+    // Verbindungen und In-App-Updates (laufen ueber Tor) irgendwann nicht mehr.
+    // 0.4.9 traegt in den AAR-Metadaten minCompileSdk=37, die App baut (AGP 8.12)
+    // mit 36 - siehe checkAarMetadata unten. Bytecode-Vergleich mit 0.4.8.22:
+    // keine neue Android-API (nur Log.e hinzu, FileObserver entfallen), Manifest
+    // unveraendert - auf aelteren Android-Versionen also kein Laufzeitrisiko.
+    // kotlin-stdlib ausgeschlossen: TorService ist reines Java (geprueft, auch
+    // 0.4.9.14), die mitgezogene Bibliothek waere fuer den Kotlin-2.1-Compiler unlesbar.
+    implementation("info.guardianproject:tor-android:0.4.9.14") {
         exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib"
     }
     implementation("info.guardianproject:jtorctl:0.4.5.7")
@@ -271,5 +280,11 @@ dependencies {
         implementation jscFlavor
     }
 }
+// AAR-Metadaten-Pruefung (minCompileSdk) aus: einzig tor-android 0.4.9 verlangt
+// compileSdk 37, das AGP 8.12 noch nicht kennt - ohne neue API (Begruendung
+// bei der Abhaengigkeit oben). Alle anderen Bibliotheken bestanden die Pruefung
+// mit 36 (Stand 1.1.0). Bei jeder neuen Abhaengigkeit oder einem AGP-Update:
+// diese Zeile entfernen und schauen, ob die Pruefung wieder gruen ist.
+tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }.configureEach { enabled = false }
 apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")
 

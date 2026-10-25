@@ -8,7 +8,7 @@ const renderer = require('react-test-renderer');
 const G = require('../security/helpers/playFixtures');
 
 const mockConfig = {
-  STUN_HOST: 'stun.invalid', STUN_URL: 'stun:stun.invalid:3478', LICENSE_PUBLIC_KEY: null, SHOP_ONION: null,
+  LICENSE_PUBLIC_KEY: null, SHOP_ONION: null,
   SHOP_PORT: 80, PRO_PRICE_EUR: '2,99', PLAY_LICENSE_PUBLIC_KEY: null, PLAY_PRODUCT_ID: 'malachi_pro',
 };
 jest.mock('../../AppConfig', () => mockConfig);

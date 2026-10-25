@@ -33,9 +33,14 @@ Dieses Dokument beschreibt, was **tatsächlich gebaut** ist.
 - Bandbreite bei 8 Teilnehmern: 7 × ~20 kbit/s hoch und runter (+ RTP/SRTP-
   Overhead) ≈ 0,2–0,3 Mbit/s je Richtung – auch im Mobilfunk tragbar. CPU:
   libwebrtc kodiert je Verbindung – auf Geräten zu prüfen (siehe unten).
-- ICE-Konfiguration wie bei 1:1-Anrufen (`pcConfigForCalls`): Stufe 1 nur
-  STUN (deutsche Betreiber, kein TURN), Stufe 2 ohne ICE-Server, Stufe 3 wirft
-  (`TorOnlyModeError`) – es entsteht dann gar keine PeerConnection.
+- ICE-Konfiguration wie bei 1:1-Anrufen (`pcConfigForCalls`): seit dem
+  STUN-Ausstieg (STUN_AUSSTIEG_PLAN.md) keine ICE-Server – kein STUN, kein
+  TURN. Je Paar fragt `PortMapping.CallPortMapper` nach dem Sammeln den
+  eigenen Router um eine Portfreigabe und schickt sie als normalen
+  `ice`-Kandidaten (Lücke L1). Stufe 3 wirft (`TorOnlyModeError`) – es
+  entsteht dann gar keine PeerConnection. Paare ohne Direktweg bleiben „nicht
+  erreichbar“; eine Weiterleitung über den Gastgeber (WP4) ist bewusst noch
+  nicht gebaut (Entscheidung E6: erst messen – Diagnose „groupPairs“).
 
 ## Signalisierung
 
@@ -218,7 +223,7 @@ nicht geändert (kein Build), am Gerät zu prüfen.
 
 `groupCall.mesh.test.js` – vier „Geräte“ mit eigenen Modul-Instanzen, echte
 Verschlüsselung der Signale, PeerConnection-Attrappe: Pro-Regel im Manager,
-freie Teilnehmer, Vollvermaschung (3 Paare, Opus mono 20 kbit/s, nur STUN),
+freie Teilnehmer, Vollvermaschung (3 Paare, Opus mono 20 kbit/s, keine ICE-Server),
 Anbieter-Regel, Weiterleitung nur über den Host (nicht gekoppelt) bzw. nur
 direkt (gekoppelt, Host-Fälschung verworfen), fremde Kontakte/Gruppen/
 callIds, Feldprüfung, Ratenbegrenzung, Auflegen/Host-Ende/„nur Host übrig“,

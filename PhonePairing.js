@@ -38,6 +38,18 @@
  * kann ein Mann in der Mitte die beiden Codes nicht passend machen - je Versuch
  * trifft er hoechstens mit 1 : 1.000.000, und jeder Versuch faellt auf.
  *
+ * Kennung statt Nummer (Nutzerwunsch 2026-10-25): Statt zweier Telefonnummern
+ * koennen beide auch zwei frei gewaehlte Kennungen eingeben (Spitzname,
+ * E-Mail, Benutzername ...), je mindestens ID_MIN_LEN Zeichen. Sie werden
+ * vereinheitlicht (NFKC, Leerraum zusammengefasst, Kleinschreibung) und als
+ * "id:<kennung>" in dieselbe Ableitung gegeben - Nummern bleiben unveraendert
+ * E.164, d.h. die Telefon-Kopplung ist mit aelteren Versionen identisch. Eine
+ * Kennung beginnt nie mit "+", Nummer und Kennung koennen also nie denselben
+ * Treffpunkt ergeben. Gegen einen Mann in der Mitte schuetzt in beiden Faellen
+ * der Code-Vergleich. Wer beide Kennungen erraet, kann nur sehen, DASS gerade
+ * gekoppelt wird, oder die Kopplung stoeren - deshalb die Mindestlaenge und der
+ * Hinweis, etwas zu waehlen, das nur die beiden kennen.
+ *
  * Datenschutz: die Nummern leben nur im Arbeitsspeicher (Eingabefelder,
  * Funktionsumfang dieser Sitzung bis zur Ableitung). Sie werden nie geloggt,
  * nie gespeichert, nie gesendet. Abgeleitete Schluessel werden nach Gebrauch
@@ -167,6 +179,46 @@ export function normalizePhoneNumber(raw, defaultCountryCode = '49') {
   return E164_RE.test(e164) ? e164 : null;
 }
 
+// ── Kennungen (statt Telefonnummern) ────────────────────────────────────────
+export const ID_MIN_LEN = 8;
+export const ID_MAX_LEN = 64;
+const ID_PREFIX = 'id:';
+// Steuer- und unsichtbare Formatzeichen (Bidi-Steuerung, Null-Breite, BOM ...):
+// abgelehnt statt still entfernt - zwei Geraete muessen exakt dasselbe sehen.
+// eslint-disable-next-line no-control-regex -- Steuerzeichen werden hier absichtlich erkannt
+const ID_FORBIDDEN_RE = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF\uFFF9-\uFFFB\uD800-\uDFFF]/;
+
+/**
+ * Freie Kennung -> "id:<vereinheitlicht>" oder null. Vereinheitlicht: NFKC,
+ * Leerraum am Rand weg und innen zu einem Leerzeichen, Kleinschreibung.
+ * Laenge (in Zeichen, nicht Bytes) ID_MIN_LEN..ID_MAX_LEN.
+ */
+export function normalizeIdentifier(raw) {
+  if (typeof raw !== 'string' || raw.length > 4 * ID_MAX_LEN) return null;
+  let s = typeof raw.normalize === 'function' ? raw.normalize('NFKC') : raw;
+  // eslint-disable-next-line no-control-regex -- Leerraum-Steuerzeichen werden hier absichtlich zusammengefasst
+  s = s.replace(/[\t\n\r\u000B\u000C\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000 ]+/g, ' ').trim();
+  // Unpaarige Surrogate sind ungueltig, gepaarte (Emoji) erlaubt.
+  const unpaired = s.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '');
+  if (ID_FORBIDDEN_RE.test(unpaired)) return null;
+  s = s.toLowerCase();
+  const len = [...s].length;
+  if (len < ID_MIN_LEN || len > ID_MAX_LEN) return null;
+  return ID_PREFIX + s;
+}
+
+/** Eingabe je nach Art ('phone' | 'id') -> kanonische Form oder null. */
+export function normalizePairingId(raw, mode = 'phone') {
+  return mode === 'id' ? normalizeIdentifier(raw) : normalizePhoneNumber(raw);
+}
+
+/** Kanonische Nummer (E.164) oder kanonische Kennung ("id:..."). */
+export function isPairingId(v) {
+  if (typeof v !== 'string') return false;
+  if (E164_RE.test(v)) return true;
+  return v.startsWith(ID_PREFIX) && normalizeIdentifier(v.slice(ID_PREFIX.length)) === v;
+}
+
 /** Wer betreibt den Treffpunkt? Die kleinere Nummer (beide Seiten rechnen gleich). */
 export function phoneRole(ownE164, otherE164) {
   return ownE164 < otherE164 ? 'host' : 'client';
@@ -257,7 +309,7 @@ async function nativeArgon2id(password, salt, p) {
  * kdf(password, salt, PHONE_KDF) -> Uint8Array (Standard: nativ Argon2id).
  */
 export async function deriveRendezvous(numberA, numberB, bucket, { kdf = nativeArgon2id } = {}) {
-  if (!E164_RE.test(numberA || '') || !E164_RE.test(numberB || '') || numberA === numberB) {
+  if (!isPairingId(numberA) || !isPairingId(numberB) || numberA === numberB) {
     throw new PhonePairingError('invalid-number', 'Ungueltige Nummern');
   }
   if (!Number.isSafeInteger(bucket)) throw new PhonePairingError('internal', 'Ungueltiges Zeitfenster');
@@ -548,6 +600,7 @@ class PhonePairingSession {
     this.windowMs = opts.windowMs || PHONE_PAIR_WINDOW_MS;
     this.compareMs = opts.compareMs || PHONE_COMPARE_MS;
     this.appState = opts.appState === undefined ? AppState : opts.appState;
+    this.mode = opts.mode === 'id' ? 'id' : 'phone';   // Telefonnummern oder freie Kennungen
     this.state = { phase: 'preparing', role: null, code: null, error: null, startedAt: this.now() };
     this.finished = false;
     this.rvs = [];
@@ -579,9 +632,9 @@ class PhonePairingSession {
   }
 
   async run(ownRaw, otherRaw) {
-    let own = normalizePhoneNumber(ownRaw);
-    let other = normalizePhoneNumber(otherRaw);
-    if (!own || !other) return this.fail('invalid-number');
+    let own = normalizePairingId(ownRaw, this.mode);
+    let other = normalizePairingId(otherRaw, this.mode);
+    if (!own || !other) return this.fail(this.mode === 'id' ? 'invalid-id' : 'invalid-number');
     if (own === other) return this.fail('same-number');
     this.role = phoneRole(own, other);
     this.emit({ phase: 'preparing', role: this.role });

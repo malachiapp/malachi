@@ -44,14 +44,49 @@ export const RATCHET_CAP_VERSION = 1;
 
 const KEY_PREFIX = 'ratchet_';
 const RECORD_VERSION = 1;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const HELD_MAX_WITH_SESSION = 32;
 const POOL_MAX_WITHOUT_SESSION = 8;
 const OWN_MAX = 8;
-const HELD_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 // Eigene KEM-Geheimnisse nur mischen, solange sie juenger sind als das - die
-// Gegenseite haelt ihre Kopie deutlich laenger (HELD_MAX_AGE_MS), auch bei
-// verstellten Uhren bleibt so Abstand.
-const OWN_MIX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Gegenseite haelt ihre Kopie laenger (siehe unten), auch bei verstellten
+// Uhren bleibt so Abstand. Gilt so auch in 1.0/1.1 (Gegenseiten im Umlauf).
+const OWN_MIX_MAX_AGE_MS = 7 * DAY_MS;
+// ─── Aufbewahrung des KEM-Vorrats "held" (Krypto-Review 2026-10-25, V4/K-08) ─
+// Ein held-Eintrag ist das rohe Verbindungsgeheimnis einer frueheren
+// Verbindung (bei v1-Verbindungen zugleich ihr Schluessel der aeusseren
+// Schicht). Er wird nur gebraucht, bis die Gegenseite ihn in einen DH-Schritt
+// eingemischt hat UND diese Kette hier angekommen ist. Bisher galten pauschal
+// 30 Tage bzw. die 32 juengsten Eintraege. Beides war in beide Richtungen
+// falsch: zu lang fuer Eintraege, die nie mehr gebraucht werden, und zu kurz
+// fuer den einen Fall, in dem ein Eintrag noch gebraucht wird (die Gegenseite
+// hat ihn schon eingemischt, ihre Nachricht ist aber noch nicht da - z.B.
+// Handy laenger aus). Dann haette die Gegenseite in ihrer Richtung dauerhaft
+// "kem-unknown" bekommen: Kontakt halb entkoppelt.
+//
+// Jetzt (Begruendung ausfuehrlich in RATCHET_DESIGN.md, Abschnitt 4):
+//  - Die Gegenseite mischt ein Geheimnis nur in eine Kette, die sie NACH dem
+//    Empfang unseres aktuellen Ratchet-Schluessels anlegt (Ketten wechseln
+//    streng abwechselnd), und nur, solange es bei ihr hoechstens
+//    OWN_MIX_MAX_AGE_MS alt ist. Unser aktueller Schluessel kann sie fruehestens
+//    erreichen, wenn wir damit zum ersten Mal gesendet haben (Zeitpunkt "sa"
+//    im Zustand) - bzw. noch gar nicht, solange wir damit nichts gesendet
+//    haben (ns = 0, Grenze = jetzt).
+//  - Eintraege, die aelter sind als (Grenze - 7 Tage - 1 Tag Uhren-Spielraum),
+//    kann die Gegenseite also in keine noch ausstehende Kette mehr mischen ->
+//    sofort weg. Im laufenden Gespraech heisst das: nach rund 8 Tagen.
+//  - Alles andere bleibt, auch ueber HELD_MAX_AGE_MS hinaus, bis die
+//    ausstehende Kette ankommt (dann wird es verbraucht und geloescht) -
+//    begrenzt auf HELD_NEEDED_MAX Eintraege. Das betrifft nur Kontakte, mit
+//    denen seither keine Verbindung zustande kam; jede neue Verbindung bringt
+//    die ausstehende Kette (profile_name laeuft durch den Ratchet).
+//  - Zustaende ohne "sa" (aus 1.0/1.1, bis zum naechsten eigenen DH-Schritt
+//    bzw. Senden) behalten das bisherige Verhalten (30 Tage, 32 Eintraege) -
+//    ein Update verkuerzt also nichts, was noch gebraucht werden koennte.
+const HELD_MAX_AGE_MS = 14 * DAY_MS;          // ohne Sitzung (nur Startgeheimnisse)
+const HELD_LEGACY_MAX_AGE_MS = 30 * DAY_MS;   // Zustand ohne "sa" (Altbestand)
+const HELD_NEEDED_MAX = 64;
+const CLOCK_SKEW_MARGIN_MS = DAY_MS;
 
 const rng = (n) => secureRandomBytes(n);
 const utf8 = (s) => Uint8Array.from(Buffer.from(String(s), 'utf8'));
@@ -161,12 +196,42 @@ function dropKid(work, kid) {
   work.own = work.own.filter((e) => e.kid !== kid);
 }
 
-function prunePools(work, now) {
-  const heldMax = work.s ? HELD_MAX_WITH_SESSION : POOL_MAX_WITHOUT_SESSION;
+// Fruehester Zeitpunkt (eigene Uhr), ab dem ein held-Eintrag noch in eine
+// ausstehende Kette der Gegenseite eingemischt sein koennte - siehe
+// HELD_MAX_AGE_MS oben. null = unbekannt (Altbestand ohne "sa").
+export function heldNeededSince(s, now) {
+  if (!s) return null;
+  if (s.ns === 0) return now - OWN_MIX_MAX_AGE_MS - CLOCK_SKEW_MARGIN_MS;
+  if (Number.isFinite(s.sa)) return Math.min(s.sa, now) - OWN_MIX_MAX_AGE_MS - CLOCK_SKEW_MARGIN_MS;
+  return null;
+}
+
+function pruneHeld(work, now) {
+  const byAge = (a, b) => a.t - b.t;
+  if (!work.s) {
+    work.held = work.held
+      .filter((e) => now - e.t <= HELD_MAX_AGE_MS)
+      .sort(byAge)
+      .slice(-POOL_MAX_WITHOUT_SESSION);
+    return;
+  }
+  const since = heldNeededSince(work.s, now);
+  if (since === null) {
+    // Altbestand: unveraendert wie in 1.0/1.1.
+    work.held = work.held
+      .filter((e) => now - e.t <= HELD_LEGACY_MAX_AGE_MS)
+      .sort(byAge)
+      .slice(-HELD_MAX_WITH_SESSION);
+    return;
+  }
   work.held = work.held
-    .filter((e) => now - e.t <= HELD_MAX_AGE_MS)
-    .sort((a, b) => a.t - b.t)
-    .slice(-heldMax);
+    .filter((e) => e.t >= since)
+    .sort(byAge)
+    .slice(-HELD_NEEDED_MAX);
+}
+
+function prunePools(work, now) {
+  pruneHeld(work, now);
   work.own = work.own
     .filter((e) => now - e.t <= OWN_MIX_MAX_AGE_MS)
     .sort((a, b) => a.t - b.t)
@@ -312,6 +377,10 @@ export function seal(chatId, plaintext, { connSecret } = {}) {
       console.log('[Ratchet] Neue Sitzung aufgebaut (Initiator)');
     }
     const env = await DR.encrypt(work.s, utf8(plaintext), { rng });
+    // V4: Zeitpunkt des ersten Sendens mit dem aktuellen Ratchet-Schluessel
+    // (Grenze fuer den KEM-Vorrat, siehe heldNeededSince). Nur bei der ersten
+    // Nachricht einer Kette setzen - ein spaeterer Zeitpunkt waere zu spaet.
+    if (env.h.n === 0) work.s.sa = now;
     await commit(chatId, work, snap);
     return env;
   });
@@ -364,9 +433,12 @@ export function open(chatId, envelope, { candidates = [] } = {}) {
       // eigene umstellen (und z.B. die Warteschlange mitlesen).
       throw new DR.RatchetError('foreign-init', 'Neuaufbau einer bestehenden Sitzung abgelehnt');
     }
+    const dhsBefore = work.s.dhs?.pk;
     const res = await DR.decrypt(work.s, { ...envelope, h }, {
       now, rng, lookupKem: find, takeOwnKems: () => takeOwnKems(work, now),
     });
+    // DH-Schritt: neue eigene Sendekette, noch nichts damit gesendet (V4).
+    if (work.s.dhs?.pk !== dhsBefore) delete work.s.sa;
     for (const kid of res.consumedKids) dropKid(work, kid);
     if (!work.s.active) {
       work.s.active = true;

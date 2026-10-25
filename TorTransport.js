@@ -891,9 +891,14 @@ export async function wipeTorForReset() {
 /** Nur fuer Tests: Anzahl offener Einladungen. */
 export function _pairingInviteCountForTests() { return pairingInvites.size; }
 
-export function registerPairingInvite(token, { pskB64, contactId, onPaired }) {
+// expiresAt (optional): laengere Gueltigkeit fuer Einladungen, die verschluesselt
+// ueber einen Gruppen-Admin reisen (GroupIntroPairing.js) - hoechstens 3 Tage.
+export const PAIRING_INVITE_MAX_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+export function registerPairingInvite(token, { pskB64, contactId, onPaired, expiresAt = null }) {
   if (!/^[0-9A-F]{8}$/.test(token || '') || !pskB64 || !contactId) return () => {};
-  const invite = { pskB64, contactId, onPaired, expires: Date.now() + PAIRING_INVITE_TTL_MS, cancelled: false, used: false };
+  const now = Date.now();
+  const expires = Number.isFinite(expiresAt) ? Math.min(expiresAt, now + PAIRING_INVITE_MAX_TTL_MS) : now + PAIRING_INVITE_TTL_MS;
+  const invite = { pskB64, contactId, onPaired, expires, cancelled: false, used: false };
   pairingInvites.set(token, invite);
   return () => { invite.cancelled = true; pairingInvites.delete(token); };
 }

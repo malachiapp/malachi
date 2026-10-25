@@ -28,10 +28,10 @@ const ALLOWED_UI = new Set([
   'webtunnel [2001:db8::1]:443 … url=https://…', 'ML1.…',
 ]);
 // Deutsch aussehende Literale, die Daten bzw. Protokoll sind (keine UI):
-// Ersatz-Dateiname, User-Agent fuer Nominatim, Lizenz-Fehlercodes.
+// Ersatz-Dateiname, Lizenz-Fehlercodes. (Der User-Agent fuer Nominatim ist
+// mit der Ortsnamen-Suche entfallen - STUN-Ausstieg, E5.)
 const ALLOWED_DATA = new Set([
   'Datei',
-  'Malachi-Messenger/1.0 (selbst-gehosteter Messenger, kein Tracking)',
   'kein-geraeteschluessel', 'keine-lizenz',
 ]);
 const UI_PROPS = new Set(['placeholder', 'title', 'label', 'accessibilityLabel', 'accessibilityHint', 'subtitle', 'hint', 'message']);
@@ -152,7 +152,8 @@ test('dynamische Schluessel: Themen, Akzentfarben, Verbindungsmodi', () => {
   const need = [
     ...T.THEME_IDS.flatMap(id => ['theme.' + id + '.name', 'theme.' + id + '.desc']),
     ...T.FREE_ACCENTS.map(a => 'accent.' + a.key),
-    ...['fast', 'private', 'torOnly'].flatMap(id => ['connMode.' + id + '.label', 'connMode.' + id + '.desc', 'connMode.' + id + '.who']),
+    // Seit dem STUN-Ausstieg zwei Stufen (App.tsx CONNECTION_MODE_INFO), beide mit "Preis".
+    ...['direct', 'torOnly'].flatMap(id => ['connMode.' + id + '.label', 'connMode.' + id + '.desc', 'connMode.' + id + '.who', 'connMode.' + id + '.cost']),
   ];
   expect(need.filter(k => !(k in de))).toEqual([]);
 });

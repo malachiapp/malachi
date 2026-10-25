@@ -5,7 +5,18 @@ import { encryptMsg, decryptMsg, secureRandomToken, randomKeyB64 } from './Messa
 import { cleanDisplayName } from './TextSafety';
 import * as RatchetSession from './RatchetSession';
 import { fileKeyFromB64, openMediaChunk } from './MediaKey';
+import { sanitizeWave } from './VoiceWave';
+import { ownAvatarForSending } from './OwnAvatar';
+import * as PinVault from './PinVault';
 import { t } from './i18n';
+
+// Eigenes Profilbild verschluesselt aus OwnAvatar.js (frueher ein Dateipfad im
+// Cache, den der Start-Sweep loeschte - der fehlende Pfad brach den ganzen
+// Profilversand samt Warteschlange ab). Fehlt das Bild, geht es ohne weiter.
+async function ownAvatarUri() {
+  const own = await ownAvatarForSending().catch(() => null);
+  return own ? `data:${own.mime};base64,${own.base64}` : null;
+}
 traceSecretStorage();
 /**
  * RTCStore – Globaler WebRTC State
@@ -90,7 +101,7 @@ const CONTROL_SIGNAL_SUBTYPES = new Set([
 // gehen IMMER an die Gruppenverarbeitung - nie an den 1:1-Chat oder dessen
 // Puffer (auch nicht bei offenem 1:1-Chat). Ihre Zustell-Schluessel (ackId)
 // beginnen mit GROUP_ACK_PREFIX.
-export const GROUP_SUBTYPES = new Set(['group_state', 'group_leave', 'group_text']);
+export const GROUP_SUBTYPES = new Set(['group_state', 'group_leave', 'group_text', 'group_intro']);
 export const GROUP_ACK_PREFIX = 'grp|';
 // Bild/Sprachnachricht fuer eine Gruppe: reist ueber den normalen,
 // verschluesselten Medienweg (Chunks + End-Marker, Dateischluessel im Ratchet)
@@ -200,7 +211,8 @@ function joinChunks(buf, end, kind, id) {
 }
 // Aushandlung einer Direktverbindung ueber eine bestehende (meist Tor-)
 // Verbindung - siehe DirectUpgrade.js. Nie an die Chat-UI oder den Puffer.
-const UPGRADE_SIGNAL_SUBTYPES = new Set(['direct_offer', 'direct_answer', 'direct_request', 'direct_reject']);
+// direct_cand: spaet nachgereichte Router-Freigabe (STUN-Ausstieg, L3).
+const UPGRADE_SIGNAL_SUBTYPES = new Set(['direct_offer', 'direct_answer', 'direct_request', 'direct_reject', 'direct_cand']);
 // Anruf-Signale, mit denen der Anrufer einen noch klingelnden Anruf beendet.
 const CALL_END_SIGNALS = new Set(['cancel', 'end', 'reject']);
 
@@ -276,6 +288,7 @@ class RTCStore {
     this._sessionInboxIds = new Set();  // in dieser Sitzung abgelegte IDs
     this._inboxChain   = Promise.resolve();
     this._inboxRestore = null;
+    this._inboxDeferred = false;        // versiegelte Eintraege warten aufs Entsperren
   }
 
   // Audit 2026-09-28 ("Reconnect klappt dauerhaft nicht mehr"): jede
@@ -394,7 +407,7 @@ class RTCStore {
       // Immer senden – Empfänger entscheidet ob Avatar neu angezeigt wird
       try {
         const name   = await EncryptedStorage.getItem('username') || 'Malachi User';
-        const avatarUri = await EncryptedStorage.getItem('avatar') || null;
+        const avatarUri = await ownAvatarUri();
         // caps: siehe OWN_CAPS - aeltere Gegenseiten ignorieren das Feld.
         rtc.sendMessage(JSON.stringify({
           type: 'system', subtype: 'profile_name', name, caps: OWN_CAPS
@@ -492,7 +505,7 @@ class RTCStore {
     if (!this._avatarResentAt) this._avatarResentAt = new Map();
     if (Date.now() - (this._avatarResentAt.get(chatId) || 0) < AVATAR_RESEND_MIN_GAP_MS) return;
     this._avatarResentAt.set(chatId, Date.now());
-    const avatarUri = await EncryptedStorage.getItem('avatar').catch(() => null);
+    const avatarUri = await ownAvatarUri();
     if (!avatarUri || !rtc?.sharedSecret || rtc._closed) return;
     let base64Data = avatarUri;
     if (avatarUri.startsWith('file://') || avatarUri.startsWith('/')) {
@@ -796,6 +809,8 @@ class RTCStore {
         durationMs: msg.durationMs,
         viewOnce: !!msg.viewOnce,
       };
+      const wave = sanitizeWave(msg.wave);   // VoiceWave.js: nur gueltige Wellenform
+      if (wave) audioMsg.wave = wave;
       const id = normKey(msg.msgId);
       if (id) audioMsg.msgId = id;
       if (msg.secret === true) audioMsg.secret = true;   // Audit P1: nur RAM
@@ -1073,15 +1088,38 @@ class RTCStore {
     const k = await randomKeyB64(32);
     const enc = await encryptMsg(JSON.stringify(msg), k, 'inbox');
     if (!enc) throw new Error('Verschluesselung fehlgeschlagen');
+    // PIN-Tresor: der Dateischluessel wird versiegelt abgelegt ("ks") - lesen
+    // kann ihn erst die entsperrte App. Ohne Tresor wie bisher ("k").
+    const ks = await PinVault.sealSecret(k, 'inbox|' + id);
     const path = `${RNFS.DocumentDirectoryPath}/${INBOX_FILE_PREFIX}${id}.enc`;
     await RNFS.writeFile(path, enc, 'utf8');
     this._sessionInboxIds.add(id);
     await this._withInboxLock(async () => {
       const idx = await this._readInboxIndex();
-      idx.push({ id, chatId, path, k, at: Date.now() });
+      idx.push(ks ? { id, chatId, path, ks, at: Date.now() } : { id, chatId, path, k, at: Date.now() });
       await this._writeInboxIndex(idx);
     });
     return id;
+  }
+
+  // Nach dem Einrichten des PIN-Tresors: Klartext-Schluessel im Index
+  // nachtraeglich versiegeln.
+  async sealInboxIndex() {
+    if (!PinVault.hasVault()) return 0;
+    let n = 0;
+    await this._withInboxLock(async () => {
+      const idx = await this._readInboxIndex();
+      const next = [];
+      for (const e of idx) {
+        if (e && typeof e.k === 'string' && !e.ks) {
+          const ks = await PinVault.sealSecret(e.k, 'inbox|' + e.id);
+          if (ks) { const { k, ...rest } = e; next.push({ ...rest, ks }); n++; continue; }
+        }
+        next.push(e);
+      }
+      if (n) await this._writeInboxIndex(next);
+    });
+    return n;
   }
 
   _dropInbox(ids) {
@@ -1111,7 +1149,12 @@ class RTCStore {
   }
 
   ensureInboxRestored() {
-    if (!this._inboxRestore) this._inboxRestore = this._restoreInbox().catch(() => {});
+    // Versiegelte Eintraege, die gesperrt liegen bleiben mussten, nach dem
+    // Entsperren nachholen.
+    if (!this._inboxRestore || (this._inboxDeferred && PinVault.isUnlocked())) {
+      this._inboxDeferred = false;
+      this._inboxRestore = this._restoreInbox().catch(() => {});
+    }
     return this._inboxRestore;
   }
 
@@ -1122,9 +1165,14 @@ class RTCStore {
     for (const e of entries) {
       if (!e?.id || this._sessionInboxIds.has(e.id)) continue; // liegt schon im Speicher
       let msg = null;
+      let k = e.k;
+      if (!k && e.ks) {
+        if (!PinVault.isUnlocked()) { this._inboxDeferred = true; continue; }
+        try { k = PinVault.openSecret(e.ks, 'inbox|' + e.id); } catch { this._inboxDeferred = true; continue; }
+      }
       try {
-        const enc = await RNFS.readFile(e.path, 'utf8');
-        const plain = enc ? decryptMsg(enc, e.k, 'inbox') : null;
+        const enc = k ? await RNFS.readFile(e.path, 'utf8') : null;
+        const plain = enc ? decryptMsg(enc, k, 'inbox') : null;
         msg = plain ? JSON.parse(plain) : null;
       } catch {}
       if (!msg || typeof msg !== 'object') { broken.push(e.id); continue; }
@@ -1187,6 +1235,16 @@ class RTCStore {
       return rtc.sendMessage(text);
     }
     return false;
+  }
+
+  // Sprachpaket eines Anrufs (CallManager "Sprache ueber den Kanal"): auf
+  // einer Direktverbindung ueber deren eigenen, ungeordneten Sprachkanal
+  // (WebRTCManager.sendCallAudio, WP3a), sonst wie jede Nachricht.
+  sendCallAudio(chatId, obj) {
+    const rtc = this.connections.get(chatId);
+    if (!rtc) return false;
+    if (typeof rtc.sendCallAudio === 'function' && rtc.sendCallAudio(obj)) return 'audio';
+    return rtc.sendMessage(JSON.stringify(obj));
   }
 
   isConnected(chatId) {
@@ -1295,6 +1353,7 @@ class RTCStore {
     this._sessionInboxIds.clear();
     this._inboxIds = new WeakMap();
     this._inboxRestore = null;
+    this._inboxDeferred = false;
   }
 
   // Loescht den gesamten In-Memory-Zustand eines einzelnen Kontakts (Secrets-

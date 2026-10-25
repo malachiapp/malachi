@@ -27,11 +27,16 @@ import RTCStore from './RTCStore';
 import {
   loadGroupChat, subscribeGroupChat, sendGroupText, sendGroupMedia, markGroupRead,
   resolveGroupMembers, unreachableMembers, deliveredCount, groupMediaScope,
+  isReadOnlyChannel, incomingIntroCount,
 } from './GroupMessaging';
+import { getLicenseState, subscribeLicense } from './LicenseManager';
+import { levelsFor, encodeWave, createLevelFeed, effectiveWaveStyle, subscribeWaveStyle } from './VoiceWave';
+import VoiceWaveView, { LiveRecordingWave } from './VoiceWaveView';
 import { mediaData } from './MediaVault';
 import { GroupAvatar, DEFAULT_PALETTE, gs } from './GroupScreens';
 import { ensureContrast } from './Themes';
 import { withAutoLockSuspended, claimAudio, releaseAudio } from './AppFocus';
+import { getVoicePlayer } from './SecureAudio';
 import ChatArtwork, { chatArtworkVisible } from './ChatArtwork';
 import { copySensitive } from './SecureClipboard';
 import {
@@ -48,14 +53,13 @@ const MAX_RECORD_MS = 5 * 60 * 1000;
 // Native Bibliotheken erst bei Bedarf laden (wie SiegelScreen). Der native
 // Spieler/Rekorder ist nur EINER - Konflikte regelt AppFocus.claimAudio.
 const imagePicker = () => require('react-native-image-picker');
-let audioLib = null;
-function audio() {
-  if (!audioLib) {
-    const lib = require('react-native-audio-recorder-player');
-    audioLib = { lib, player: new lib.default() };
-  }
-  return audioLib;
-}
+// Sprachnachrichten nur im Arbeitsspeicher (SecureAudio.js) - keine
+// Klartext-Datei mehr im Cache, weder beim Aufnehmen noch beim Abspielen.
+const voice = () => getVoicePlayer();
+const GROUP_TEMP = {
+  recordPath: async () => `${RNFS.CachesDirectoryPath}/malachi_grp_rec_${Date.now()}.mp4`,
+  playPath: async () => `${RNFS.CachesDirectoryPath}/malachi_grp_play_${Date.now()}.mp4`,
+};
 
 // Absenderfarbe: fester Farbton je Mitglied, aber auf der Blasenfarbe des
 // Designs lesbar gemacht (vorher feste Pastelltoene - in hellen Designs kaum
@@ -143,6 +147,18 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
   const [viewer, setViewer] = React.useState(null);        // data:-URI des vergroesserten Bildes
   const [recSecs, setRecSecs] = React.useState(null);      // null = keine Aufnahme
   const [playingId, setPlayingId] = React.useState(null);
+  const [playPos, setPlayPos] = React.useState({ position: 0, duration: 0 });
+  // Sprachnachrichten wie im 1:1-Chat (VoiceWave.js): Pegel beim Aufnehmen,
+  // Wellenform in der Blase, Stil aus den Einstellungen.
+  const levelFeed = React.useRef(null);
+  if (!levelFeed.current) levelFeed.current = createLevelFeed();
+  const [waveStyle, setWaveStyle] = React.useState(() => effectiveWaveStyle(getLicenseState().pro === true));
+  React.useEffect(() => {
+    const update = () => setWaveStyle(effectiveWaveStyle(getLicenseState().pro === true));
+    const offStyle = subscribeWaveStyle(update);
+    const offLicense = subscribeLicense(update);
+    return () => { offStyle(); try { offLicense?.(); } catch {} };
+  }, []);
   const listRef = React.useRef(null);
   const recPath = React.useRef(null);
   const recStart = React.useRef(0);
@@ -202,50 +218,60 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
 
   // ── Wiedergabe / Aufnahme ────────────────────────────────────────────────
   const stopPlayback = () => {
-    const p = playPath.current;
+    const playing = playPath.current;
     playPath.current = null;
     setPlayingId(null);
-    if (!p) return;
-    try {
-      const { player } = audio();
-      player.removePlayBackListener();
-      player.stopPlayer().catch(() => {}).finally(() => RNFS.unlink(p).catch(() => {}));
-    } catch { RNFS.unlink(p).catch(() => {}); }
+    setPlayPos({ position: 0, duration: 0 });
+    if (!playing) return;
+    voice().stop().catch(() => {});
     releaseAudio('group');
   };
   const cancelRecording = () => {
     clearInterval(recTimer.current);
     recTimer.current = null;
-    const p = recPath.current;
+    const active = recPath.current;
     recPath.current = null;
     setRecSecs(null);
-    if (!p) return;
-    try { audio().player.stopRecorder().catch(() => {}).finally(() => RNFS.unlink(p).catch(() => {})); } catch { RNFS.unlink(p).catch(() => {}); }
+    levelFeed.current.clear();
+    if (!active) return;
+    voice().cancelRecording().catch(() => {});
     releaseAudio('group');
   };
   const stopGroupAudio = () => { stopPlayback(); cancelRecording(); };
   React.useEffect(() => () => { stopPlayback(); cancelRecording(); }, []);   // beim Verlassen: nichts liegen lassen
 
-  const togglePlay = async (item) => {
+  const togglePlay = async (item, startMs = 0) => {
     if (playingId === item.id) { stopPlayback(); return; }
     stopPlayback();
     try {
       await claimAudio('group', stopGroupAudio);
       const data = await mediaData(mediaScope, item);   // Audit G1: RAM oder Ablage
       if (!data) throw new Error('nicht verfuegbar');
-      const p = `${RNFS.CachesDirectoryPath}/malachi_grp_play_${Date.now()}.mp4`;
-      await RNFS.writeFile(p, data, 'base64');
-      playPath.current = p;
+      const token = item.id + '|' + Date.now();
+      playPath.current = token;
       setPlayingId(item.id);
-      const { player } = audio();
-      player.addPlayBackListener((e) => {
-        if (e?.isFinished || (e?.duration > 0 && e.currentPosition >= e.duration)) stopPlayback();
-      });
-      await player.startPlayer(p);
+      setPlayPos({ position: startMs, duration: item.durationMs || 0 });
+      await voice().play(data, (e) => {
+        if (playPath.current !== token) return;
+        if (e.finished) stopPlayback();
+        else setPlayPos({ position: e.position || 0, duration: e.duration || item.durationMs || 0 });
+      }, { startMs, tempHelpers: GROUP_TEMP });
     } catch {
       stopPlayback();
       Alert.alert(t('common.voiceMessage'), t('groupChatUi.dieSprachnachrichtKonnteNichtAbgespielt'));
     }
+  };
+
+  // Wellenform angetippt: an diese Stelle springen (startet die Wiedergabe).
+  const seekVoice = async (item, f) => {
+    if (playingId !== item.id) {
+      await togglePlay(item, item.durationMs && f >= 0.02 ? f * item.durationMs : 0);
+      return;
+    }
+    const total = playPos.duration || item.durationMs || 0;
+    if (!total) return;
+    await voice().seek(f * total);
+    setPlayPos((p) => ({ ...p, position: f * total }));
   };
 
   const startRecording = async () => {
@@ -261,17 +287,9 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
       }
       stopPlayback();
       await claimAudio('group', stopGroupAudio);
-      const { lib, player } = audio();
-      const p = `${RNFS.CachesDirectoryPath}/malachi_grp_rec_${Date.now()}.mp4`;
-      recPath.current = p;
-      await player.startRecorder(p, {
-        AudioSourceAndroid: lib.AudioSourceAndroidType?.MIC,
-        OutputFormatAndroid: lib.OutputFormatAndroidType?.MPEG_4,
-        AudioEncoderAndroid: lib.AudioEncoderAndroidType?.AAC,
-        AudioSamplingRateAndroid: 16000,
-        AudioEncodingBitRateAndroid: 32000,
-        AudioChannelsAndroid: 1,
-      });
+      recPath.current = 'rec_' + Date.now();
+      levelFeed.current.clear();
+      await voice().startRecording((db) => levelFeed.current?.push(db), GROUP_TEMP);
       recStart.current = Date.now();
       setRecSecs(0);
       recTimer.current = setInterval(() => {
@@ -286,23 +304,25 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
   };
 
   const sendRecording = async () => {
-    const p = recPath.current;
-    if (!p) return;
+    if (!recPath.current) return;
     clearInterval(recTimer.current);
     recTimer.current = null;
     recPath.current = null;
     setRecSecs(null);
-    const durationMs = Date.now() - recStart.current;
+    const elapsed = Date.now() - recStart.current;
+    const wave = encodeWave(levelFeed.current.samples()) || undefined;
+    levelFeed.current.clear();
     let base64 = null;
+    let durationMs = elapsed;
     try {
-      await audio().player.stopRecorder();
-      base64 = await RNFS.readFile(p, 'base64');
+      const rec = await voice().stopRecording();
+      base64 = rec.base64 || null;
+      if (rec.durationMs) durationMs = rec.durationMs;
     } catch {} finally {
-      RNFS.unlink(p).catch(() => {});        // rohe Aufnahme sofort weg
       releaseAudio('group');
     }
     if (!base64 || durationMs < 600) return;  // versehentlich angetippt
-    const r = await sendGroupMedia(groupId, { kind: 'audio', base64, durationMs }).catch(() => ({ error: 'send' }));
+    const r = await sendGroupMedia(groupId, { kind: 'audio', base64, durationMs, wave }).catch(() => ({ error: 'send' }));
     reportSendError(r);
     setTimeout(() => listRef.current?.scrollToEnd({ animated:true }), 100);
   };
@@ -331,6 +351,7 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
   const reportSendError = (r) => {
     if (!r?.error) return;
     if (r.error === 'not_member') Alert.alert(t('common.group'), t('groupChat.notMember'));
+    else if (r.error === 'channel_readonly') Alert.alert(t('channel.title'), t('channel.readOnlyBar'));
     else if (r.error === 'too_large') Alert.alert(t('groupChatUi.zuGross'), t('groupChatUi.dasIstFuerEineGruppe'));
     else Alert.alert(t('common.group'), t('groupChatUi.dasKonnteNichtGesendetWerden'));
   };
@@ -347,7 +368,11 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
     const c = fallbackContactId ? (contacts || []).find(x => x.id === fallbackContactId) : null;
     return c?.name || t('groupChat.formerMember');
   };
-  const readOnly = !!group.removed;
+  // Kanal (GroupMessaging): nur Admins schreiben; Abonnenten lesen nur.
+  const channel = group.mode === 'channel';
+  const channelReader = isReadOnlyChannel(group, group.selfMid);
+  const readOnly = !!group.removed || channelReader;
+  const introRequests = incomingIntroCount(group);
   const runningCall = callSnap.state === GroupCallState.IDLE ? runningGroupCallFor(groupId) : null;
   const joinCall = () => {
     joinRunningGroupCall(groupId).then((r) => {
@@ -389,7 +414,8 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
   };
 
   const fs = typeof fontSize === 'number' ? fontSize : 15;
-  const statusLine = readOnly ? t('groupChat.noLongerMember')
+  const statusLine = group.removed ? t('groupChat.noLongerMember')
+    : channel ? (channelReader ? t('channel.statusReader', { count: group.memberCount || members.length }) : t('channel.statusAdmin', { count: members.length - 1, connected }))
     : t('groupChat.status', { count: members.length, connected, total: reachable.length });
 
   // Inhalt einer Blase: Text, Bild oder Sprachnachricht.
@@ -401,16 +427,26 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
         style={{ width: W * 0.6, height: W * 0.6, borderRadius: 10 }} />;
     }
     if (item.type === 'audio' && hasMedia) {
+      // Wie im 1:1-Chat: Wellenform (Balken oder Pixel-Welle), antippen springt.
       const playing = playingId === item.id;
+      const total = (playing && playPos.duration) || item.durationMs || 0;
+      const frac = playing && total ? Math.min(1, playPos.position / total) : 0;
       return (
-        <View style={{ flexDirection:'row', alignItems:'center', gap:10, minWidth: W * 0.45 }}>
-          <TouchableOpacity onPress={() => togglePlay(item)} accessibilityLabel={playing ? t('groupChatUi.wiedergabeStoppen') : t('groupChatUi.sprachnachrichtAbspielen')}
-            style={{ width:36, height:36, borderRadius:18, alignItems:'center', justifyContent:'center',
-              backgroundColor: mine ? 'rgba(0,0,0,0.15)' : C.accent }}>
-            <Icon name={playing ? 'square' : 'play'} size={16} color={mine ? fg : C.onAccent} />
-          </TouchableOpacity>
-          <Icon name="mic" size={14} color={fg} />
-          <Text style={{ fontSize:fs - 1, color:fg }}>{fmtDur(item.durationMs)}</Text>
+        <View style={{ minWidth: W * 0.45 }}>
+          <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
+            <TouchableOpacity onPress={() => togglePlay(item)} accessibilityLabel={playing ? t('voice.pause') : t('voice.play')}
+              style={{ width:36, height:36, borderRadius:18, alignItems:'center', justifyContent:'center',
+                backgroundColor: mine ? 'rgba(0,0,0,0.15)' : C.accent }}>
+              <Icon name={playing ? 'pause' : 'play'} size={16} color={mine ? fg : C.onAccent} style={playing ? undefined : { marginLeft:2 }} />
+            </TouchableOpacity>
+            <VoiceWaveView testID={'group-voice-wave-' + item.id} levels={levelsFor(item)} progress={frac} animate={playing}
+              variant={waveStyle} width={Math.max(110, Math.round(W * 0.4))} height={28}
+              activeColor={mine ? fg : C.accentFg} idleColor={mine ? 'rgba(127,127,127,0.45)' : C.theirsBorder}
+              onSeek={(f) => seekVoice(item, f)} accessibilityLabel={t('voice.seek')} />
+          </View>
+          <Text style={{ fontSize:fs - 3, color:fg, marginLeft:46, marginTop:2, fontVariant:['tabular-nums'] }}>
+            {fmtDur(playing ? playPos.position : item.durationMs)}
+          </Text>
         </View>
       );
     }
@@ -434,7 +470,7 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
               <Text style={{ fontSize:11, color: connected ? (palette.headerOnline || palette.green) : (palette.headerMuted || palette.textMuted) }} numberOfLines={1}>{statusLine}</Text>
             </View>
           </TouchableOpacity>
-          {readOnly ? null : (
+          {readOnly || channel ? null : (
             <TouchableOpacity onPress={onGroupCall} style={{ padding:6 }} accessibilityLabel={t('groupChatUi.gruppenanruf')}>
               <Icon name="phone" size={20} color={palette.headerIcon || accent} />
             </TouchableOpacity>
@@ -453,11 +489,18 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
           </TouchableOpacity>
         ) : null}
 
-        {readOnly ? (
+        {group.removed ? (
           <View style={{ padding:10, backgroundColor:palette.surfaceAlt, borderBottomWidth:0.5, borderBottomColor:palette.border }}>
             <Text style={{ fontSize:12, color:palette.warning || WARN, textAlign:'center' }}>{t('groupChat.readOnly')}</Text>
           </View>
-        ) : unreachable.length > 0 ? (
+        ) : introRequests > 0 ? (
+          <TouchableOpacity testID="intro-requests-banner" onPress={onOpenDetail} activeOpacity={0.8}
+            style={{ padding:10, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:8,
+              backgroundColor:palette.surfaceAlt, borderBottomWidth:0.5, borderBottomColor:palette.border }}>
+            <Icon name="user-plus" size={14} color={C.accentFg} />
+            <Text style={{ fontSize:12, color:palette.text }}>{t('groups.intro.banner', { count: introRequests })}</Text>
+          </TouchableOpacity>
+        ) : channel ? null : unreachable.length > 0 ? (
           <TouchableOpacity onPress={onOpenDetail} activeOpacity={0.8}
             style={{ padding:10, backgroundColor:palette.surfaceAlt, borderBottomWidth:0.5, borderBottomColor:palette.border }}>
             <Text style={{ fontSize:12, color:palette.text, textAlign:'center' }}>
@@ -518,16 +561,27 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
         />
         </View>
 
-        {readOnly ? null : recSecs !== null ? (
+        {channelReader && !group.removed ? (
+          <View testID="channel-readonly" style={{ padding:12, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:8,
+            backgroundColor:palette.surface, borderTopWidth:0.5, borderTopColor:palette.border }}>
+            <Icon name="radio" size={14} color={palette.textMuted} />
+            <Text style={{ fontSize:12, color:palette.textMuted }}>{t('channel.readOnlyBar')}</Text>
+          </View>
+        ) : readOnly ? null : recSecs !== null ? (
           <View style={{ flexDirection:'row', padding:10, gap:10, alignItems:'center',
             backgroundColor:palette.surface, borderTopWidth:0.5, borderTopColor:palette.border }}>
             <TouchableOpacity onPress={cancelRecording} accessibilityLabel={t('siegel.discardRecording')}
               style={[round, { backgroundColor:palette.surfaceAlt }]}>
               <Icon name="trash-2" size={18} color={palette.text} />
             </TouchableOpacity>
-            <Text style={{ flex:1, fontSize:15, color:palette.text }}>
-              <Text style={{ color:C.danger }}>● </Text>{t('groupChatUi.aufnahme', { value: fmtDur(recSecs * 1000) })}
+            <Text style={{ fontSize:15, color:palette.text, fontVariant:['tabular-nums'] }}
+              accessibilityLabel={t('groupChatUi.aufnahme', { value: fmtDur(recSecs * 1000) })}>
+              <Text style={{ color:C.danger }}>● </Text>{fmtDur(recSecs * 1000)}
             </Text>
+            <View style={{ flex:1, alignItems:'flex-end', overflow:'hidden' }}>
+              <LiveRecordingWave testID="group-live-wave" feed={levelFeed.current} variant={waveStyle}
+                width={Math.max(60, Math.round(W - 20 - 2 * 40 - 3 * 10 - 70))} height={24} color={C.danger} />
+            </View>
             <TouchableOpacity onPress={sendRecording} accessibilityLabel={t('siegelUi.sprachnachrichtSenden')}
               style={[round, { backgroundColor:C.accent }]}>
               <Icon name="send" size={18} color={C.onAccent} />

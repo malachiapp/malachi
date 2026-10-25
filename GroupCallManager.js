@@ -27,6 +27,12 @@
 // (leave), Ablehnen (decline), Ende fuer alle (end, nur Host). Legt der Host
 // auf, endet der Anruf fuer alle. Bleibt nur der Host uebrig, endet er auch.
 //
+// Kein STUN, kein TURN (wie alle PeerConnections, WebRTCManager.pcConfigForMode):
+// direkt geht es ueber IPv6, das gleiche Netz oder eine Portfreigabe des
+// eigenen Routers - die wird je Paar nach dem Sammeln angefragt und als
+// gewoehnlicher 'ice'-Kandidat nachgeschickt (PortMapping.CallPortMapper,
+// STUN_AUSSTIEG_PLAN.md Luecke L1), beim Schliessen des Paars geloescht.
+//
 // Regeln: nur Sprache; im Verbindungsweg "Maximal anonym (nur Tor)" keine
 // Gruppenanrufe (ein Mitglied in Stufe 3 lehnt automatisch ab); kommt fuer ein
 // Paar keine direkte WebRTC-Verbindung zustande, gilt es als "nicht
@@ -40,6 +46,8 @@ import RTCStore from './RTCStore';
 import { pcConfigForCalls } from './WebRTCManager';
 import { encryptMsg, decryptMsg, secureRandomToken } from './MessageCrypto';
 import { MODE_TOR_ONLY, connectionModeForDecision, onConnectionModeChange } from './ConnectionMode';
+import { CallPortMapper } from './PortMapping';
+import * as ConnectionStats from './ConnectionStats';
 import { getSelfMemberId, memberIdOfContact, GROUP_MAX_MEMBERS } from './GroupMessaging';
 import { getLicenseState } from './LicenseManager';
 import { claimAudio, releaseAudio } from './AppFocus';
@@ -164,7 +172,19 @@ function notice(text) {
 export function isGroupCallBusy() { return !!call || starting; }
 export function canStartGroupCall() { try { return deps.isPro() === true; } catch { return false; } }
 
-function speakerSupported() { return typeof callAudio()?.setSpeaker === 'function'; }
+function speakerSupported() {
+  return typeof bridge()?.setSpeaker === 'function' || typeof callAudio()?.setSpeaker === 'function';
+}
+// Gemeinsamer Weg mit 1:1-Anrufen (CallAudioRoute.js -> AudioRouteHelper.kt):
+// laeuft der Anruf ueber Telecom, schaltet Telecom um, sonst der AudioManager.
+// Aeltere Builds ohne CallBridgeModule.setSpeaker: MalachiCallAudio.setSpeaker.
+function applySpeaker(on) {
+  try {
+    const b = bridge();
+    if (typeof b?.setSpeaker === 'function') { Promise.resolve(b.setSpeaker(!!on)).catch(() => {}); return; }
+    callAudio()?.setSpeaker?.(!!on);
+  } catch {}
+}
 
 // Momentaufnahme fuer die Oberflaeche (keine Schluessel, kein SDP).
 export function getGroupCallSnapshot() {
@@ -915,7 +935,7 @@ function onHostEnded(c, reason) {
 // ─── Paar-Verbindungen ──────────────────────────────────────────────────────
 function newPeer(mid) {
   return { mid, pc: null, link: 'connecting', offered: false, answered: false, pendingIce: [], iceCount: 0,
-    remoteStream: null, speaking: false, timer: null, graceTimer: null };
+    remoteStream: null, speaking: false, timer: null, graceTimer: null, portMapper: null };
 }
 function isCurrentPeer(c, p) { return isLive(c) && c.peers.get(p.mid) === p; }
 
@@ -963,8 +983,18 @@ async function createPc(c, p) {
   for (const track of stream?.getTracks?.() || []) {
     try { pc.addTrack(track, stream); } catch {}
   }
+  // Router-Portfreigabe fuer dieses Paar (L1) - erfolgreiche IPv4-Freigaben
+  // gehen als weitere 'ice'-Kandidaten an die Gegenseite.
+  if (p.portMapper) { try { p.portMapper.release(); } catch {} }
+  const mapper = new CallPortMapper((candidate) => {
+    const json = candidateToJson(candidate);
+    if (!json || !isCurrentPeer(c, p) || p.pc !== pc) return;
+    sendPair(c, p.mid, 'ice', { c: json }).catch(() => {});
+  }, { isAllowed: async () => (await connectionModeForDecision()) !== MODE_TOR_ONLY });
+  p.portMapper = mapper;
   pc.onicecandidate = (event) => {
     const cand = candidateToJson(event?.candidate);
+    if (isCurrentPeer(c, p) && p.pc === pc) mapper.onCandidate(event?.candidate || null);
     if (!cand || !isCurrentPeer(c, p) || p.pc !== pc) return;
     sendPair(c, p.mid, 'ice', { c: cand }).catch(() => {});
   };
@@ -1116,6 +1146,7 @@ function onPeerIce(c, p, pc) {
     if (p.link !== 'connected') {
       p.link = 'connected';
       log('Paar verbunden');
+      ConnectionStats.bump('groupPairs', 'connected');
       if (c.state === GroupCallState.CONNECTING) {
         c.startedAt = Date.now();
         setState(c, GroupCallState.ACTIVE);
@@ -1145,11 +1176,14 @@ function failPeer(c, p) {
   clearLater(c, p.graceTimer);
   closePeerConnection(p);
   log('Paar nicht erreichbar');
+  ConnectionStats.bump('groupPairs', 'unreachable');
   emit();
   checkAllFailed(c);
 }
 
 function closePeerConnection(p) {
+  // Portfreigaben des Paars am Router loeschen (auch spaet eintreffende).
+  if (p.portMapper) { try { p.portMapper.release(); } catch {} p.portMapper = null; }
   if (p.pc) {
     const pc = p.pc;
     p.pc = null;
@@ -1233,7 +1267,7 @@ export function setGroupCallSpeaker(on) {
   const c = call;
   if (!c || c.ended || !speakerSupported()) return;
   c.speaker = !!on;
-  try { callAudio().setSpeaker(c.speaker); } catch {}
+  applySpeaker(c.speaker);
   emit();
 }
 
@@ -1291,7 +1325,7 @@ function teardown(c, reason, { fromNative = false, silent = false } = {}) {
   c.peers.clear();
   stopStream(c.localStream);
   c.localStream = null;
-  if (c.speaker) { try { callAudio()?.setSpeaker?.(false); } catch {} }
+  if (c.speaker) applySpeaker(false);
   if (c.modeUnsub) { try { c.modeUnsub(); } catch {} c.modeUnsub = null; }
   releaseAudio(AUDIO_ID);
   if (!fromNative) { try { bridge()?.reportCallEnded?.(c.key); } catch {} }

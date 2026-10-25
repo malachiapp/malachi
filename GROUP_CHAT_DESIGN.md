@@ -195,3 +195,24 @@ Siehe Abschlussbericht des Agenten; Kurzfassung: Mitglieds-ID-Austausch nach
 dem Update, Gruppe mit 2 Geräten erstellen, Texte in beide Richtungen bei
 offenem/geschlossenem Chat und im Hintergrund, Offline-Zustellung,
 Umbenennen, Entfernen/Wieder-Hinzufügen, Austreten, Neustart.
+
+## Vorstellen ueber die Gruppe und Kanal (2026-10-25)
+
+Ausfuehrlich im Kopfkommentar von `GroupMessaging.js` (Abschnitt "Vorstellen")
+und in `GroupIntroPairing.js`; Sicherheitsbewertung in
+`SECURITY_AUDIT_2026-10-25.md` (F5/F6).
+
+- **Vorstellen** (`group_intro`, nur Art "Gruppe", nur wenn der Admin
+  `intros: true` anbietet): Mitglieder ohne direkte Kopplung koennen sich ueber
+  den Admin verbinden. Beide muessen zustimmen; vorher oeffnet sich nichts.
+  Ablehnen ist still. Die kleinere Mitglieds-ID laedt ein: Einmal-Einladung wie
+  beim QR-Code (Token, Geheimnis, Onion-Adresse), bis 3 Tage gueltig, reist
+  verschluesselt ueber die beiden 1:1-Kanaele mit dem Admin; danach koppeln
+  sich die beiden direkt ueber Tor. Neuer Kontakt mit "vorgestellt von ...",
+  Sicherheitscode-Vergleich empfohlen.
+- **Kanal** (`mode: 'channel'`, bis 250 Abonnenten): nur Admins schreiben;
+  jeder Abonnent bekommt einen eigenen Stand (Admins + er selbst, `memberCount`),
+  sieht die anderen also nie; kein Vorstellen; Austritte gehen nur an den Admin;
+  verlaesst der letzte Admin den Kanal, wird er geschlossen (`change.kind: close`).
+- Beide Felder (`mode`, `intros`) sind optional - aeltere Versionen ignorieren
+  sie und die neue Nachricht `group_intro`.

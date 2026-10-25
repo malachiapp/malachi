@@ -74,3 +74,13 @@ export function getApplicationId() {
   const id = c && c.applicationId;
   return typeof id === 'string' && id.length <= 150 && APPLICATION_ID_RE.test(id) ? id : null;
 }
+
+/**
+ * Versionsname der laufenden App (z. B. "1.1.0") oder '' - nur fuer Anzeigen
+ * wie die Verbindungs-Diagnose (ConnectionStats.js).
+ */
+export function getVersionName() {
+  const c = buildConstants();
+  const v = c && c.versionName;
+  return typeof v === 'string' && v.length <= 32 && /^[0-9A-Za-z.+_-]+$/.test(v) ? v : '';
+}

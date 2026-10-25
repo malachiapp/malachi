@@ -192,10 +192,10 @@ Geprüft gegen `android/app/src/main/AndroidManifest.xml`, `src/play/AndroidMani
 
 | Berechtigung | Wofür | Play Console / Richtlinie |
 |---|---|---|
-| `INTERNET`, `ACCESS_NETWORK_STATE`, `CHANGE_NETWORK_STATE` | Tor, WebRTC, STUN | normal, keine Erklärung |
+| `INTERNET`, `ACCESS_NETWORK_STATE`, `CHANGE_NETWORK_STATE` | Tor, WebRTC, Portfreigabe am eigenen Router (PCP/NAT-PMP/UPnP im lokalen Netz) – kein STUN | normal, keine Erklärung |
 | `CAMERA` | QR-Code scannen, Videoanrufe, Fotos | Laufzeitberechtigung, keine Erklärung |
 | `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS` | Sprachnachrichten, Anrufe | Laufzeitberechtigung, keine Erklärung |
-| `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION` | Standort **auf Wunsch** an einen Kontakt senden | nur Vordergrund (kein `ACCESS_BACKGROUND_LOCATION`) → keine Standort-Erklärung; aber Datensicherheit beachten (Abschnitt 8) |
+| `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION` | Standort **auf Wunsch** an einen Kontakt senden (nur Koordinaten, Ende-zu-Ende) | nur Vordergrund (kein `ACCESS_BACKGROUND_LOCATION`) → keine Standort-Erklärung (Datensicherheit: Abschnitt 8) |
 | `USE_BIOMETRIC`, `USE_FINGERPRINT` | Entsperren per Fingerabdruck | normal |
 | `POST_NOTIFICATIONS` | Nachrichten, Anrufe, Dienst-Benachrichtigung | Laufzeitberechtigung |
 | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_REMOTE_MESSAGING` | `MalachiService` hält die P2P-/Tor-Verbindung für den Empfang | **Erklärung „Foreground-Service-Berechtigungen“ nötig** (Text unten, Video verlangt) |
@@ -229,30 +229,25 @@ Video (Pflicht): kurze Bildschirmaufnahme – App im Hintergrund, Dienst-Benachr
 | Was | Wohin | Bewertung |
 |---|---|---|
 | Nachrichten, Bilder, Dateien, Sprachnachrichten, Anrufe, Standort (exakt), Gruppen | **direkt an den Kontakt**, Ende-zu-Ende-verschlüsselt (Tor bzw. WebRTC) | Kein Entwickler-Server, niemand dazwischen kann mitlesen. Laut Googles Hilfe zur Datensicherheit müssen Ende-zu-Ende-verschlüsselt übertragene Daten nicht als „erhoben“ angegeben werden; vom Nutzer veranlasste Übertragungen an andere Nutzer zählen nicht als „Weitergabe“. **Vor dem Ausfüllen die aktuelle Formulierung in der Hilfe prüfen.** |
-| IP-Adresse | Tor-Knoten; im Verbindungsweg „Schnell“ der Kontakt (Direktverbindung) und zwei von vier öffentlichen STUN-Diensten (Nextcloud, sipgate, 1&1, Telekom) | Technisch nötig für jede Internetverbindung, nichts wird beim Entwickler gespeichert. Die IP-Adresse ist im Formular keine eigene Datenkategorie – in der Datenschutzerklärung nennen. Im Modus „Privat“ und „Maximal anonym“ wird kein STUN gefragt. |
-| **Ungefährer Standort (auf ~100 m gerundet)** + IP | **OpenStreetMap Nominatim** (Reverse-Geocoding beim Senden eines Standorts, `App.tsx` `reverseGeocode`) | **Nicht Ende-zu-Ende-verschlüsselt, Dritter.** Muss nach aktuellem Code angegeben werden (siehe 8.2). |
+| IP-Adresse | Tor-Eintrittsknoten (bzw. Bridge; die Bridge Snowflake fragt dabei eigene STUN-Server des Tor-Projekts); im Verbindungsweg „Direkt, wenn möglich“ der Kontakt – schon beim Versuch einer Direktverbindung | Technisch nötig für jede Internetverbindung, nichts wird beim Entwickler gespeichert. Die IP-Adresse ist im Formular keine eigene Datenkategorie – in der Datenschutzerklärung nennen. **Seit dem STUN-Ausstieg (Version nach 1.1.0) fragt Malachi selbst keinen STUN-Dienst mehr** (bis 1.1.0: je Verbindung zwei von vier öffentlichen STUN-Diensten im Verbindungsweg „Schnell“). |
+| Ungefährer Standort | **– (nicht mehr übertragen)** | Bis 1.1.0 ging beim Senden eines Standorts eine auf ~100 m gerundete Position an OpenStreetMap Nominatim (Ortsname). Seit dem STUN-Ausstieg entfernt: der Standort geht nur noch als Koordinaten Ende-zu-Ende an den Kontakt (Test `location.noNominatim.test.js`). |
 | Kaufdaten | Google Play (Zahlung) | Wickelt Google ab; die App sendet nichts an den Entwickler und speichert nur lokal einen Token-Hash. |
 | ML-Kit-Nutzungsmetriken | Google (`firebaselogging`) | ML Kit im QR-Scanner (`react-native-camera-kit` → `com.google.mlkit:barcode-scanning`) sendet laut Google Leistungs-/Nutzungsdaten. **In beiden Varianten abgeschaltet** (`src/main/AndroidManifest.xml`: Backend „cct“ entfernt, der Uploader verwirft die Ereignisse). **Nach dem Build prüfen** (8.3). |
 | Analyse, Werbung, Absturzberichte, Konto, Kontakte-Upload | – | gibt es nicht |
 
 ### 8.2 Formular
 
-**Option A – aktueller Code (Adresse per Nominatim bleibt) – vom Inhaber gewaehlt am 2026-10-19:**
+**Ab der Version nach 1.1.0 (STUN-Ausstieg, Entscheidung E5: Ortsnamen per Nominatim immer aus):** Kein Standort und keine anderen Nutzerdaten verlassen das Gerät mehr unverschlüsselt bzw. an Dritte. **Beim Veröffentlichen dieser Version das Formular in der Play Console umstellen** (das macht der Inhaber; bis 1.1.0 galt die frühere Option A mit „Ungefährer Standort, geteilt mit OpenStreetMap“).
 
 | Frage | Antwort |
 |---|---|
-| Erhebt oder teilt die App Nutzerdaten der erforderlichen Typen? | **Ja** |
-| Standort → Ungefährer Standort | **Erhoben: Ja** (wird vom Gerät übertragen), **Geteilt: Ja** (OpenStreetMap Foundation, Nominatim) |
-| Wird nur vorübergehend verarbeitet? | Nein (Nominatim protokolliert Anfragen nach eigener Richtlinie) |
-| Erforderlich oder optional? | **Optional** (nur wenn der Nutzer einen Standort sendet) |
-| Zweck | **App-Funktionalität** (Adresse zum gesendeten Standort anzeigen) |
-| Alle anderen Datentypen (persönliche Daten, Finanzen, Gesundheit, Nachrichten, Fotos/Videos, Audio, Dateien, Kalender, Kontakte, App-Aktivität, Web-Browsing, App-Infos/Leistung, Geräte-IDs) | **Nicht erhoben** (Nachrichten/Medien/Audio/Dateien/exakter Standort nur Ende-zu-Ende an Kontakte) |
-| Daten bei der Übertragung verschlüsselt? | **Ja** (HTTPS zu Nominatim; alles andere Ende-zu-Ende) |
-| Können Nutzer das Löschen ihrer Daten beantragen? | Der Entwickler speichert keine Daten. In der App: *Einstellungen → Alle Daten löschen* löscht alles auf dem Gerät. Für Nominatim-Logs gilt die Richtlinie der OSMF. |
+| Erhebt oder teilt die App Nutzerdaten der erforderlichen Typen? | **Nein** („Erhebt oder teilt keine Nutzerdaten“) – Nachrichten, Medien, Audio, Dateien und der exakte Standort gehen nur Ende-zu-Ende an Kontakte (zählt nicht als Erhebung/Weitergabe) |
+| Daten bei der Übertragung verschlüsselt? | **Ja** (Ende-zu-Ende) |
+| Können Nutzer das Löschen ihrer Daten beantragen? | Der Entwickler speichert keine Daten. In der App: *Einstellungen → Alle Daten löschen* löscht alles auf dem Gerät (auch die lokale Verbindungs-Diagnose). |
 | Unabhängige Sicherheitsprüfung | Nein (optional) |
 | Konto-Erstellung / Kontolöschung | Die App hat **keine Konten** → „Nein“, kein Löschlink nötig |
 
-**Option B – empfohlen (Produktentscheidung des Inhabers):** Adressanzeige per Nominatim abschaltbar oder nur nach ausdrücklicher Zustimmung beim ersten Senden. Bleibt sie aus, verlässt kein Standort unverschlüsselt das Gerät, und die Antwort lautet **„Erhebt oder teilt keine Nutzerdaten“**. (Nicht umgesetzt, weil es das Verhalten beider Varianten ändert – reine Darstellung, kein Protokoll.)
+Vorbehalt ML Kit: gilt nur, wenn die Prüfung in 8.3 bestätigt, dass keine Nutzungsdaten an Google gehen. Die Verbindungs-Diagnose (Einstellungen → Verbindungs-Diagnose) zählt nur lokal und sendet nichts – sie ist keine Erhebung.
 
 ### 8.3 ML Kit nachprüfen (einmal nach dem ersten Build)
 
@@ -263,7 +258,7 @@ Video (Pflicht): kurze Bildschirmaufnahme – App im Hintergrund, Dienst-Benachr
 
 ### 8.4 Datenschutzerklärung
 
-Pflicht: öffentliche **HTTPS-URL** (Clearnet-Website). Sie muss die Play-Variante abdecken: kein Konto, keine Analyse, P2P/Tor, STUN-Betreiber, Nominatim (falls aktiv), Google Play Billing (Zahlung durch Google, lokal nur Token-Hash), ML Kit (abgeschaltet), lokale Speicherung, „Alle Daten löschen“.
+Pflicht: öffentliche **HTTPS-URL** (Clearnet-Website). Sie muss die Play-Variante abdecken: kein Konto, keine Analyse, P2P/Tor, kein STUN-Dienst (nur die Bridge Snowflake nutzt eigene STUN-Server des Tor-Projekts), kein Kartendienst/Nominatim mehr, Google Play Billing (Zahlung durch Google, lokal nur Token-Hash), ML Kit (abgeschaltet), lokale Speicherung, „Alle Daten löschen“. (Stand der Website-Texte: `website/site/datenschutz.html`, 25.10.2026 – zusammen mit dieser Version veröffentlichen.)
 
 ---
 
@@ -306,7 +301,8 @@ Malachi ist ein Messenger für alle, denen Privatsphäre wichtig ist. Es gibt ke
 SO FUNKTIONIERT ES
 • Kontakte verbindest du einmalig per QR-Code oder Einladungslink.
 • Die Verbindung läuft über das Tor-Netzwerk und – wenn du es erlaubst – direkt per WebRTC.
-• Ende-zu-Ende-Verschlüsselung mit zusätzlichem Post-Quanten-Schlüsselaustausch.
+• Nachrichten, Bilder und Dateien: Ende-zu-Ende-Verschlüsselung mit zusätzlichem Post-Quanten-Schlüsselaustausch.
+• Anrufe: Ende-zu-Ende-verschlüsselt (DTLS-SRTP), noch ohne Post-Quanten-Schutz.
 • Sicherheitscode zum Abgleichen mit deinem Kontakt.
 • Was gerade nicht zugestellt werden kann, wartet verschlüsselt auf deinem Gerät.
 
@@ -330,6 +326,7 @@ DATENSCHUTZ
 • Keine Werbung, keine Analyse-Dienste, kein Tracking
 • Kein Konto, keine Telefonnummer, kein Hochladen des Adressbuchs
 • Kein Malachi-Server – niemand dazwischen sieht Nachrichten oder Kontakte
+• Keine STUN-Dienste: Malachi fragt keinen fremden Server nach deiner Adresse (nur die Tor-Brücke Snowflake nutzt in gesperrten Netzen eigene)
 
 Hinweis: Beide Gesprächspartner brauchen Malachi. Nachrichten werden zugestellt, sobald beide Geräte online sind.
 ```
@@ -348,7 +345,8 @@ Malachi is a messenger for people who care about privacy. There is no Malachi se
 HOW IT WORKS
 • Connect with a contact once by QR code or invitation link.
 • Connections run over the Tor network and – if you allow it – directly via WebRTC.
-• End-to-end encryption with an additional post-quantum key exchange.
+• Messages, photos and files: end-to-end encryption with an additional post-quantum key exchange.
+• Calls: end-to-end encrypted (DTLS-SRTP), not yet post-quantum protected.
 • Safety code to verify your contact.
 • Anything that cannot be delivered right now waits encrypted on your device.
 
@@ -372,6 +370,7 @@ PRIVACY
 • No ads, no analytics, no tracking
 • No account, no phone number, no address book upload
 • No Malachi server – nobody in between sees messages or contacts
+• No STUN services: Malachi asks no outside server for your address (only the Tor bridge Snowflake uses its own on blocked networks)
 
 Note: both people need Malachi. Messages are delivered as soon as both devices are online.
 ```
@@ -429,7 +428,7 @@ Note: both people need Malachi. Messages are delivered as soon as both devices a
 
 1. **Foreground-Service-Typ `remoteMessaging`:** Google beschreibt den Typ als „Nachrichten zwischen Geräten übertragen / Fortsetzen auf einem anderen Gerät“. Eine dauerhafte Empfangsverbindung ohne Push-Server passt nur bedingt; Google empfiehlt für Nachrichten sonst FCM (für Malachi bewusst ausgeschlossen). Möglich ist eine Ablehnung der Erklärung. Ausweg ohne Protokolländerung: nur in `src/play/AndroidManifest.xml` den Dienst auf `specialUse` umstellen (`tools:replace="android:foregroundServiceType"`, Berechtigung `FOREGROUND_SERVICE_SPECIAL_USE`, Property `android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE` mit Begründung) und die Erklärung entsprechend einreichen. `MalachiService` ruft `startForeground` ohne festen Typ auf und bräuchte dafür keine Code-Änderung.
 2. **`USE_FULL_SCREEN_INTENT`:** wird nur für echte Anruf-/Wecker-Apps gewährt. Malachi hat echte Anrufe (ConnectionService) – sollte passen. Ohne Gewährung erscheint ein eingehender Anruf auf dem Sperrbildschirm nur als Benachrichtigung.
-3. **Datensicherheit/Nominatim:** solange die Adressanzeige per OpenStreetMap aktiv ist, muss „Ungefährer Standort“ angegeben werden (Abschnitt 8). Eine falsche „keine Daten“-Angabe ist ein Richtlinienverstoß.
+3. **Datensicherheit/Nominatim:** mit dem STUN-Ausstieg erledigt – die Adressanzeige per OpenStreetMap ist entfernt. Wichtig ist nur die Reihenfolge: das Formular erst dann auf „keine Daten“ umstellen, wenn diese Version im Store ist (solange 1.1.0 ausgeliefert wird, gilt dort noch „Ungefährer Standort“).
 4. **ML Kit:** die Abschaltung der Telemetrie ist eingebaut, aber erst nach dem Build am gemergten Manifest bzw. per Netzwerkmitschnitt zu bestätigen (8.3).
 5. **Nutzergenerierte Inhalte / Kinderschutz:** Google kann bei Kommunikations-Apps Melde- und Blockierfunktionen sowie eine veröffentlichte Kinderschutz-Richtlinie verlangen (Abschnitt 10). Eine Blockier-Funktion fehlt bisher (nur „Chat löschen“).
 6. **Tor:** Apps mit Tor sind im Play Store zulässig (z. B. Orbot, Tor Browser). Die Tor-Binärdateien sind in der App enthalten und werden nicht nachgeladen (Richtlinie „Missbrauch von Geräten und Netzwerken“ erfüllt). Reviewer können ohne zweites Gerät keinen Chat testen – App-Zugriff gut beschreiben.

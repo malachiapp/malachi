@@ -1301,6 +1301,29 @@ Current Status: UNVERIFIED — known, documented, unfixed consistency gap (disti
 
 ---
 
+## KRYPTO-HAERTUNG (Krypto-Review 2026-10-25, Branch `claude/krypto-haertung`)
+
+Nachtraege zu den Befunden K-01 bis K-12 aus `KRYPTO_REVIEW_2026-10-25.md`. Die
+Eintraege oben beschreiben teils einen aelteren Stand (Relay, ein Secret pro
+Sitzung); fuer Double Ratchet und Verbindungsschluessel gelten zusaetzlich diese.
+
+```
+ID: CRYPTO-HARDEN-001
+Kategorie: CRYPTOGRAPHY / RECOVERY
+Beschreibung: Ein KEM-Geheimnis im Vorrat "held" (RatchetSession.js) wird geloescht, sobald es nachweislich in keiner noch ausstehenden Kette der Gegenseite mehr vorkommen kann - aber nie vorher.
+Warum wichtig: Der Eintrag ist das Geheimnis einer frueheren Verbindung (K-08: Aufbewahrung minimieren); loescht man ihn zu frueh, ist die Richtung Gegenseite -> uns dauerhaft gestoert (kem-unknown).
+Betroffene Komponenten: RatchetSession.js (heldNeededSince, pruneHeld, seal setzt s.sa, open loescht s.sa beim DH-Schritt)
+Angreifermodell: Geraetezugriff (Speicherabbild) bzw. Verfuegbarkeit
+Precondition: Sitzung besteht.
+Invariant: held enthaelt genau die Eintraege mit t >= sa - 7 Tage - 1 Tag (bzw. jetzt - 8 Tage bei ns = 0), hoechstens 64; ohne Sitzung 14 Tage/8 Eintraege; Zustand ohne sa (1.0/1.1) wie bisher 30 Tage/32 Eintraege.
+Violation: Eine laenger ausstehende, bereits eingemischte Kette der Gegenseite ist nicht mehr lesbar, oder ein nicht mehr benoetigtes Verbindungsgeheimnis bleibt laenger als ~8 Tage liegen.
+Detection Method: Herleitung in RATCHET_DESIGN.md Abschnitt 4 (Ketten wechseln abwechselnd, Gegenseite mischt nur bis 7 Tage).
+Automated Test: __tests__/security/ratchet.heldRetention.test.js (8 Tests), __tests__/security/ratchet.integration.test.js ("20 Tage keine Verbindung")
+Current Status: AUTOMATED
+```
+
+---
+
 ## Summary
 
 **Total invariants cataloged: 66** across 18 categories (2 marked N/A for genuinely absent features — MULTI-DEVICE, GROUPS).

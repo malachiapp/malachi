@@ -73,14 +73,12 @@ describe('statisch: kein Server mehr', () => {
     }
   });
 
-  test('AppConfig: nur oeffentliche STUN-Dienste verschiedener Betreiber, kein eigener Server, keine Relay-/TURN-Adresse', () => {
+  test('AppConfig: kein STUN (auch kein oeffentlicher), kein eigener Server, keine Relay-/TURN-Adresse', () => {
+    // STUN-Ausstieg (STUN_AUSSTIEG_PLAN.md): bis 1.1.0 stand hier ein Pool aus
+    // vier oeffentlichen STUN-Diensten. Jetzt fragt Malachi keinen mehr.
     const cfg = require('../../AppConfig');
-    expect(cfg.STUN_POOL.length).toBeGreaterThanOrEqual(3);
-    for (const s of cfg.STUN_POOL) expect(s.url).toMatch(/^stun:[a-z0-9.-]+:\d+$/);
-    expect(new Set(cfg.STUN_POOL.map((s) => s.operator)).size).toBe(cfg.STUN_POOL.length);
-    expect(JSON.stringify(cfg.STUN_POOL)).not.toMatch(/duckdns|malachi|turn:/i);
-    expect(cfg.STUN_URL).toBeUndefined();
-    expect(cfg.RELAY_URL).toBeUndefined();
+    for (const k of ['STUN_POOL', 'STUN_PER_CONNECTION', 'STUN_URL', 'STUN_HOST', 'RELAY_URL']) expect(cfg[k]).toBeUndefined();
+    expect(JSON.stringify(cfg)).not.toMatch(/stuns?:|turns?:|duckdns/i);
   });
 
   test('Kopplung nur ueber Tor: ConnectScreen nutzt pairViaTor/registerPairingInvite bzw. den Tor-Treffpunkt (PhonePairingPanel), keine Server-Suche, kein Server-Angebot', () => {

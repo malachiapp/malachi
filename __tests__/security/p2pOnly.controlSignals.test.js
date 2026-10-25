@@ -323,10 +323,13 @@ describe('Live-Pfad: verspaetet zugestellte Steuersignale (Warteschlange) werden
 });
 
 describe('statisch: kein Server im Datenpfad', () => {
-  test('WebRTC (nativ + web): nur STUN, kein TURN-Server, keine Zugangsdaten-Abfrage, keine Relay-Erzwingung', () => {
+  test('WebRTC (nativ + web): kein TURN- und kein STUN-Server, keine Zugangsdaten-Abfrage, keine Relay-Erzwingung', () => {
     for (const rel of ['WebRTCManager.js', 'web/src/lib/WebRTCManager.ts']) {
       const src = readSrc(rel);
       expect(src).not.toMatch(/urls:\s*[`'"]turns?:/);
+      // STUN-Ausstieg: fest keine ICE-Server (siehe auch noStun.static.test.js).
+      expect(src).toMatch(/iceServers: \[\]/);
+      expect(src).not.toMatch(/STUN_URL|STUN_POOL/);
       expect(src).not.toMatch(/getTurnCredentials\(/);
       expect(src).toMatch(/const FORCE_RELAY_ONLY = false;/);
       expect(src).toMatch(/iceTransportPolicy: 'all'/);

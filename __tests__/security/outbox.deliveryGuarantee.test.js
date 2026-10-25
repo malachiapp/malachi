@@ -775,7 +775,8 @@ describe('statisch: App.tsx nutzt fuer alle Sendewege die Warteschlange', () => 
     // Datei: sendFileNow (auch fuer Siegel-Anhaenge), aufgerufen aus pickAndSendFile.
     expect(src).toMatch(/sendViaOutbox\(chat\?\.id, 'file', \{ base64, fileName, mimeType, size: bytes \}, msgId/);
     expect(src).toMatch(/await sendFileNow\(base64, fileName, mimeType, picked\.size\);/);
-    expect(src).toMatch(/sendViaOutbox\(chat\?\.id, 'audio', \{ base64, durationMs, viewOnce \}, msgId/);
+    // Seit 2026-10-25 mit Wellenform (VoiceWave.js) - weiterhin ueber die Warteschlange.
+    expect(src).toMatch(/sendViaOutbox\(chat\?\.id, 'audio', \{ base64, durationMs, viewOnce, wave: sanitizeWave\(wave\) \}, msgId/);
     expect(src).toMatch(/sendViaOutbox\(chatId, 'system', \{ type: 'system', subtype: 'delete_message', msgId, ts \}/);
     // Kein Inhalt mehr am Speicher vorbei direkt in den Kanal.
     expect(src).not.toMatch(/sendEncrypted(Image|Audio|File)\(/);

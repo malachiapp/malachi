@@ -6,30 +6,17 @@
 // nach Moeglichkeit direkt per WebRTC (Aushandlung ueber die Tor-Verbindung,
 // siehe DirectUpgrade.js).
 //
-// STUN beantwortet nur die Frage "unter welcher oeffentlichen Adresse sieht
-// mich das Internet?" - der Dienst sieht dabei die IP-Adresse, aber keine
-// Inhalte, keine Kontakte und keine Signale.
-//
-// KEIN eigener Server mehr (Nutzerwunsch Okt. 2026: die App soll ein
-// Selbstlaeufer sein, nichts muss betrieben werden): oeffentliche, kostenlose
-// STUN-Dienste verschiedener, unabhaengiger Betreiber. Pro Verbindung werden
-// nur ZWEI davon gefragt (im Wechsel, siehe ConnectionMode.iceServersForMode) -
-// faellt einer aus, reicht der andere, und kein Betreiber sieht alle
-// Verbindungen. Im Verbindungsweg "Privat" und "Nur Tor" wird kein STUN
-// gefragt. Nur reine stun:-Adressen - nie TURN (nichts laeuft ueber Fremde).
-// Nur deutsche Betreiber (DSGVO, kein US-Konzern/CLOUD Act) - Vergleich der
-// Datenschutzbedingungen Okt. 2026: Nextcloud loescht Server-Logs nach
-// spaetestens 7 Tagen und wertet sie nicht fuer Marketing aus; Cloudflare/
-// Google (USA) nutzen Netzdaten auch fuer Analysen. Alle vier per
-// STUN-Binding-Anfrage geprueft (antworten in ~35-50 ms).
-export const STUN_POOL = [
-  { url: 'stun:stun.nextcloud.com:443', operator: 'Nextcloud GmbH (Stuttgart)' },
-  { url: 'stun:stun.sipgate.net:3478', operator: 'sipgate GmbH (Duesseldorf)' },
-  { url: 'stun:stun.1und1.de:3478', operator: '1&1 (Montabaur)' },
-  { url: 'stun:stun.t-online.de:3478', operator: 'Deutsche Telekom (Bonn)' },
-];
-// Wie viele STUN-Dienste je Verbindung gefragt werden.
-export const STUN_PER_CONNECTION = 2;
+// KEIN STUN, KEIN TURN (STUN-Ausstieg, STUN_AUSSTIEG_PLAN.md, nach 1.1.0):
+// Malachi fragt keinen Dritten mehr, unter welcher oeffentlichen Adresse das
+// Geraet zu sehen ist. Bis 1.1.0 taten das in der Stufe "Schnell" je
+// Verbindung zwei oeffentliche STUN-Dienste - sie sahen dabei IP-Adresse,
+// Zeitpunkt und (ueber Lebenszeichen) die Dauer jeder Direktverbindung.
+// Direktverbindungen entstehen jetzt nur noch ueber IPv6, das gleiche lokale
+// Netz oder eine Portfreigabe des eigenen Routers (PortMapping.js); sonst
+// bleibt es bei Tor. Ein statischer Waechter-Test (noStun.static.test.js)
+// verbietet stun:/turn:-Adressen im App-Code. Ausnahme ist nur die
+// Tor-Bruecke Snowflake (TorBridges.js): sie nutzt eigene STUN-Server des
+// Tor-Projekts, wenn Tor im Netz gesperrt ist.
 
 // ── Vollversion ("Pro", siehe LicenseManager.js und shop/LIZENZ_FORMAT.md) ──
 // Oeffentlicher Ed25519-Lizenzschluessel des Shops (base64url, 32 Byte, z. B.

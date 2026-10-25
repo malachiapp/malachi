@@ -2,7 +2,12 @@
 // Verschlüsselte Anrufe für Malachi
 //
 // Baut auf demselben Unterbau wie WebRTCManager.js auf (gleiche ICE-
-// Konfiguration, nur STUN), nutzt aber einen eigenen RTCPeerConnection fuer Audio.
+// Konfiguration: kein STUN, kein TURN), nutzt aber einen eigenen
+// RTCPeerConnection fuer Audio. Die oeffentliche IPv4-Adresse kommt wie beim
+// Chat hoechstens vom eigenen Router: nach dem Sammeln der Kandidaten wird er
+// um eine Portfreigabe gebeten, erfolgreiche Freigaben gehen als normale
+// Trickle-Kandidaten ('ice') an die Gegenseite und werden beim Auflegen
+// geloescht (PortMapping.CallPortMapper, STUN_AUSSTIEG_PLAN.md Luecke L1).
 // Die Signalisierung (Offer/Answer/ICE) laeuft ausschliesslich ueber die
 // bestehende, verschluesselte Verbindung zum Kontakt (direkt oder Tor) als
 // System-Nachricht (subtype call_signal), zusaetzlich mit eigenem
@@ -33,6 +38,9 @@ import { pcConfigForCalls } from './WebRTCManager';
 import { encryptMsg, decryptMsg } from './MessageCrypto';
 import RTCStore from './RTCStore';
 import { MODE_TOR_ONLY, connectionModeForDecision, onConnectionModeChange } from './ConnectionMode';
+import { CallPortMapper } from './PortMapping';
+import * as ConnectionStats from './ConnectionStats';
+import { setCallSpeaker } from './CallAudioRoute';
 import { t } from './i18n';
 
 // Hinweistexte in der aktiven Sprache (i18n.js) - als Funktionen, damit ein
@@ -133,6 +141,7 @@ export default class CallManager {
     // und direkt danach ein ICE-Kandidat) koennten sonst Kandidaten verlieren.
     this._signalChain = Promise.resolve();
     this._nativeSubs = [];
+    this.speaker = false;   // Lautsprecher (setSpeaker), beim Ende zurueckgesetzt
     this._subscribeNativeEvents();
     // Nur Sprache ueber den Kanal, nie WebRTC (Verbindungsweg "nur Tor" bei
     // uns oder bei der Gegenseite) - siehe Kopfkommentar.
@@ -141,6 +150,12 @@ export default class CallManager {
     this._peerChannelOnly = false;
     this._modeUnsub = null;
     this._channelSwitch = null;
+    // Router-Portfreigabe der Anruf-PeerConnection (PortMapping.js, L1).
+    this._portMapper = null;
+    // Diagnose (ConnectionStats.js): Beginn des Verbindens (Annehmen bzw.
+    // Antwort erhalten) fuer die Aufbauzeit-Klasse.
+    this._connectStartedAt = 0;
+    this._callCounted = false;
   }
 
   // Wechsel des Verbindungswegs waehrend eines Anrufs mitbekommen (nur solange
@@ -176,7 +191,23 @@ export default class CallManager {
     this._closePeerConnection();
   }
 
+  // Portfreigaben dieses Anrufs am Router loeschen (auch eine, die erst
+  // danach eintrifft - PortMappingSession loescht sie dann sofort).
+  _releasePortMapper() {
+    if (this._portMapper) { try { this._portMapper.release(); } catch {} }
+    this._portMapper = null;
+  }
+
+  // Diagnose: Weg und Aufbauzeit des Anrufs einmal zaehlen.
+  _countCallPath(kind) {
+    if (this._callCounted) return;
+    this._callCounted = true;
+    ConnectionStats.bump('calls', kind);
+    if (this._connectStartedAt) ConnectionStats.noteCallSetup(Date.now() - this._connectStartedAt);
+  }
+
   _closePeerConnection() {
+    this._releasePortMapper();
     if (this.pc) {
       this.pc.oniceconnectionstatechange = null;
       this.pc.onicecandidate = null;
@@ -240,6 +271,7 @@ export default class CallManager {
   _startConnectTimeout() {
     clearTimeout(this.connectTimer);
     clearTimeout(this._channelAudioTimer);
+    if (!this._connectStartedAt) this._connectStartedAt = Date.now();
     const viaTor = RTCStore.connections.get(this.contactId)?.transport === 'tor' && RTCStore.isConnected(this.contactId);
     this._channelAudioTimer = setTimeout(() => {
       if (this.state === CallState.CONNECTING && !this.viaChannelAudio) {
@@ -307,13 +339,20 @@ export default class CallManager {
     };
     this._audioBatch = [];
     this._audioSeq = 0;
+    this._audioViaChannelCounted = false;
     this._audioSub = callAudioEmitter?.addListener('MalachiCallAudioFrame', ({ data }) => {
       if (!this.viaChannelAudio) return;
       this._audioBatch.push(data);
       if (this._audioBatch.length >= 3) {
         const f = this._audioBatch;
         this._audioBatch = [];
-        RTCStore.sendMessage(this.contactId, JSON.stringify({ type: 'call_audio', s: this._audioSeq++, f }));
+        // Direktverbindung: eigener, ungeordneter Sprachkanal ohne Neusenden
+        // (WP3a, sofern die Gegenseite ihn kennt); sonst wie jede Nachricht.
+        const how = RTCStore.sendCallAudio(this.contactId, { type: 'call_audio', s: this._audioSeq++, f });
+        if (how === 'audio' && !this._audioViaChannelCounted) {
+          this._audioViaChannelCounted = true;
+          ConnectionStats.bump('channelAudio', 'viaAudioChannel');
+        }
       }
     });
     try {
@@ -324,7 +363,9 @@ export default class CallManager {
       this.endCall('connection_lost');
       return false;
     }
-    console.log('[Call] ✅ Sprache laeuft ueber den Kanal (' + (RTCStore.connections.get(this.contactId)?.transport === 'tor' ? 'Tor' : 'direkt') + ')');
+    const viaTorNow = RTCStore.connections.get(this.contactId)?.transport === 'tor';
+    console.log('[Call] ✅ Sprache laeuft ueber den Kanal (' + (viaTorNow ? 'Tor' : 'direkt') + ')');
+    this._countCallPath(viaTorNow ? 'channelTor' : 'channelDirect');
     if (this.state !== CallState.ACTIVE) {
       this.callStartTime = Date.now();
       this._setState(CallState.ACTIVE);
@@ -338,13 +379,34 @@ export default class CallManager {
   _stopChannelAudio() {
     if (this._audioSub) { try { this._audioSub.remove(); } catch {} this._audioSub = null; }
     if (RTCStore.callAudioHandler) RTCStore.callAudioHandler = null;
-    if (this.viaChannelAudio) CallAudio?.stop().catch(() => {});
+    // stop() liefert die Diagnose-Zaehler des Anrufs (nur Zahlen, WP0).
+    if (this.viaChannelAudio) {
+      Promise.resolve(CallAudio?.stop()).then((st) => {
+        if (!st || typeof st !== 'object') return;
+        ConnectionStats.bump('channelAudio', 'frames', st.frames);
+        ConnectionStats.bump('channelAudio', 'dropped', st.dropped);
+        ConnectionStats.bump('channelAudio', 'underruns', st.underruns);
+      }).catch(() => {});
+    }
   }
 
   async _createPeerConnection() {
     // Wirft im Verbindungsweg "nur Tor" (TorOnlyModeError) - es entsteht dann
     // keine PeerConnection, auch nicht durch einen Wettlauf mit dem Wechsel.
     const pc = new RTCPeerConnection(await pcConfigForCalls());
+
+    // Router-Portfreigabe (L1): nach dem Sammeln einmal den Router fragen,
+    // erfolgreiche IPv4-Freigaben als zusaetzliche Kandidaten nachschicken.
+    // Nie im Verbindungsweg "nur Tor" (dort entsteht ohnehin keine PC) und
+    // nie mehr, sobald der Anruf auf den Kanal gewechselt hat.
+    this._releasePortMapper();
+    const mapper = new CallPortMapper((candidate) => {
+      if (this.pc !== pc || this.channelOnly || this.viaChannelAudio) return;
+      this._sendSignal({ type: 'ice', payload: { candidate } }).catch(e =>
+        console.warn('[Call] Router-Kandidat konnte nicht gesendet werden:', e.message)
+      );
+    }, { isAllowed: async () => (await connectionModeForDecision()) !== MODE_TOR_ONLY });
+    this._portMapper = mapper;
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -355,6 +417,7 @@ export default class CallManager {
           console.warn('[Call] ICE-Kandidat konnte nicht gesendet werden:', e.message)
         );
       }
+      mapper.onCandidate(event?.candidate || null);
     };
 
     pc.ontrack = (event) => this.onRemoteStream(event.streams[0]);
@@ -363,6 +426,7 @@ export default class CallManager {
       console.log('[Call] ICE State:', pc.iceConnectionState);
       if (pc.iceConnectionState === 'connected' && this.state !== CallState.ACTIVE) {
         clearTimeout(this.connectTimer);
+        this._countCallPath('webrtc');
         this._setState(CallState.ACTIVE);
         this.callStartTime = Date.now();
         CallBridgeModule?.reportCallActive(this.contactId);
@@ -618,6 +682,7 @@ export default class CallManager {
           // Gegenseite erwartet WebRTC), sagen wir ihr, dass es ueber den
           // Kanal weitergeht ('channel_audio').
           this._setState(CallState.CONNECTING);
+          if (!this._connectStartedAt) this._connectStartedAt = Date.now();
           const informPeer = signal.payload?.channelOnly !== true;
           const ok = await this._switchToChannelAudio(informPeer);
           if (!ok && this.state === CallState.CONNECTING) this.endCall(this._torOnlyCall ? 'tor_only_switch' : 'connection_lost');
@@ -795,6 +860,7 @@ export default class CallManager {
   // ueber den Kanal. Ein Videoanruf laeuft dabei als Sprachanruf (mit Hinweis).
   async _acceptViaChannel(fromNative) {
     this.channelOnly = true;
+    if (!this._connectStartedAt) this._connectStartedAt = Date.now();
     clearTimeout(this.connectTimer);
     clearTimeout(this._channelAudioTimer);
     this.connectTimer = setTimeout(() => {
@@ -881,6 +947,11 @@ export default class CallManager {
     if (this.state === CallState.ENDED || this.state === CallState.IDLE) return;
     const notice = this._noticeForEnd(reason);
     if (notice) { try { this.onNotice(notice); } catch {} }
+    // Diagnose: technische Abbruchgruende zaehlen (nicht Auflegen/Ablehnen).
+    const endKind = { connection_lost: 'endConnectionLost', connect_timeout: 'endConnectTimeout',
+      unreachable: 'endUnreachable', media_error: 'endMediaError' }[reason];
+    if (endKind) ConnectionStats.bump('calls', endKind);
+    this._releasePortMapper();
     clearTimeout(this.ringTimer);
     clearTimeout(this.connectTimer);
     clearTimeout(this._iceGraceTimer);
@@ -915,6 +986,7 @@ export default class CallManager {
       this.pc = null;
     }
     if (!fromNative) CallBridgeModule?.reportCallEnded(this.contactId);
+    this._resetSpeaker();
     this._setState(CallState.ENDED);
     setTimeout(() => this._setState(CallState.IDLE), 500);
   }
@@ -931,6 +1003,7 @@ export default class CallManager {
     clearTimeout(this._channelAudioTimer);
     this._stopChannelAudio();
     this._unwatchConnectionMode();
+    this._releasePortMapper();
     if (this.localStream) {
       this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
@@ -939,6 +1012,7 @@ export default class CallManager {
       this.pc.close();
       this.pc = null;
     }
+    this._resetSpeaker();
     this._setState(CallState.ENDED);
     setTimeout(() => this._setState(CallState.IDLE), 500);
   }
@@ -946,6 +1020,22 @@ export default class CallManager {
   toggleMute(muted) {
     if (this.viaChannelAudio) CallAudio?.setMuted(!!muted);
     if (this.localStream) this.localStream.getAudioTracks().forEach((t) => (t.enabled = !muted));
+  }
+
+  // Lautsprecher an/aus (CallAudioRoute.js). Rueckgabe: umgeschaltet?
+  async setSpeaker(on) {
+    if (this.state === CallState.ENDED || this.state === CallState.IDLE) return false;
+    const ok = await setCallSpeaker(!!on);
+    if (ok) this.speaker = !!on;
+    return ok;
+  }
+
+  // Beim Ende: ohne Telecom bliebe der Lautsprecher sonst fuer andere Apps an
+  // (mit Telecom setzt das System den Ausgang ohnehin zurueck).
+  _resetSpeaker() {
+    if (!this.speaker) return;
+    this.speaker = false;
+    setCallSpeaker(false).catch(() => {});
   }
 
   // Nutzerwunsch: zwischen Audio- und Videoanruf wechseln koennen, waehrend

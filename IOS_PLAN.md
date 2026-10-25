@@ -137,9 +137,9 @@ Die folgenden Punkte nützen auch Android. Sie müssen rückwärtskompatibel sei
 
 - `react-native-webrtc` (eingebunden 124.0.8) unterstützt iOS samt DataChannel. Hier ist kein Neubau nötig.
 - Mit CallKit muss die Audio-Sitzung von WebRTC manuell gesteuert und erst im CallKit-Rückruf `didActivate` eingeschaltet werden. Das ist bekannt und machbar, aber fehleranfällig (Teil von Modul 15).
-- STUN-Pool, Verbindungswege 1–3 und das Direkt-Upgrade sind JS und bleiben gleich.
+- Verbindungswege („Direkt, wenn möglich“ ohne STUN, „nur Tor“) und das Direkt-Upgrade sind JS und bleiben gleich. Seit dem STUN-Ausstieg gibt es keinen STUN-Pool mehr.
 - iOS fragt beim ersten Zugriff ins lokale Netz nach („Lokales Netzwerk“). WebRTC-Hostkandidaten können diese Frage auslösen, deshalb braucht es einen erklärenden Text `NSLocalNetworkUsageDescription`.
-- Stufe „Privat (ohne STUN)“: Die Portfreigabe am Router per PCP und NAT-PMP ist Unicast und geht. UPnP-IGD nutzt SSDP-Multicast und braucht dafür eine eigene Apple-Berechtigung `com.apple.developer.networking.multicast` ([Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy), [Apple-Forum](https://developer.apple.com/forums/thread/663875)). Für v1 deshalb ohne UPnP; ohne Portfreigabe bleiben IPv6 und Tor.
+- „Direkt, wenn möglich“ (ohne STUN): Die Portfreigabe am Router per PCP und NAT-PMP ist Unicast und geht. UPnP-IGD nutzt SSDP-Multicast und braucht dafür eine eigene Apple-Berechtigung `com.apple.developer.networking.multicast` ([Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy), [Apple-Forum](https://developer.apple.com/forums/thread/663875)). Für v1 deshalb ohne UPnP; ohne Portfreigabe bleiben IPv6 und Tor.
 
 ### 3.5 Screenshot-Schutz (kein FLAG_SECURE auf iOS)
 
@@ -185,7 +185,7 @@ Im Store und in der App darf daher nur „erschwert Screenshots und Aufnahmen“
 - **1.2 Nutzerinhalte:** Bei Kommunikations-Apps kann Apple Melde- und Blockierfunktionen verlangen. Eine Funktion „Kontakt blockieren“ fehlt bisher (`PLAY_STORE.md` 15.5). Sie sollte vor der Messenger-Einreichung kommen, in gemeinsamem JS.
 - **2.5.2:** keine In-App-Updates. `MalachiUpdater` entfällt, und `AppUpdater.js` bleibt ohne Modul schon heute aus.
 - **2.5.4:** nur Hintergrundmodi angeben, die wirklich genutzt werden: `audio` für laufende Gespräche, `fetch` bzw. BGTask für das Abholen.
-- **Datenschutzangaben und Datenschutz-Manifest:** Die App-Privacy-Angaben entsprechen der Play-Datensicherheit: ungefährer Standort an OpenStreetMap Nominatim, sonst nichts erhoben. Dazu kommt `PrivacyInfo.xcprivacy` für die „Required Reason APIs“ der App und der Bibliotheken.
+- **Datenschutzangaben und Datenschutz-Manifest:** Die App-Privacy-Angaben entsprechen der Play-Datensicherheit: seit dem STUN-Ausstieg nichts erhoben (kein Nominatim, kein STUN). Dazu kommt `PrivacyInfo.xcprivacy` für die „Required Reason APIs“ der App und der Bibliotheken.
 - **DSA-Händlerstatus:** Wer mit der App Geld verdient, gilt in der Regel als Händler. Adresse, Telefonnummer und E-Mail werden dann in den EU-Stores **öffentlich** angezeigt ([Apple](https://developer.apple.com/help/app-store-connect/manage-compliance-information/manage-european-union-digital-services-act-compliance-information)).
 - **Länder:** China ausnehmen (CallKit, Tor). Den Iran erreicht der App Store offiziell ohnehin nicht. In Russland hat Apple 2024 auf Behördenverlangen VPN-Apps entfernt ([TechCrunch](https://techcrunch.com/2024/07/08/apple-removes-vpn-apps-at-request-of-russian-authorities-say-app-makers)). Gerade in den Sprachräumen Farsi, Chinesisch und Russisch bleibt die Android-APK oft der einzige Weg.
 - **EU-Alternativen:** Alternative Marktplätze wie AltStore PAL und der Webvertrieb verlangen ebenfalls die Apple-Mitgliedschaft und Apples Notarisierung. Webvertrieb setzt dazu über 1 Mio. Erstinstallationen voraus ([Apple: Apps in der EU](https://developer.apple.com/support/apps-in-the-eu/)). Für Malachi bringt das keinen Vorteil, denn es gelten dieselben iOS-Regeln. **Erst App Store.**
@@ -319,7 +319,7 @@ Vorschlag für den Hinweistext im Store (de):
 | 5 | **App Store Connect:** Vertrag für kostenpflichtige Apps, Bankverbindung, Steuerformulare; DSA-Händlerangaben (Adresse, Telefon, E-Mail werden in der EU öffentlich); In-App-Produkt `malachi_pro` (2,99 €, einmalig); ggf. Antrag auf das Small Business Program | – | vor Etappe A |
 | 6 | **Französische Verschlüsselungserklärung** einreichen oder Frankreich ausnehmen; US-Exportfrage fachkundig klären lassen (wie `PLAY_STORE.md` 12) | ggf. Beratung | vor der ersten Einreichung |
 | 7 | **Dauerhaft laufendes Android-Testgerät** mit Malachi als Demo-Kontakt für Apples Prüfer, dazu Prüfnotizen bzw. Video | vorhandenes Altgerät | vor M-C2 |
-| 8 | **Datenschutzerklärung** um iOS ergänzen (StoreKit, keine Backups, Nominatim, STUN-Betreiber); Support-URL | – | vor Etappe A |
+| 8 | **Datenschutzerklärung** um iOS ergänzen (StoreKit, keine Backups; Nominatim und STUN-Betreiber entfallen seit dem STUN-Ausstieg); Support-URL | – | vor Etappe A |
 | 9 | **Steuerberater:** Apple-Auszahlungen und Provisionsabrechnung (Reverse-Charge auch für Kleinunternehmer), Einbindung in die Buchhaltungs-Automatik | – | vor dem ersten Verkauf |
 | 10 | **Grundsatzentscheidungen** aus Abschnitt 8, vor allem Nr. 1–3 | – | Woche 1 |
 

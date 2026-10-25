@@ -16,7 +16,7 @@
 
 <details>
   <summary>How do I find contacts without a phone number?</summary>
-  <p>Not automatically – and that's intentional. Malachi doesn't upload an address book and has no user directories. You exchange an invitation: ideally in person via QR code, otherwise as a link or code over a channel you trust. Then compare the safety code (shield icon in the chat).</p>
+  <p>Not automatically – and that's intentional. Malachi doesn't upload an address book and has no user directories. You exchange an invitation: ideally in person via QR code, otherwise as a link or code over a channel you trust. If you share a link, compare the safety code afterwards (shield icon in the chat) – otherwise someone who intercepts the link on the way could put themselves in between. Alternatively you both enter your phone numbers or an agreed identifier (at least 8 characters); this creates a meeting point in the Tor network, and what you enter is neither stored nor sent.</p>
 </details>
 
 <details>
@@ -26,12 +26,12 @@
 
 <details>
   <summary>Who can see my IP address?</summary>
-  <p>That depends on the connection mode (Settings → Connection mode). In the default "Fast" mode, two public STUN services run by German providers and – during a direct connection – your contact can see your IP address, but no content. With "Private" only your contact sees it, during a direct connection. With "Maximum anonymity (Tor only)" (full version) nobody sees it. The overview is on the <a href="index.html#who-sees-what">home page</a>.</p>
+  <p>That depends on the connection mode (Settings → Connection &amp; Tor). In the default "Direct when possible" mode, your contact sees your IP address – already when your devices try to connect directly. Malachi asks no STUN service and no server for this. With "Maximum anonymity (Tor only)" (full version) neither contacts nor any server see it. Your IP address always reaches the Tor entry node, as with any use of Tor – but it does not know who you are talking to. Only if Tor is blocked on your network and the Snowflake bridge steps in does it ask its own STUN servers run by the Tor Project. The overview is on the <a href="index.html#who-sees-what">home page</a>.</p>
 </details>
 
 <details>
   <summary>How is Malachi encrypted?</summary>
-  <p>End-to-end: messages are encrypted on your device and only decrypted at your contact's. Every message gets its own key, which is deleted after use (Double Ratchet). If a device is briefly compromised, the connection recovers with the next messages. The key exchange combines the proven X25519 with ML-KEM-768, a standardised scheme intended to protect against future quantum computers as well.</p>
+  <p>End-to-end: messages are encrypted on your device and only decrypted at your contact's. Every message gets its own key, which is deleted after use (Double Ratchet). If a device is briefly compromised, the connection recovers with the next messages – unless the attacker actively interferes; comparing the safety code protects against that. Every connection negotiates a secret with ML-KEM-768, a standardised scheme intended to protect against future quantum computers as well; the Double Ratchet combines it with the proven X25519. This applies to messages, pictures, files and voice messages. Voice and video calls are end-to-end encrypted (DTLS-SRTP), but not yet protected against future quantum computers.</p>
 </details>
 
 <details>
@@ -41,7 +41,7 @@
 
 <details>
   <summary>Is Malachi unbreakable?</summary>
-  <p>No – no software can honestly promise that. Malachi builds on proven, publicly known schemes (including X25519, ML-KEM-768 and XChaCha20-Poly1305) instead of home-made ones. However, Malachi has not been reviewed by an independent auditor yet. No encryption helps against malware on the device or an unlocked phone in someone else's hands.</p>
+  <p>No – no software can honestly promise that. Malachi builds on proven, publicly known schemes (including X25519, ML-KEM-768 and XChaCha20-Poly1305) instead of home-made ones. However, Malachi has not been reviewed by an independent auditor yet. No encryption helps against malware with full access to the phone.</p>
 </details>
 
 <details>
@@ -68,7 +68,7 @@
 
 <details>
   <summary>How do I get updates?</summary>
-  <p>The app checks for new versions over Tor at most once a day and only downloads one when you tap it; new versions also appear on the <a href="download.html">download page</a>. Simply install them over the old version; your data is kept. Android only accepts an update if it is signed with the same key as the installed app.</p>
+  <p>The app checks for new versions over Tor at most once a day and only downloads one when you tap it; new versions also appear on the <a href="download.html">download page</a>. Simply install them over the old version; your data is kept. Android only accepts an update if it is signed with the same key as the installed app. Security updates are provided as long as Malachi is offered – at least until 31 December 2031. The date moves forward by one year every year; we announce an end at least twelve months in advance. Security updates are always free.</p>
 </details>
 
 <details>
@@ -95,7 +95,7 @@
 
 <details>
   <summary>What happens to my chats if I lose my phone?</summary>
-  <p>Your chats are only on your device, not in a cloud and not on a server. Without the device they are gone. Protect the app with a PIN; with the full version you can also set everything to be deleted after five wrong PINs.</p>
+  <p>Your chats are only on your device, not in a cloud and not on a server. Malachi currently offers no backup – without the device they are gone. Someone who finds the phone can't read the histories without your app PIN: they are additionally encrypted with a key derived from the PIN, and voice messages are recorded and played only in memory. Whether you choose 4 or 6 digits is up to you; a longer PIN is harder to guess. With the full version you can also set everything to be deleted after five wrong PINs.</p>
 </details>
 
 </main>

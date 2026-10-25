@@ -51,8 +51,8 @@
  * zurueck (applyConnectionMode). Der Entwickler-Testschalter "nur Tor"
  * (TorTransport.isForceTorTestMode) wirkt hier genauso.
  *
- * Hole Punching ohne STUN (Stufe 2) - braucht es eine Zeitabstimmung ueber
- * den Kanal (etwa ein "direct_go" mit gemeinsamem Startzeitpunkt)? Nein:
+ * Hole Punching ohne STUN - braucht es eine Zeitabstimmung ueber den Kanal
+ * (etwa ein "direct_go" mit gemeinsamem Startzeitpunkt)? Nein:
  *  - Die Antwortseite beginnt ihre ICE-Pruefungen, sobald sie das Angebot
  *    angewendet hat (setLocalDescription), also VOR dem Absenden der Antwort.
  *    Ihre ausgehenden Pruefpakete oeffnen dabei ihr eigenes NAT/ihre Firewall
@@ -68,13 +68,25 @@
  *    (RFC 4787: 2 min empfohlen). Der Abstand passt mit Reserve hinein.
  *  - Ein gemeinsamer Startzeitpunkt wuerde einen zusaetzlichen Tor-Umlauf
  *    kosten und gleich gehende Uhren voraussetzen, ohne einen Fehlerfall zu
- *    beheben. Trickle-ICE (Kandidaten einzeln nachreichen) bringt hier
- *    ebenfalls nichts: ohne STUN liegen alle Kandidaten (Host, IPv6, vom
- *    Router freigegebene Adresse) schon beim Absenden vor; was ICE sonst noch
- *    findet (peer-reflexiv), lernt es aus den Pruefpaketen selbst.
+ *    beheben. Volles Trickle-ICE bringt hier ebenfalls nichts: ohne STUN
+ *    liegen Host- und IPv6-Kandidaten schon beim Absenden vor; was ICE sonst
+ *    noch findet (peer-reflexiv), lernt es aus den Pruefpaketen selbst.
+ *  Einzige Ausnahme ist die Router-Portfreigabe: antwortet der Router erst
+ *  nach der kurzen Wartezeit (PortMapping.PORT_MAPPING_MAX_WAIT_MS), wird
+ *  die Freigabe als 'direct_cand' { id, cand } nachgereicht (Luecke L3 im
+ *  STUN_AUSSTIEG_PLAN.md) - nur fuer die laufende Aushandlung mit dieser id
+ *  (Versuch oder ICE-Neustart), nur srflx-Zeilen mit oeffentlicher IPv4,
+ *  hoechstens MAX_LATE_CANDIDATES je Aushandlung, nie in Stufe 3. Aeltere
+ *  Versionen kennen das Signal nicht und ignorieren es.
  *  Noetig ist nur, dass der Abstand klein bleibt: das Warten auf den Router
  *  ist begrenzt, und die ICE-Wachhunde (20 s) wie das Versuchs-Zeitlimit
  *  (35 s) liegen deutlich darueber. Klappt es trotzdem nicht, bleibt Tor.
+ *
+ * Sprachkanal (WP3a): Angebot und Antwort tragen ach: 1 ("eigener
+ * Sprachkanal moeglich"). Nur wenn die Gegenseite das ankuendigt, oeffnet
+ * WebRTCManager bei einem Anruf ueber die Direktverbindung einen zweiten,
+ * ungeordneten DataChannel - aeltere Versionen haetten ihn sonst als
+ * Chat-Kanal uebernommen.
  */
 import EncryptedStorage from 'react-native-encrypted-storage';
 import RTCStore from './RTCStore';
@@ -83,9 +95,9 @@ import { secureRandomToken } from './MessageCrypto';
 import {
   getKnownOwnOnion, ONION_RE, isForceTorTestMode, demoteActiveTorToReserve, promoteTorReserve,
 } from './TorTransport';
-import {
-  MODE_FAST, MODE_PRIVATE, MODE_TOR_ONLY, connectionModeForDecision, onConnectionModeChange,
-} from './ConnectionMode';
+import { MODE_TOR_ONLY, connectionModeForDecision, onConnectionModeChange } from './ConnectionMode';
+import { isValidMappedCandidate, MAX_LATE_CANDIDATES } from './PortMapping';
+import * as ConnectionStats from './ConnectionStats';
 
 // Angebot -> fertiger Schluesseltausch. Grosszuegig: Tor-Laufzeiten (2x je
 // ~1-3 s) plus ICE-Pruefung (WebRTCManager gibt nach 20 s auf).
@@ -101,7 +113,9 @@ const REQUEST_MIN_GAP_MS = 10000;
 // Neue Tor-Verbindung, Gegenseite ist Anbieter: so lange auf ihr Angebot
 // warten, bevor nachgefragt wird.
 const REQUEST_AFTER_TOR_READY_MS = 5000;
-const RESTART_TIMEOUT_MS = 6000;
+// Neustart-Angebot -> Antwort. 8 statt 6 s: jede Seite fragt dabei bis zu 1 s
+// den Router um eine Portfreigabe (Luecke L2).
+const RESTART_TIMEOUT_MS = 8000;
 const RESTART_DELAY_AFTER_NETCHANGE_MS = 700;
 export const NETCHANGE_DEAD_AFTER_MS = 5000;
 const MAX_SDP_LEN = 30000;
@@ -116,6 +130,10 @@ const lastRequestSent = new Map();
 const lastOfferStarted = new Map();
 const restarts = new Map();     // contactId -> laufender ICE-Neustart
 const retryTimers = new Map();
+// Nachgereichte Kandidaten, die vor dem zugehoerigen Angebot verarbeitet
+// werden (Signale laufen nebeneinander): kurz aufheben.
+const earlyCands = new Map();   // contactId -> { id, list, timer }
+const EARLY_CAND_KEEP_MS = 20000;
 
 // ── Hilfen ──────────────────────────────────────────────────────────────────
 async function loadContact(contactId) {
@@ -220,7 +238,12 @@ function newAttempt(contactId, id, role) {
   rtc.chatId = contactId;
   rtc._upgradeId = id;
   rtc._onKeyExchange = () => promote(att);
+  // Spaete Router-Freigabe (L3) - fuer diesen Versuch und spaetere
+  // ICE-Neustarts derselben Verbindung (negotiationId sagt, wofuer).
+  rtc.onLateCandidates = (cands, negotiationId) => { sendLateCandidates(contactId, negotiationId, cands).catch(() => {}); };
   att.rtc = rtc;
+  ConnectionStats.bump('direct', 'started');
+  ConnectionStats.noteNetworkSituation().catch(() => {});
   att.timer = setTimeout(() => { if (!att.done) failAttempt(att, 'Zeitlimit'); }, UPGRADE_ATTEMPT_TIMEOUT_MS);
   att.timer?.unref?.();
   attempts.set(contactId, att);
@@ -235,16 +258,28 @@ async function startOffer(contactId) {
   const att = newAttempt(contactId, id, 'offerer');
   console.log('[Direkt] Starte Aushandlung einer Direktverbindung (ueber Tor)');
   try {
-    const offerJSON = await att.rtc.createOffer();
+    const offerJSON = await att.rtc.createOffer({ negotiationId: id });
     if (att.done) return;
     const { sdp } = JSON.parse(offerJSON);
     if (!validSdp(sdp, 'offer')) throw new Error('ungueltiges eigenes Angebot');
-    if (!sendSignal(contactId, { subtype: 'direct_offer', id, sdp, onion: getKnownOwnOnion() || undefined })) {
+    if (!sendSignal(contactId, { subtype: 'direct_offer', id, sdp, ach: 1, onion: getKnownOwnOnion() || undefined })) {
       throw new Error('Angebot nicht zustellbar');
     }
   } catch (e) {
     failAttempt(att, e?.message || String(e));
   }
+}
+
+// Diagnose-Kategorie eines beendeten Versuchs (ConnectionStats, WP0).
+function failKind(why, noBackoff) {
+  if (why === 'Zeitlimit') return 'failTimeout';
+  if (why === 'Netzwechsel') return 'failNetChange';
+  if (why === 'Verbindung abgebrochen') return 'failIce';
+  // Eigener Wechsel auf 'nur Tor' (demoteAllDirectToTor) ist kein Fehlschlag.
+  if (/^Verbindungsweg/.test(why)) return 'superseded';
+  if (/abgelehnt|nur Tor/.test(why)) return 'failRejected';
+  if (noBackoff) return 'superseded';
+  return 'failOther';
 }
 
 function failAttempt(att, why, { noBackoff = false, backoffMs = 0 } = {}) {
@@ -253,6 +288,7 @@ function failAttempt(att, why, { noBackoff = false, backoffMs = 0 } = {}) {
   clearTimeout(att.timer);
   if (attempts.get(att.contactId) === att) attempts.delete(att.contactId);
   try { att.rtc?.close(); } catch {}
+  ConnectionStats.bump('direct', failKind(String(why || ''), noBackoff));
   if (noBackoff) {
     console.log('[Direkt] Versuch beendet:', why);
     return;
@@ -296,6 +332,8 @@ async function promote(att) {
   backoff.delete(id);
   const rtc = att.rtc;
   if (rtc._closed) return;
+  ConnectionStats.bump('direct', 'ok');
+  ConnectionStats.noteDirectSetup(Date.now() - att.startedAt);
   // Tor wird Reserve (ohne Reserve-Wunsch schliesst setConnection sie).
   const cur = RTCStore.connections.get(id);
   if (cur && cur !== rtc && cur.transport === 'tor') demoteActiveTorToReserve(id);
@@ -321,6 +359,7 @@ export async function handleUpgradeSignal(chatId, msg) {
     case 'direct_offer': return msg.restart ? onRestartOffer(chatId, msg) : onOffer(chatId, msg);
     case 'direct_answer': return msg.restart ? onRestartAnswer(chatId, msg) : onAnswer(chatId, msg);
     case 'direct_reject': return onReject(chatId, msg);
+    case 'direct_cand': return onLateCandidate(chatId, msg);
     default: return undefined;
   }
 }
@@ -366,13 +405,15 @@ async function onOffer(chatId, msg) {
     }
   }
   const att = newAttempt(chatId, msg.id, 'answerer');
+  att.rtc.setPeerAudioChannel?.(msg.ach === 1);
   console.log('[Direkt] Angebot fuer eine Direktverbindung erhalten - antworte (ueber die bestehende Verbindung)');
   try {
-    const answerJSON = await att.rtc.createAnswerDirect(JSON.stringify({ sdp: msg.sdp }));
+    const answerJSON = await att.rtc.createAnswerDirect(JSON.stringify({ sdp: msg.sdp }), { negotiationId: msg.id });
     if (att.done) return;
+    applyEarlyCandidates(chatId, msg.id, att.rtc);
     const { sdp } = JSON.parse(answerJSON);
     if (!validSdp(sdp, 'answer')) throw new Error('ungueltige eigene Antwort');
-    if (!sendSignal(chatId, { subtype: 'direct_answer', id: msg.id, sdp, onion: getKnownOwnOnion() || undefined })) {
+    if (!sendSignal(chatId, { subtype: 'direct_answer', id: msg.id, sdp, ach: 1, onion: getKnownOwnOnion() || undefined })) {
       throw new Error('Antwort nicht zustellbar');
     }
   } catch (e) {
@@ -385,6 +426,7 @@ async function onAnswer(chatId, msg) {
   if (!att || att.done || att.role !== 'offerer' || att.id !== msg.id || att.answered) return;
   if (!validSdp(msg.sdp, 'answer')) return;
   att.answered = true;
+  att.rtc.setPeerAudioChannel?.(msg.ach === 1);
   try {
     await att.rtc.handleAnswer(JSON.stringify({ sdp: msg.sdp }));
     console.log('[Direkt] Antwort erhalten - pruefe direkten Pfad');
@@ -459,8 +501,9 @@ async function startRestart(contactId, rtc) {
   r.timer = setTimeout(() => endRestart(contactId, r, 'Zeitlimit'), RESTART_TIMEOUT_MS);
   r.timer?.unref?.();
   restarts.set(contactId, r);
+  ConnectionStats.bump('restart', 'started');
   try {
-    const desc = await rtc.createIceRestartOffer();
+    const desc = await rtc.createIceRestartOffer({ negotiationId: id });
     if (r.done || rtc._closed) return;
     if (!validSdp(desc, 'offer')) throw new Error('ungueltiges Neustart-Angebot');
     if (!sendSignal(contactId, { subtype: 'direct_offer', restart: true, id, sdp: desc, onion: getKnownOwnOnion() || undefined }, rtc)) {
@@ -471,12 +514,15 @@ async function startRestart(contactId, rtc) {
   }
 }
 
-function endRestart(contactId, r, why) {
+function endRestart(contactId, r, why, { counted = true } = {}) {
   if (r.done) return;
   r.done = true;
   clearTimeout(r.timer);
   if (restarts.get(contactId) === r) restarts.delete(contactId);
-  if (why) console.log('[Direkt] ICE-Neustart beendet:', why);
+  if (why) {
+    console.log('[Direkt] ICE-Neustart beendet:', why);
+    if (counted) ConnectionStats.bump('restart', 'failed');
+  }
 }
 
 async function onRestartOffer(chatId, msg) {
@@ -500,10 +546,10 @@ async function onRestartOffer(chatId, msg) {
       sendSignal(chatId, { subtype: 'direct_reject', id: msg.id, reason: 'glare' }, rtc);
       return;
     }
-    endRestart(chatId, mine, 'Neustart der Gegenseite gilt');
+    endRestart(chatId, mine, 'Neustart der Gegenseite gilt', { counted: false });
   }
   try {
-    const desc = await rtc.acceptIceRestartOffer(msg.sdp);
+    const desc = await rtc.acceptIceRestartOffer(msg.sdp, { negotiationId: msg.id });
     if (!validSdp(desc, 'answer')) throw new Error('ungueltige Neustart-Antwort');
     sendSignal(chatId, { subtype: 'direct_answer', restart: true, id: msg.id, sdp: desc }, rtc);
     console.log('[Direkt] ICE-Neustart der Gegenseite beantwortet');
@@ -519,6 +565,7 @@ async function onRestartAnswer(chatId, msg) {
   try {
     await r.rtc.acceptIceRestartAnswer(msg.sdp);
     endRestart(chatId, r, null);
+    ConnectionStats.bump('restart', 'ok');
     console.log('[Direkt] ✅ ICE-Neustart ausgehandelt - Direktverbindung zieht ins neue Netz um');
   } catch (e) {
     endRestart(chatId, r, 'Antwort nicht verwendbar: ' + (e?.message || e));
@@ -575,22 +622,62 @@ export async function applyConnectionMode(mode, prev) {
     for (const [id, rtc] of [...RTCStore.connections.entries()]) {
       if (rtc?.transport === 'tor') maybeStartUpgrade(id, { reason: 'manuell', force: true }).catch(() => {});
     }
+  }
+  // Seit dem STUN-Ausstieg gibt es nur noch diese beiden Stufen - einen
+  // Wechsel zwischen zwei Direkt-Stufen (frueher 1 <-> 2, mit ICE-Neustart
+  // ohne STUN) gibt es nicht mehr.
+}
+
+// ── Spaet eintreffende Router-Freigaben (Luecke L3) ─────────────────────────
+// Eigene Seite: WebRTCManager meldet eine Freigabe, die erst nach Angebot/
+// Antwort kam - an die Gegenseite nachreichen (ueber die aktive Verbindung:
+// vor der Uebernahme Tor, danach die Direktverbindung selbst).
+async function sendLateCandidates(contactId, negotiationId, cands) {
+  if (!validId(negotiationId) || !Array.isArray(cands) || await torOnly()) return;
+  let sent = 0;
+  for (const cand of cands.slice(0, MAX_LATE_CANDIDATES)) {
+    if (!isValidMappedCandidate(cand)) continue;
+    if (sendSignal(contactId, { subtype: 'direct_cand', id: negotiationId, cand })) sent++;
+  }
+  if (sent) console.log('[Direkt] Spaete Router-Freigabe nachgereicht (' + sent + ')');
+}
+
+// Gegenseite: nur fuer die laufende Aushandlung mit derselben id (Versuch
+// oder ICE-Neustart der Direktverbindung), nur gepruefte Router-Kandidaten
+// (srflx, oeffentliche IPv4), nie in Stufe 3. Die Obergrenze je Aushandlung
+// und das Warten auf die passende Beschreibung uebernimmt WebRTCManager.
+async function onLateCandidate(chatId, msg) {
+  if (!validId(msg.id) || !isValidMappedCandidate(msg.cand)) return;
+  if (await torOnly()) return;
+  const att = attempts.get(chatId);
+  if (att && !att.done && att.id === msg.id) {
+    await att.rtc.addLateRemoteCandidate?.(msg.id, msg.cand);
     return;
   }
-  // Stufe 1 <-> 2: neue Verbindungen nutzen die neue Konfiguration ohnehin.
-  // Bestehende Direktverbindungen bekommen sie ebenfalls - und beim Wechsel
-  // auf "Privat" einen ICE-Neustart, damit sie den STUN-Server nicht weiter
-  // (libwebrtc schickt ihm regelmaessig Lebenszeichen) ansprechen. Klappt der
-  // Neustart ohne STUN nicht, uebernimmt Tor (wie nach einem Netzwechsel).
-  for (const [id, rtc] of [...RTCStore.connections.entries()]) {
-    if (!rtc || rtc.transport !== 'direct' || rtc._closed || !rtc.keyExchangeDone) continue;
-    if (typeof rtc.applyConnectionModeConfig !== 'function') continue;
-    const changed = await rtc.applyConnectionModeConfig().catch(() => false);
-    if (changed && mode === MODE_PRIVATE && prev === MODE_FAST && !rtc._closed) {
-      console.log('[Direkt] Verbindungsweg "Privat": Direktverbindung zieht per ICE-Neustart auf Kandidaten ohne STUN um');
-      restartFlow(id, rtc).catch(() => {});
-    }
+  const cur = RTCStore.connections.get(chatId);
+  if (cur && cur.transport === 'direct' && !cur._closed && typeof cur.addLateRemoteCandidate === 'function') {
+    await cur.addLateRemoteCandidate(msg.id, msg.cand);
+    return;
   }
+  // Angebot noch nicht verarbeitet (Signale laufen nebeneinander): kurz merken.
+  let e = earlyCands.get(chatId);
+  if (!e || e.id !== msg.id) {
+    if (e) clearTimeout(e.timer);
+    e = { id: msg.id, list: [], timer: null };
+    e.timer = setTimeout(() => { if (earlyCands.get(chatId) === e) earlyCands.delete(chatId); }, EARLY_CAND_KEEP_MS);
+    e.timer?.unref?.();
+    earlyCands.set(chatId, e);
+  }
+  if (e.list.length < MAX_LATE_CANDIDATES) e.list.push(msg.cand);
+}
+
+function applyEarlyCandidates(chatId, id, rtc) {
+  const e = earlyCands.get(chatId);
+  if (!e) return;
+  earlyCands.delete(chatId);
+  clearTimeout(e.timer);
+  if (e.id !== id || typeof rtc?.addLateRemoteCandidate !== 'function') return;
+  for (const cand of e.list) rtc.addLateRemoteCandidate(id, cand).catch(() => {});
 }
 onConnectionModeChange((mode, prev) => applyConnectionMode(mode, prev));
 
@@ -616,6 +703,11 @@ RTCStore.onWipe((chatId) => {
     clearTimeout(t);
     retryTimers.delete(id);
   }
+  for (const [id, e] of [...earlyCands.entries()]) {
+    if (chatId && id !== chatId) continue;
+    clearTimeout(e.timer);
+    earlyCands.delete(id);
+  }
   if (chatId) backoff.delete(chatId); else backoff.clear();
 });
 
@@ -633,6 +725,8 @@ export function _resetDirectUpgradeForTests() {
   restarts.clear();
   for (const t of retryTimers.values()) clearTimeout(t);
   retryTimers.clear();
+  for (const e of earlyCands.values()) clearTimeout(e.timer);
+  earlyCands.clear();
 }
 export function _getAttemptForTests(contactId) { return attempts.get(contactId) || null; }
 export function _getBackoffForTests(contactId) { return backoff.get(contactId) || null; }

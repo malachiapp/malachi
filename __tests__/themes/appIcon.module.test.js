@@ -6,7 +6,7 @@ const React = require('react');
 const renderer = require('react-test-renderer');
 const { Text, NativeModules, Switch } = require('react-native');
 
-const mockConfig = { STUN_HOST: 'stun.invalid', STUN_URL: 'stun:stun.invalid:3478', LICENSE_PUBLIC_KEY: null, SHOP_ONION: null, SHOP_PORT: 80, PRO_PRICE_EUR: '2,99' };
+const mockConfig = { LICENSE_PUBLIC_KEY: null, SHOP_ONION: null, SHOP_PORT: 80, PRO_PRICE_EUR: '2,99' };
 jest.mock('../../AppConfig', () => mockConfig);
 
 const EncryptedStorage = require('react-native-encrypted-storage').default;

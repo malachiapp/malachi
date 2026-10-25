@@ -1,3 +1,16 @@
+const path = require('path');
+
+// Malachi-Open-Source/ ist der oeffentliche Export (eigenes Git-Repo ohne
+// node_modules, per .gitignore ausgeschlossen) - ohne Ausschluss laeuft jede
+// Suite doppelt und die Kopie scheitert an fehlenden Modulen (z.B.
+// @noble/post-quantum). <rootDir> taugt dafuer nicht: Jest 29 setzt den Pfad
+// unescaped in die Regex ein, in Worktrees unter .claude\worktrees\ wird "\."
+// dann als escapter Punkt gelesen und das Muster greift nie. Deshalb der Name
+// des Repo-Ordners davor statt eines nackten [\/]Malachi-Open-Source[\/] -
+// sonst wuerde der Export, dessen Ordner selbst so heisst und der diese Datei
+// mitbekommt, alle eigenen Tests ausblenden.
+const OSS_EXPORT = '[\\/]' + path.basename(__dirname).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\/]Malachi-Open-Source[\\/]';
+
 module.exports = {
   preset: '@react-native/jest-preset',
   // Eigene setupFiles ERSETZEN die des Presets, statt sie zu ergaenzen - der
@@ -29,10 +42,11 @@ module.exports = {
   // .claude/worktrees/ enthaelt Kopien des Repos aus Agent-Sitzungen (teils
   // mit veralteten Abhaengigkeiten) - ohne Ausschluss laeuft jede Suite
   // mehrfach und die Kopien schlagen mit fremden Fehlern fehl.
+  // Malachi-Open-Source/: siehe OSS_EXPORT oben.
   // Pfadtrenner unter Windows: \ statt /, deshalb ohne <rootDir> und mit [\/].
   // shop/ hat eigene Tests mit node:test (cd shop && npm test) - nicht unter
   // Jest. __tests__/license/license.kaufSimulation.test.js startet
   // shop/test/simulation.js als eigenen Prozess.
-  testPathIgnorePatterns: ['/node_modules/', '[\\/]__tests__[\\/]security[\\/]helpers[\\/]', '<rootDir>/.claude/', '[\\/]shop[\\/]test[\\/]'],
-  modulePathIgnorePatterns: ['<rootDir>/.claude/'],
+  testPathIgnorePatterns: ['/node_modules/', '[\\/]__tests__[\\/]security[\\/]helpers[\\/]', '<rootDir>/.claude/', OSS_EXPORT, '[\\/]shop[\\/]test[\\/]'],
+  modulePathIgnorePatterns: ['<rootDir>/.claude/', OSS_EXPORT],
 };

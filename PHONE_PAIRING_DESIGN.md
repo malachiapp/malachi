@@ -266,3 +266,17 @@ und Tunnel.
   Speicher, ADD_ONION mit eigenem Schlüssel, Erreichbarkeit/Dauer bis zur
   Veröffentlichung, DEL_ONION lässt die laufende Verbindung bestehen,
   Verhalten nach Tor-Neustart während der Suche).
+
+## Kennung statt Telefonnummer (2026-10-25)
+
+Statt zweier Nummern koennen beide zwei frei gewaehlte Kennungen eingeben
+(Umschalter im Panel; beide muessen dieselbe Art waehlen). Vereinheitlichung:
+NFKC, Leerraum zusammengefasst, Kleinschreibung; 8-64 Zeichen; Steuer-,
+Bidi- und Nullbreiten-Zeichen werden abgelehnt (nicht entfernt). In die
+Ableitung geht `id:<kennung>` statt der E.164-Nummer - sonst unveraendert
+(`malachi-phone-rendezvous-v1`, gleiches Argon2id, gleicher Handshake). Nummern
+beginnen mit `+`, Kennungen mit `id:`; beide koennen nie denselben Treffpunkt
+ergeben, und die Telefon-Kopplung bleibt mit aelteren Versionen identisch.
+Gegen einen Mann in der Mitte schuetzt wie bisher der Code-Vergleich; wer beide
+Kennungen erraet, kann nur sehen, DASS gekoppelt wird, oder stoeren.
+Tests: `__tests__/security/phonePairing.identifier.test.js`.

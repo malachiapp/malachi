@@ -10,7 +10,7 @@ const VEKTOR = require('../../website/werkzeuge/test/update-testvektor.json');
 
 const ONION = 'p75bcu4mna6lik35occlsoeoyke46zyikfuq2ugu3wdvu44e5c4wanyd.onion';
 const mockConfig = {
-  STUN_POOL: [], STUN_PER_CONNECTION: 2, LICENSE_PUBLIC_KEY: null, SHOP_ONION: null, SHOP_PORT: 80, PRO_PRICE_EUR: '2,99',
+  LICENSE_PUBLIC_KEY: null, SHOP_ONION: null, SHOP_PORT: 80, PRO_PRICE_EUR: '2,99',
   UPDATE_PUBLIC_KEYS: [], UPDATE_ONION: ONION, UPDATE_PATH: '/updates/',
 };
 jest.mock('../../AppConfig', () => mockConfig);

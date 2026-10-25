@@ -10,15 +10,17 @@
 import React from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, Image, ScrollView, Alert, Modal,
-  StyleSheet, I18nManager,
+  StyleSheet, I18nManager, Switch,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
 import {
-  GROUP_MAX_MEMBERS, memberIdOfContact, resolveGroupMembers, unreachableMembers,
+  maxMembersFor, memberIdOfContact, resolveGroupMembers, unreachableMembers,
   updateGroupInfo, addGroupMembers, removeGroupMember, leaveGroup, deleteGroupLocally,
-  setGroupAvatarLocal,
+  setGroupAvatarLocal, introsAvailable, introStatus, requestIntro, withdrawIntro, declineIntro,
+  setGroupIntros,
 } from './GroupMessaging';
 import { t, formatTime, formatDate } from './i18n';
+import { previewText } from './PinVault';
 
 export const DEFAULT_PALETTE = {
   bg: '#04182F', surface: '#0D2A4A', surfaceAlt: '#0A2340', border: '#1B3A5C',
@@ -48,7 +50,7 @@ export function GroupAvatar({ group, size = 44, accent = DEFAULT_PALETTE.green, 
   return (
     <View style={{ width:size, height:size, borderRadius:size/2, backgroundColor:bg,
       alignItems:'center', justifyContent:'center' }}>
-      <Icon name="users" size={size*0.5} color={fg} />
+      <Icon name={group?.mode === 'channel' ? 'radio' : 'users'} size={size*0.5} color={fg} />
     </View>
   );
 }
@@ -118,7 +120,7 @@ export function GroupsScreen({ groups, onBack, onCreate, onOpenGroup, palette = 
         renderItem={({ item }) => {
           const count = (item.members?.length || ((item.memberContactIds?.length || 0) + 1));
           const sub = item.removed ? t('groups.notMember')
-            : item.last ? item.last
+            : item.last ? (previewText(item.last) || t('groups.memberCount', { count }))
             : t('groups.memberCount', { count });
           return (
             <TouchableOpacity style={gs.row} onPress={() => onOpenGroup(item)} activeOpacity={0.7}>
@@ -168,9 +170,31 @@ function PairNewRow({ onPress, palette, accent }) {
   );
 }
 
+// Auswahl Gruppe/Kanal (Nutzerwunsch 2026-10-25).
+function ModeSwitch({ mode, onChange, palette, accent }) {
+  return (
+    <View accessibilityRole="tablist" style={{ flexDirection:'row', backgroundColor:palette.surfaceAlt, borderRadius:12, padding:3 }}>
+      {[['group', 'users', t('groups.mode.group')], ['channel', 'radio', t('groups.mode.channel')]].map(([m, icon, label]) => {
+        const on = mode === m;
+        return (
+          <TouchableOpacity key={m} testID={'group-mode-' + m} accessibilityRole="tab" accessibilityState={{ selected: on }}
+            onPress={() => onChange(m)}
+            style={{ flex:1, flexDirection:'row', gap:6, alignItems:'center', justifyContent:'center', borderRadius:10, paddingVertical:9,
+              backgroundColor: on ? palette.surface : 'transparent', borderWidth: on ? 0.5 : 0, borderColor: palette.border }}>
+            <Icon name={icon} size={14} color={on ? accent : palette.textMuted} />
+            <Text style={{ fontSize:13, fontWeight: on ? '600' : '500', color: on ? palette.text : palette.textMuted }}>{label}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 export function GroupCreateScreen({ contacts, onBack, onCreate, onPairNew = null, initialSelected = null, palette = DEFAULT_PALETTE, accent = DEFAULT_PALETTE.green }) {
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
+  const [mode, setMode] = React.useState('group');
+  const [intros, setIntros] = React.useState(true);
   const [selected, setSelected] = React.useState(() => new Set(Array.isArray(initialSelected) ? initialSelected : []));
   // Frisch gekoppelter Kontakt (ueber "Neuen Kontakt koppeln") vorauswaehlen.
   React.useEffect(() => {
@@ -178,7 +202,12 @@ export function GroupCreateScreen({ contacts, onBack, onCreate, onPairNew = null
     setSelected(s => { const next = new Set(s); for (const id of initialSelected) next.add(id); return next; });
   }, [initialSelected && initialSelected.join(',')]);
   const [busy, setBusy] = React.useState(false);
-  const maxOthers = GROUP_MAX_MEMBERS - 1;
+  const maxTotal = maxMembersFor(mode);
+  const maxOthers = maxTotal - 1;
+  // Wechsel Kanal -> Gruppe: Auswahl ueber 7 auf die ersten 7 kuerzen.
+  React.useEffect(() => {
+    setSelected(s => (s.size <= maxOthers ? s : new Set(Array.from(s).slice(0, maxOthers))));
+  }, [maxOthers]);
   const usable = (contacts || []).filter(c => !c.pendingDelete && !c.wiped);
 
   const toggleMember = (id) => {
@@ -194,7 +223,7 @@ export function GroupCreateScreen({ contacts, onBack, onCreate, onPairNew = null
   const submit = async () => {
     if (!canCreate) return;
     setBusy(true);
-    const res = await onCreate({ name: name.trim(), description: description.trim(), memberContactIds: Array.from(selected) });
+    const res = await onCreate({ name: name.trim(), description: description.trim(), memberContactIds: Array.from(selected), mode, intros: mode === 'group' && intros });
     setBusy(false);
     if (res?.error === 'missing_member_id') {
       Alert.alert(t('common.notReady'), t('groups.missingIds', { names: res.missing.join(', ') }));
@@ -205,14 +234,15 @@ export function GroupCreateScreen({ contacts, onBack, onCreate, onPairNew = null
 
   return (
     <View style={{ flex:1, backgroundColor:palette.bg }}>
-      <Header title={t('groups.new')} onBack={onBack} palette={palette}
+      <Header title={mode === 'channel' ? t('channel.new') : t('groups.new')} onBack={onBack} palette={palette}
         right={(
           <TouchableOpacity disabled={!canCreate} onPress={submit} style={{ padding:4 }}>
             <Icon name="check" size={22} color={canCreate ? accent : palette.textMuted} />
           </TouchableOpacity>
         )} />
       <ScrollView contentContainerStyle={{ padding:16, gap:12 }}>
-        <TextInput value={name} onChangeText={setName} placeholder={t('groups.namePlaceholder')}
+        <ModeSwitch mode={mode} onChange={setMode} palette={palette} accent={accent} />
+        <TextInput value={name} onChangeText={setName} placeholder={mode === 'channel' ? t('channel.namePlaceholder') : t('groups.namePlaceholder')}
           placeholderTextColor={palette.textMuted} maxLength={80}
           style={{ backgroundColor:palette.surface, borderRadius:10, borderWidth:0.5, borderColor:palette.border,
             paddingHorizontal:14, paddingVertical:10, fontSize:15, color:palette.text }} />
@@ -221,10 +251,23 @@ export function GroupCreateScreen({ contacts, onBack, onCreate, onPairNew = null
           style={{ backgroundColor:palette.surface, borderRadius:10, borderWidth:0.5, borderColor:palette.border,
             paddingHorizontal:14, paddingVertical:10, fontSize:15, color:palette.text, minHeight:60 }} />
         <Text style={{ fontSize:12, color:palette.textMuted, lineHeight:17 }}>
-          {t('groups.createInfo')}
+          {mode === 'channel' ? t('channel.createInfo', { max: maxTotal - 1 }) : t('groups.createInfo')}
         </Text>
+        {mode === 'group' && (
+          <View style={{ flexDirection:'row', alignItems:'center', gap:12, backgroundColor:palette.surface, borderRadius:10,
+            borderWidth:0.5, borderColor:palette.border, padding:12 }}>
+            <View style={{ flex:1 }}>
+              <Text style={{ fontSize:14, color:palette.text }}>{t('groups.intro.setting')}</Text>
+              <Text style={{ fontSize:11, color:palette.textMuted, marginTop:2, lineHeight:15 }}>{t('groups.intro.settingDesc')}</Text>
+            </View>
+            <Switch testID="group-intros" value={intros} onValueChange={setIntros}
+              trackColor={{ false:palette.border, true:accent + '88' }} thumbColor={intros ? accent : palette.textMuted} />
+          </View>
+        )}
         <Text style={{ fontSize:13, fontWeight:'500', color:palette.textMuted, marginTop:8 }}>
-          {t('groups.selectMembers', { n: selected.size + 1, max: GROUP_MAX_MEMBERS })}
+          {mode === 'channel'
+            ? t('channel.selectSubscribers', { n: selected.size, max: maxTotal - 1 })
+            : t('groups.selectMembers', { n: selected.size + 1, max: maxTotal })}
         </Text>
         {usable.length === 0 ? (
           <Text style={{ fontSize:13, color:palette.textMuted }}>
@@ -267,9 +310,26 @@ export function GroupDetailScreen({ group, contacts, onBack, onLeft, pickImage, 
   const members = resolveGroupMembers(group, contacts);
   const unreachable = unreachableMembers(group, contacts);
   const isAdmin = !!group.amAdmin && !group.removed;
+  const isChannel = group.mode === 'channel';
+  const maxTotal = maxMembersFor(group.mode);
   const memberMids = new Set((group.members || []).map(m => m.mid));
   const addable = (contacts || []).filter(c => !c.pendingDelete && !c.wiped && !memberMids.has(memberIdOfContact(c)));
-  const free = GROUP_MAX_MEMBERS - members.length;
+  const free = maxTotal - members.length;
+  // Vorstellen ueber die Gruppe (GroupMessaging: group_intro).
+  const canIntro = introsAvailable(group) && !isAdmin;
+  const adminName = members.find(m => m.isAdmin && !m.isSelf)?.name || t('groups.admin');
+  const introAction = (fn, peerMid) => {
+    fn(group.groupId, peerMid).then((r) => {
+      if (r?.error === 'no_admin') Alert.alert(t('common.group'), t('groups.intro.noAdmin', { admin: adminName }));
+      else if (r?.error) Alert.alert(t('common.group'), t('groups.intro.failed'));
+    }).catch(() => {});
+  };
+  const confirmDecline = (m) => {
+    Alert.alert(t('groups.intro.declineTitle'), t('groups.intro.declineBody', { name: m.name }), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('groups.intro.decline'), style: 'destructive', onPress: () => introAction(declineIntro, m.mid) },
+    ]);
+  };
 
   const removeMember = (m) => {
     Alert.alert(t('groups.removeMember.title'), t('groups.removeMember.body', { name: m.name }), [
@@ -353,21 +413,45 @@ export function GroupDetailScreen({ group, contacts, onBack, onLeft, pickImage, 
           </View>
         )}
 
-        {unreachable.length > 0 && !group.removed && (
+        {isChannel && !group.removed && (
+          <View style={{ backgroundColor:palette.surface, borderRadius:10, padding:12, borderWidth:0.5, borderColor:palette.border, flexDirection:'row', gap:10 }}>
+            <Icon name="radio" size={16} color={accent} style={{ marginTop:1 }} />
+            <Text style={{ flex:1, fontSize:13, color:palette.text, lineHeight:19 }}>
+              {isAdmin ? t('channel.adminInfo') : t('channel.subscriberInfo', { admin: adminName, count: group.memberCount || members.length })}
+            </Text>
+          </View>
+        )}
+
+        {unreachable.length > 0 && !group.removed && !isChannel && (
           <View style={{ backgroundColor:palette.surface, borderRadius:10, padding:12, borderWidth:0.5, borderColor:palette.border }}>
             <Text style={{ fontSize:13, color:palette.text, lineHeight:19 }}>
               {t('groups.notConnected', { names: unreachable.map(m => m.name).join(', ') })}
             </Text>
             <Text style={{ fontSize:12, color:palette.textMuted, marginTop:4, lineHeight:17 }}>
-              {t('groups.noRelay')}
+              {canIntro ? t('groups.intro.hint', { admin: adminName }) : t('groups.noRelay')}
             </Text>
+          </View>
+        )}
+
+        {isAdmin && !isChannel && (
+          <View style={{ flexDirection:'row', alignItems:'center', gap:12, backgroundColor:palette.surface, borderRadius:10,
+            borderWidth:0.5, borderColor:palette.border, padding:12 }}>
+            <View style={{ flex:1 }}>
+              <Text style={{ fontSize:14, color:palette.text }}>{t('groups.intro.setting')}</Text>
+              <Text style={{ fontSize:11, color:palette.textMuted, marginTop:2, lineHeight:15 }}>{t('groups.intro.settingDescAdmin')}</Text>
+            </View>
+            <Switch testID="group-detail-intros" value={!!group.intros}
+              onValueChange={(v) => { setGroupIntros(group.groupId, v).catch(() => {}); }}
+              trackColor={{ false:palette.border, true:accent + '88' }} thumbColor={group.intros ? accent : palette.textMuted} />
           </View>
         )}
 
         <View>
           <View style={{ flexDirection:'row', alignItems:'center', marginBottom:8 }}>
             <Text style={{ fontSize:13, fontWeight:'500', color:palette.textMuted, flex:1 }}>
-              {t('groups.members', { n: members.length, max: GROUP_MAX_MEMBERS })}
+              {isChannel
+                ? (isAdmin ? t('channel.subscribers', { n: members.length - 1, max: maxTotal - 1 }) : t('channel.admins'))
+                : t('groups.members', { n: members.length, max: maxTotal })}
             </Text>
             {isAdmin && free > 0 && (
               <TouchableOpacity onPress={() => setAddOpen(true)} style={{ flexDirection:'row', alignItems:'center', gap:4, padding:4 }}>
@@ -390,9 +474,38 @@ export function GroupDetailScreen({ group, contacts, onBack, onLeft, pickImage, 
                 )}
                 <View style={{ flex:1, marginLeft:10 }}>
                   <Text style={{ fontSize:15, color:palette.text }}>{m.name}{m.isAdmin ? ' · ' + t('groups.admin') : ''}</Text>
-                  {!m.isSelf && !m.contactId && (
-                    <Text style={{ fontSize:11, color:WARN }}>{t('groups.memberNotConnected')}</Text>
-                  )}
+                  {!m.isSelf && !m.contactId && (() => {
+                    const st = canIntro ? introStatus(group, m.mid) : 'none';
+                    const line = {
+                      requested: t('groups.intro.st.requested'),
+                      incoming: t('groups.intro.st.incoming'),
+                      connecting: t('groups.intro.st.connecting', { admin: adminName }),
+                      failed: t('groups.intro.st.failed'),
+                    }[st] || t('groups.memberNotConnected');
+                    return <Text testID={'intro-status-' + m.mid} style={{ fontSize:11, color: st === 'incoming' ? accent : WARN, lineHeight:15 }}>{line}</Text>;
+                  })()}
+                  {!m.isSelf && !m.contactId && canIntro && (() => {
+                    const st = introStatus(group, m.mid);
+                    const btn = (label, onPress, kind, id) => (
+                      <TouchableOpacity key={id} testID={id} onPress={onPress} accessibilityRole="button"
+                        style={{ paddingHorizontal:10, paddingVertical:5, borderRadius:12, marginRight:8, marginTop:6,
+                          backgroundColor: kind === 'primary' ? accent : 'transparent',
+                          borderWidth: kind === 'primary' ? 0 : 0.5, borderColor: kind === 'danger' ? DANGER : palette.border }}>
+                        <Text style={{ fontSize:12, fontWeight:'500', color: kind === 'primary' ? (palette.onAccent || '#FFFFFF') : kind === 'danger' ? DANGER : palette.text }}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                    const row = st === 'incoming' ? [
+                      btn(t('groups.intro.accept'), () => introAction(requestIntro, m.mid), 'primary', 'intro-accept-' + m.mid),
+                      btn(t('groups.intro.decline'), () => confirmDecline(m), 'danger', 'intro-decline-' + m.mid),
+                    ] : st === 'requested' || st === 'connecting' ? [
+                      btn(t('groups.intro.withdraw'), () => introAction(withdrawIntro, m.mid), 'plain', 'intro-withdraw-' + m.mid),
+                    ] : st === 'failed' ? [
+                      btn(t('groups.intro.retry'), () => introAction(requestIntro, m.mid), 'primary', 'intro-retry-' + m.mid),
+                    ] : [
+                      btn(t('groups.intro.connect'), () => introAction(requestIntro, m.mid), 'primary', 'intro-request-' + m.mid),
+                    ];
+                    return <View style={{ flexDirection:'row', flexWrap:'wrap' }}>{row}</View>;
+                  })()}
                 </View>
                 {isAdmin && !m.isSelf && (
                   <TouchableOpacity onPress={() => removeMember(m)} style={{ padding:6 }}>
@@ -405,7 +518,7 @@ export function GroupDetailScreen({ group, contacts, onBack, onLeft, pickImage, 
         </View>
 
         <Text style={{ fontSize:11, color:palette.textMuted, lineHeight:16 }}>
-          {t('groups.adminInfo')}
+          {isChannel ? t('channel.rulesInfo') : t('groups.adminInfo')}
         </Text>
 
         {group.removed ? (

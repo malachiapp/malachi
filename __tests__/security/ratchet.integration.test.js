@@ -486,6 +486,43 @@ describe('Post-Quanten-Schritt ueber echte Verbindungswechsel', () => {
   });
 });
 
+describe('Krypto-Review V4: KEM-Vorrat ueber eine lange Funkstille', () => {
+  test('20 Tage keine Verbindung, danach: die bereits eingemischte Kette kommt an, beide Richtungen laufen weiter', async () => {
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    try {
+      const first = await activate(alice, bob);
+      first.rtcA.close(); first.rtcB.close();
+      // Zweite Verbindung: Alice entkapselt ihr Geheimnis (own), Bob haelt es.
+      const second = await connect(alice, bob);
+      const kid = require('../../DoubleRatchet').kemId(second.session);
+      // Alice sendet, Bobs Bestaetigung bringt einen neuen Schluessel -> Alice
+      // macht einen DH-Schritt und mischt kid ein, sendet danach aber nichts.
+      await sendText(alice, 'vor der Pause', 'p1');
+      await waitFor(async () => (await queueOf(alice)).length === 0, 5000, 'bestaetigt');
+      await waitFor(async () => (await record(alice)).s.sendKids?.includes(kid), 3000, 'kid eingemischt');
+      expect((await record(bob)).held.some((e) => e.kid === kid)).toBe(true);
+      second.rtcA.close(); second.rtcB.close();
+
+      offset += 20 * 24 * 60 * 60 * 1000;
+      const aliceSeen = [];
+      const bobSeen = [];
+      alice.RTCStore.setMessageListener(B_ID, (m) => aliceSeen.push(m));
+      bob.RTCStore.setMessageListener(A_ID, (m) => bobSeen.push(m));
+      await connect(alice, bob);
+      await sendText(alice, 'nach 20 Tagen', 'p2');
+      await waitFor(() => bobSeen.some((m) => m.text === 'nach 20 Tagen'), 5000, 'Alice -> Bob');
+      await sendText(bob, 'auch zurueck', 'p3');
+      await waitFor(() => aliceSeen.some((m) => m.text === 'auch zurueck'), 5000, 'Bob -> Alice');
+      // verbraucht und aufgeraeumt
+      expect((await record(bob)).held.some((e) => e.kid === kid)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('Loeschen', () => {
   test('Kontakt loeschen entfernt Ratchet-Zustand, KEM-Vorrat und uebersprungene Schluessel dauerhaft', async () => {
     await activate(alice, bob);

@@ -1,0 +1,30 @@
+Malachi 1.2 – mehr Schutz für deine Daten, keine STUN-Dienste mehr, neues Tor.
+
+Wichtig beim Update:
+- Nach dem Update einmal mit deiner PIN entsperren (nicht per Fingerabdruck). Dabei wird der neue PIN-Tresor eingerichtet; danach geht auch der Fingerabdruck wieder.
+- Alle Chats, Kontakte, Gruppen und Medien bleiben erhalten.
+
+Datenschutz und Sicherheit:
+- PIN-Tresor: Chatverläufe, Vorschautexte der Chatliste und ungelesene Nachrichten sind zusätzlich mit einem Schlüssel aus deiner App-PIN verschlüsselt. Solange Malachi gesperrt ist, lassen sie sich ohne PIN oder Fingerabdruck nicht lesen, auch wenn jemand das entsperrte Handy hat. Die PIN selbst wird nicht mehr gespeichert. 4 oder 6 Stellen wählst du selbst; eine längere PIN ist schwerer durchzuprobieren.
+- Sprachnachrichten werden nur im Arbeitsspeicher aufgenommen und abgespielt, es entsteht keine Audiodatei mehr. Ab Android 11 kann keine andere App während der Aufnahme mithören.
+- Malachi fragt keine STUN-Dienste mehr. Direkte Verbindungen entstehen nur noch über IPv6, im selben WLAN oder über die Portfreigabe deines Routers, sonst bleibt die Verbindung über Tor. Nur die Tor-Brücke Snowflake nutzt eigene STUN-Server, wenn Tor in deinem Netz gesperrt ist.
+- Statt drei gibt es zwei Verbindungswege: „Direkt, wenn möglich“ und „Maximal anonym (nur Tor)“. Wer „Schnell“ eingestellt hatte, wird automatisch umgestellt und einmal informiert.
+- Ortsnamen beim Standort-Teilen entfallen; die App fragt dafür keinen Kartendienst mehr.
+- Tor 0.4.9: Die bisherige Tor-Version 0.4.8 bekommt keine Sicherheitsupdates mehr und wird vom Tor-Netz auslaufen gelassen.
+- Ehrlichere Texte: Anrufe sind Ende-zu-Ende verschlüsselt, aber noch nicht gegen künftige Quantencomputer geschützt. Beim Teilen eines Einladungslinks weist die App auf den Vergleich des Sicherheitscodes hin.
+
+Neu:
+- Lautsprecher-Knopf im Anruf.
+- Sprachnachrichten mit echter Wellenform: Antippen springt an die Stelle, nach der Aufnahme gibt es eine Vorschau. Mit der Vollversion: animierte Pixel-Welle.
+- Siegel-Modus direkt vom Startbildschirm (kleiner Knopf über dem +).
+- Koppeln auch mit einer vereinbarten Kennung statt Telefonnummer (mindestens 8 Zeichen).
+- Gruppen: Mitglieder, die sich noch nicht kennen, können sich über die Gruppe verbinden, nur wenn beide zustimmen. Der Admin kann das abschalten.
+- Kanäle mit bis zu 250 Abonnenten: Nur Admins schreiben, Abonnenten sehen sich gegenseitig nicht.
+- Diagnose in den Einstellungen: zählt lokal, wie Verbindungen zustande kommen (ohne IP-Adressen oder Namen), zum Kopieren für Fehlermeldungen.
+
+Behoben:
+- Eigene Sprachnachrichten wurden nicht dauerhaft gespeichert. Mit 1.0 verschickte eigene Sprachnachrichten lassen sich nicht wiederherstellen; beim Empfänger sind sie vollständig.
+- Beim Öffnen eines Chats konnten ältere Sprachnachrichten und Bilder verloren gehen.
+- Das Profilbild verschwand manchmal, und dadurch blieben wartende Nachrichten liegen.
+
+Sicherheitsupdates gibt es, solange Malachi angeboten wird, mindestens bis zum 31.12.2031.

@@ -106,3 +106,14 @@ Jeder Befund wurde vor dem Fix am Code nachvollzogen.
   dauerhafte Onion-Adresse. Später: eigene, kurzlebige Adresse je Einladung.
 - **P10 – Tastatur:** React Native bietet kein „Inkognito“-Flag
   (IME_FLAG_NO_PERSONALIZED_LEARNING); im Secret Chat sind Vorschläge aus.
+
+## Nachtrag 25.10.2026 – STUN-Ausstieg (STUN_AUSSTIEG_PLAN.md)
+- **T7 erledigt:** Malachi fragt keinen STUN-Dienst mehr (kein Verbindungsweg
+  „Schnell“, Stufen nur noch „Direkt, wenn möglich“ und „Maximal anonym“).
+  Damit können keine STUN-Betreiber mehr Kontaktpaare zeitlich korrelieren.
+  Rest: die Tor-Bridge Snowflake fragt in gesperrten Netzen eigene STUN-Server
+  des Tor-Projekts (dokumentiert, `TorBridges.js`, Waechter-Test
+  `noStun.static.test.js`).
+- **P9/T1 endgültig:** die Ortsauflösung per Nominatim ist komplett entfernt –
+  kein Verbindungsweg und keine Stufe fragt mehr OpenStreetMap
+  (`location.noNominatim.test.js`).

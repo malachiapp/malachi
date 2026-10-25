@@ -1,20 +1,21 @@
-// Verbindungsweg (ConnectionMode.js) - drei Stufen:
-//   1 "Schnell (mit STUN)", 2 "Privat (ohne STUN)",
+// Verbindungsweg (ConnectionMode.js) - seit dem STUN-Ausstieg zwei Stufen:
+//   2 "Direkt, wenn moeglich" (Standard, ohne STUN),
 //   3 "Maximal anonym (nur Tor)" (Vollversion).
+// (Die fruehere Stufe 1 "Schnell (mit STUN)" gibt es nicht mehr - ihre
+// Umstellung prueft connectionMode.migration.test.js.)
 // Geprueft wird der echte Produktionscode (ConnectionMode, WebRTCManager-
 // Konfiguration, DirectUpgrade, RTCStore, TorTransport-Reserve,
 // LicenseManager-Regel); nur die WebRTC-Direktverbindung selbst ist durch eine
 // Attrappe ersetzt (kein natives WebRTC unter Jest):
-//   - ICE-Server je Stufe (nur Stufe 1 fragt STUN, Stufe 3 baut gar keine
-//     PeerConnection), ausfallsicher bei unlesbarer Einstellung,
+//   - ICE-Server: keine (kein STUN, kein TURN), Stufe 3 baut gar keine
+//     PeerConnection, ausfallsicher bei unlesbarer Einstellung,
 //   - Pro-Regel: Stufe 3 neu waehlen nur mit Vollversion, eine aktive Stufe 3
 //     bleibt auch ohne Lizenz aktiv (wie die Duress-PIN),
 //   - Stufe 3 verhindert jedes Direkt-Upgrade (eigene Versuche, Angebote und
 //     Bitten der Gegenseite, ICE-Neustarts),
 //   - Stufenwechsel wirkt ohne Neustart: Direktverbindungen werden sofort auf
-//     Tor zurueckgestuft, laufende Versuche abgebrochen; zurueck auf Stufe 1/2
-//     wird sofort wieder direkt versucht; 1 -> 2 zieht bestehende
-//     Direktverbindungen per ICE-Neustart auf Kandidaten ohne STUN um.
+//     Tor zurueckgestuft, laufende Versuche abgebrochen; zurueck auf "Direkt,
+//     wenn moeglich" wird sofort wieder direkt versucht.
 const fs = require('fs');
 const path = require('path');
 const { installKyberModuleMock } = require('./helpers/nativeBridgeMock');
@@ -42,7 +43,6 @@ jest.mock('../../WebRTCManager', () => {
       this.createIceRestartOffer = jest.fn(async () => ({ type: 'offer', sdp: 'v=0 neustart' }));
       this.acceptIceRestartOffer = jest.fn(async () => ({ type: 'answer', sdp: 'v=0 neustart-antwort' }));
       this.acceptIceRestartAnswer = jest.fn(async () => true);
-      this.applyConnectionModeConfig = jest.fn(async () => true);
       this.close = jest.fn(() => { this._closed = true; this.dataChannel.readyState = 'closed'; });
       this._fireDisc = () => { if (!this._discFired) { this._discFired = true; this.onDisc?.(); } };
       (global.__fakeDirect = global.__fakeDirect || []).push(this);
@@ -58,14 +58,6 @@ const BG = require('../../BackgroundSync');
 const DU = require('../../DirectUpgrade');
 const CM = require('../../ConnectionMode');
 const LM = require('../../LicenseManager');
-const { STUN_POOL } = require('../../AppConfig');
-const POOL_URLS = STUN_POOL.map((s) => s.url);
-// Stufe 1: zwei verschiedene, oeffentliche STUN-Dienste aus dem Pool.
-const expectTwoPoolStuns = (servers) => {
-  expect(servers).toHaveLength(2);
-  for (const s of servers) expect(POOL_URLS).toContain(s.urls);
-  expect(servers[0].urls).not.toBe(servers[1].urls);
-};
 const { pcConfigForCalls, pcConfigForMode } = require('../../WebRTCManager');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -119,32 +111,36 @@ afterEach(() => {
 });
 
 describe('ICE-Server je Stufe', () => {
-  test('Stufe 1 fragt zwei oeffentliche STUN-Dienste (reihum), Stufe 2 keinen, Stufe 3 baut keine PeerConnection', () => {
-    const a = CM.iceServersForMode(CM.MODE_FAST);
-    const b = CM.iceServersForMode(CM.MODE_FAST);
-    expectTwoPoolStuns(a);
-    expectTwoPoolStuns(b);
-    expect(a).not.toEqual(b);                                    // im Wechsel
-    expect(CM.iceServersForMode(CM.MODE_PRIVATE)).toEqual([]);
-    expect(CM.iceServersForMode(CM.MODE_TOR_ONLY)).toEqual([]);
-    const cfg = pcConfigForMode(CM.MODE_FAST);
-    expect(cfg).toMatchObject({ iceTransportPolicy: 'all', tcpCandidatePolicy: 'enabled' });
-    expectTwoPoolStuns(cfg.iceServers);
-    expect(JSON.stringify(cfg.iceServers)).not.toMatch(/turn:/);
-    expect(pcConfigForMode(CM.MODE_PRIVATE)).toMatchObject({ iceServers: [], iceTransportPolicy: 'all' });
+  test('"Direkt, wenn moeglich": keine ICE-Server (kein STUN, kein TURN); Stufe 3 baut keine PeerConnection', () => {
+    expect(CM.CONNECTION_MODES).toEqual([CM.MODE_DIRECT, CM.MODE_TOR_ONLY]);
+    expect(CM.DEFAULT_CONNECTION_MODE).toBe(CM.MODE_DIRECT);
+    expect(CM.iceServersForMode).toBeUndefined();
+    const cfg = pcConfigForMode(CM.MODE_DIRECT);
+    expect(cfg).toEqual({ iceServers: [], iceTransportPolicy: 'all', tcpCandidatePolicy: 'enabled' });
+    // Auch ein (frueherer) Wert 1 oder Unsinn bekommt nie einen ICE-Server.
+    expect(pcConfigForMode(1).iceServers).toEqual([]);
+    expect(pcConfigForMode(undefined).iceServers).toEqual([]);
     expect(() => pcConfigForMode(CM.MODE_TOR_ONLY)).toThrow(/nur Tor/);
   });
 
-  test('ohne gespeicherte Einstellung gilt Stufe 1; die gespeicherte Stufe gilt sofort und nach einem Neustart', async () => {
-    expect(await CM.loadConnectionMode()).toBe(CM.MODE_FAST);
-    expectTwoPoolStuns((await pcConfigForCalls()).iceServers);
-    expect(await CM.setConnectionMode(CM.MODE_PRIVATE)).toEqual({ ok: true, mode: CM.MODE_PRIVATE });
+  test('ohne gespeicherte Einstellung gilt "Direkt, wenn moeglich"; die gespeicherte Stufe gilt sofort und nach einem Neustart', async () => {
+    expect(await CM.loadConnectionMode()).toBe(CM.MODE_DIRECT);
     expect((await pcConfigForCalls()).iceServers).toEqual([]);
-    expect(await EncryptedStorage.getItem(CM.CONNECTION_MODE_STORAGE_KEY)).toBe('2');
-    expect(await restartApp()).toBe(CM.MODE_PRIVATE);
-    expect((await pcConfigForCalls()).iceServers).toEqual([]);
+    // Nichts wird nur wegen des Standards gespeichert.
+    expect(await EncryptedStorage.getItem(CM.CONNECTION_MODE_STORAGE_KEY)).toBeNull();
     await CM.setConnectionMode(CM.MODE_TOR_ONLY, { pro: true });
     await expect(pcConfigForCalls()).rejects.toMatchObject({ name: 'TorOnlyModeError' });
+    expect(await restartApp()).toBe(CM.MODE_TOR_ONLY);
+    expect(await CM.setConnectionMode(CM.MODE_DIRECT)).toEqual({ ok: true, mode: CM.MODE_DIRECT });
+    expect(await EncryptedStorage.getItem(CM.CONNECTION_MODE_STORAGE_KEY)).toBe('2');
+    expect(await restartApp()).toBe(CM.MODE_DIRECT);
+    expect((await pcConfigForCalls()).iceServers).toEqual([]);
+  });
+
+  test('die fruehere Stufe 1 "Schnell (mit STUN)" ist nicht mehr waehlbar', async () => {
+    expect(CM.canSelectConnectionMode(1)).toBe(false);
+    expect(await CM.setConnectionMode(1)).toMatchObject({ ok: false, reason: 'ungueltig' });
+    expect(await EncryptedStorage.getItem(CM.CONNECTION_MODE_STORAGE_KEY)).toBeNull();
   });
 
   test('unlesbare Einstellung: ausfallsicher wie "nur Tor" - keine PeerConnection, kein Upgrade', async () => {
@@ -160,13 +156,14 @@ describe('ICE-Server je Stufe', () => {
       spy.mockRestore();
     }
     // Lesbar geworden: wieder normal.
-    expect(await CM.connectionModeForDecision()).toBe(CM.MODE_FAST);
+    expect(await CM.connectionModeForDecision()).toBe(CM.MODE_DIRECT);
   });
 
-  test('statisch: WebRTCManager nimmt STUN nur noch ueber den Verbindungsweg (kein fester STUN-Eintrag mehr)', () => {
+  test('statisch: WebRTCManager hat fest keine ICE-Server (kein STUN-Eintrag, keine STUN-Rotation)', () => {
     const src = readSrc('WebRTCManager.js');
-    expect(src).not.toMatch(/iceServers:\s*\[\{\s*urls:\s*STUN_URL/);
-    expect(src).toMatch(/iceServers: iceServersForMode\(mode\)/);
+    expect(src).toMatch(/iceServers: \[\],/);
+    expect(src).not.toMatch(/iceServersForMode|STUN_POOL|STUN_URL/);
+    expect(readSrc('ConnectionMode.js')).not.toMatch(/STUN_POOL|STUN_PER_CONNECTION|stunRotation/);
   });
 });
 
@@ -180,8 +177,8 @@ describe('Vollversion: Stufe 3 waehlen, aktive Stufe 3 bleibt', () => {
 
   test('ohne Vollversion: Stufe 3 wird abgelehnt, nichts gespeichert, nichts geschlossen', async () => {
     const r = await CM.setConnectionMode(CM.MODE_TOR_ONLY, { pro: false });
-    expect(r).toEqual({ ok: false, mode: CM.MODE_FAST, reason: 'pro' });
-    expect(CM.getConnectionMode()).toBe(CM.MODE_FAST);
+    expect(r).toEqual({ ok: false, mode: CM.MODE_DIRECT, reason: 'pro' });
+    expect(CM.getConnectionMode()).toBe(CM.MODE_DIRECT);
     expect(await EncryptedStorage.getItem(CM.CONNECTION_MODE_STORAGE_KEY)).toBeNull();
     expect(tor.close).not.toHaveBeenCalled();
   });
@@ -195,7 +192,7 @@ describe('Vollversion: Stufe 3 waehlen, aktive Stufe 3 bleibt', () => {
     expect(CM.canSelectConnectionMode(CM.MODE_TOR_ONLY, { pro: false, current: CM.MODE_TOR_ONLY })).toBe(true);
     expect(await DU.maybeStartUpgrade(CONTACT.id, { reason: 'tor-bereit' })).toBe('nur-tor');
     // Verlassen geht immer - danach ohne Lizenz kein Zurueck.
-    expect((await CM.setConnectionMode(CM.MODE_PRIVATE, { pro: false })).ok).toBe(true);
+    expect((await CM.setConnectionMode(CM.MODE_DIRECT, { pro: false })).ok).toBe(true);
     expect(await CM.setConnectionMode(CM.MODE_TOR_ONLY, { pro: false })).toMatchObject({ ok: false, reason: 'pro' });
   });
 
@@ -204,7 +201,6 @@ describe('Vollversion: Stufe 3 waehlen, aktive Stufe 3 bleibt', () => {
     expect(src).not.toMatch(/from '\.\/LicenseManager'|require\('\.\/LicenseManager'\)|isPro(Verified)?\(/);
     expect(src.match(/^import .*$/gm)).toEqual([
       "import EncryptedStorage from 'react-native-encrypted-storage';",
-      "import { STUN_POOL, STUN_PER_CONNECTION } from './AppConfig';",
     ]);
   });
 });
@@ -238,7 +234,7 @@ describe('Stufe 3 verhindert jedes Direkt-Upgrade', () => {
   });
 
   test('Gegenseite in Stufe 3: unser Versuch endet mit langer Wartezeit (10 min)', async () => {
-    await CM.setConnectionMode(CM.MODE_FAST);
+    await CM.setConnectionMode(CM.MODE_DIRECT);
     await DU.maybeStartUpgrade(CONTACT.id, { reason: 'tor-bereit' });
     await tick(20);
     const { id } = tor.sent.find((m) => m.subtype === 'direct_offer');
@@ -300,9 +296,9 @@ describe('Stufenwechsel wirkt ohne Neustart', () => {
     expect(RTCStore.connections.get(CONTACT.id)).toBe(tor);
   });
 
-  test('zurueck auf Stufe 1: sofort neuer Versuch (Wartezeiten aufgehoben); als Nicht-Anbieter mit Bitte an die Gegenseite', async () => {
+  test('zurueck auf "Direkt, wenn moeglich": sofort neuer Versuch (Wartezeiten aufgehoben); als Nicht-Anbieter mit Bitte an die Gegenseite', async () => {
     await CM.setConnectionMode(CM.MODE_TOR_ONLY, { pro: true });
-    await CM.setConnectionMode(CM.MODE_FAST);
+    await CM.setConnectionMode(CM.MODE_DIRECT);
     await tick(30);
     expect(tor.sent.some((m) => m.subtype === 'direct_offer')).toBe(true);
 
@@ -310,27 +306,23 @@ describe('Stufenwechsel wirkt ohne Neustart', () => {
     tor.sent.length = 0;
     Tor._setTorStateForTests({ status: 'ON', onion: ONION_C });   // jetzt bietet die Gegenseite an
     await CM.setConnectionMode(CM.MODE_TOR_ONLY, { pro: true });
-    await CM.setConnectionMode(CM.MODE_PRIVATE);
+    await CM.setConnectionMode(CM.MODE_DIRECT);
     await tick(30);
     expect(tor.sent.find((m) => m.subtype === 'direct_request')).toBeTruthy();
   });
 
-  test('Stufe 1 -> 2: bestehende Direktverbindung bekommt die neue Konfiguration und zieht per ICE-Neustart um (ohne STUN)', async () => {
+  test('"Direkt, wenn moeglich" erneut bestaetigen: bestehende Direktverbindung bleibt unberuehrt (kein Neustart, keine neue Konfiguration)', async () => {
+    // Frueher zog der Wechsel Stufe 1 -> 2 Direktverbindungen per ICE-Neustart
+    // auf Kandidaten ohne STUN um. Ohne STUN-Stufe gibt es diesen Fall nicht
+    // mehr - jede Direktverbindung entsteht schon ohne STUN.
     const direct = await promotedDirect();
-    await CM.setConnectionMode(CM.MODE_PRIVATE);
+    expect(await CM.setConnectionMode(CM.MODE_DIRECT)).toEqual({ ok: true, mode: CM.MODE_DIRECT });
     await tick(30);
-    expect(direct.applyConnectionModeConfig).toHaveBeenCalled();
-    expect(direct.createIceRestartOffer).toHaveBeenCalled();
-    expect(direct.sent.find((m) => m.subtype === 'direct_offer')).toMatchObject({ restart: true });
+    expect(direct.createIceRestartOffer).not.toHaveBeenCalled();
     expect(direct.close).not.toHaveBeenCalled();
     expect(RTCStore.connections.get(CONTACT.id)).toBe(direct);
-    // 2 -> 1: nur neue Konfiguration, kein erzwungener Neustart.
-    direct.createIceRestartOffer.mockClear();
-    DU._resetDirectUpgradeForTests();
-    await CM.setConnectionMode(CM.MODE_FAST);
-    await tick(30);
-    expect(direct.applyConnectionModeConfig).toHaveBeenCalledTimes(2);
-    expect(direct.createIceRestartOffer).not.toHaveBeenCalled();
+    expect(readSrc('DirectUpgrade.js')).not.toMatch(/applyConnectionModeConfig|MODE_FAST|MODE_PRIVATE/);
+    expect(readSrc('WebRTCManager.js')).not.toMatch(/applyConnectionModeConfig/);
   });
 });
 
@@ -338,7 +330,7 @@ describe('Entwickler-Testschalter "nur Tor" (getrennt von Stufe 3)', () => {
   test('wirkt wie bisher ohne Vollversion, aendert den Verbindungsweg nicht', async () => {
     await Tor.saveTorSettings({ bridgeMode: 'auto', forceTorTest: true });
     try {
-      expect(CM.getConnectionMode()).toBe(CM.MODE_FAST);
+      expect(CM.getConnectionMode()).toBe(CM.MODE_DIRECT);
       expect(await DU.maybeStartUpgrade(CONTACT.id, { reason: 'tor-bereit' })).toBe('nur-tor');
     } finally {
       await Tor.saveTorSettings({ bridgeMode: 'auto', forceTorTest: false });
@@ -353,10 +345,13 @@ describe('Entwickler-Testschalter "nur Tor" (getrennt von Stufe 3)', () => {
     // Erklaert, wer die IP sieht (Texte seit der Uebersetzung in locales/de.js,
     // App.tsx liest sie je Stufe ueber connMode.<stufe>.who).
     expect(app).toMatch(/get who\(\) \{ return t\('connMode\.' \+ id \+ '\.who'\); \}/);
+    // STUN-Ausstieg (L5/L6): der Kontakt sieht die Adressen schon beim
+    // Verbindungsversuch; der Tor-Eintrittsknoten sieht die IP immer.
     const de = readSrc('locales/de.js');
-    expect(de).toMatch(/'connMode\.torOnly\.who': 'Deine IP-Adresse sieht niemand – auch deine Kontakte nicht\.'/);
-    expect(de).toMatch(/'connMode\.private\.who': 'Deine IP-Adresse sieht nur dein Kontakt, solange ihr direkt verbunden seid\.'/);
-    expect(de).toMatch(/'connMode\.fast\.who': '[^']*zwei öffentliche STUN-Dienste deutscher Anbieter/);
+    expect(de).toMatch(/'connMode\.torOnly\.who': 'Deine IP-Adresse sehen weder Kontakte noch ein Server – nur der Tor-Eintrittsknoten, der nicht weiß, mit wem du sprichst\.'/);
+    expect(de).toMatch(/'connMode\.direct\.who': 'Deine IP-Adresse sieht dein Kontakt – schon wenn eure Geräte versuchen, sich direkt zu verbinden\. Kein STUN-Dienst und kein Malachi-Server ist beteiligt\./);
+    expect(de).not.toMatch(/'connMode\.(fast|private)\./);
+    expect(de).not.toMatch(/solange ihr direkt verbunden seid|Deine IP-Adresse sieht niemand|STUN-Dienste deutscher Anbieter/);
     expect(de).not.toMatch(/STUN-Server von Malachi|eigener STUN-Server/);
   });
 });

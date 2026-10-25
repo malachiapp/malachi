@@ -2,8 +2,8 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<title>Malachi – Messenger ohne Telefonnummer, ohne Konto, ohne Server</title>
-<meta name="description" content="Malachi ist ein kostenloser Messenger für Android: ohne Telefonnummer, ohne Konto, ohne Malachi-Server. Nachrichten gehen Ende-zu-Ende verschlüsselt direkt von Gerät zu Gerät, zuerst über Tor.">
+<title>Malachi – Messenger ohne Telefonnummer, ohne Konto, ohne Server für deine Nachrichten</title>
+<meta name="description" content="Malachi ist ein kostenloser Messenger für Android: ohne Telefonnummer, ohne Konto, ohne Malachi-Server. Nachrichten gehen Ende-zu-Ende verschlüsselt direkt von Gerät zu Gerät, zuerst über Tor. Kein Server speichert oder leitet sie weiter.">
 {{TEIL:meta}}
 </head>
 <body>
@@ -24,7 +24,7 @@
   <ul class="raster">
     <li class="karte">
       <h3>Kein Konto, keine Nummer</h3>
-      <p>Du meldest dich nirgends an. Kontakte fügst du hinzu, indem ihr eine Einladung austauscht – am besten persönlich per QR-Code, sonst als Link oder Code.</p>
+      <p>Du meldest dich nirgends an. Kontakte fügst du hinzu, indem ihr eine Einladung austauscht – am besten persönlich per QR-Code, sonst als Link oder Code. Oder ihr gebt beide eure Telefonnummern bzw. eine vereinbarte Kennung ein; daraus berechnen eure Geräte einen Treffpunkt im Tor-Netz, gespeichert oder übertragen wird nichts davon.</p>
     </li>
     <li class="karte">
       <h3>Kein Malachi-Server</h3>
@@ -32,11 +32,11 @@
     </li>
     <li class="karte">
       <h3>Ende-zu-Ende verschlüsselt</h3>
-      <p>Jede Nachricht bekommt einen eigenen Schlüssel (Double Ratchet). Der Schlüsseltausch verbindet X25519 mit ML-KEM-768, einem Verfahren gegen künftige Quantencomputer.</p>
+      <p>Jede Nachricht bekommt einen eigenen Schlüssel (Double Ratchet). Jede Verbindung handelt ein Geheimnis mit ML-KEM-768 aus, einem Verfahren gegen künftige Quantencomputer; der Double Ratchet verbindet es mit X25519. Sprach- und Videoanrufe sind Ende-zu-Ende verschlüsselt, aber noch nicht gegen künftige Quantencomputer geschützt.</p>
     </li>
     <li class="karte">
       <h3>Alles, was ein Messenger braucht</h3>
-      <p>Einzel- und Gruppenchats, Sprachnachrichten, Bilder und Dateien, Sprach- und Videoanrufe – alles verschlüsselt.</p>
+      <p>Einzel- und Gruppenchats, Kanäle mit bis zu 250 Abonnenten, Sprachnachrichten, Bilder und Dateien, Sprach- und Videoanrufe – alles verschlüsselt. Mitglieder einer Gruppe, die sich noch nicht kennen, können sich über die Gruppe verbinden – nur wenn beide zustimmen.</p>
     </li>
     <li class="karte">
       <h3>Siegel-Modus</h3>
@@ -70,19 +70,14 @@
       </thead>
       <tbody>
         <tr>
-          <th scope="row">Schnell (Standard)</th>
-          <td>Erst über Tor, dann möglichst direkt. Für den Direktweg fragt die App zwei öffentliche STUN-Dienste deutscher Anbieter nach der eigenen öffentlichen Adresse.</td>
-          <td>Die zwei gefragten STUN-Dienste (keine Inhalte, keine Kontakte) und dein Kontakt bei einer Direktverbindung.</td>
-        </tr>
-        <tr>
-          <th scope="row">Privat (ohne STUN)</th>
-          <td>Wie „Schnell“, aber ohne STUN-Dienste. Direkt klappt seltener – sonst bleibt Tor.</td>
-          <td>Nur dein Kontakt, und nur bei einer Direktverbindung.</td>
+          <th scope="row">Direkt, wenn möglich (Standard)</th>
+          <td>Erst über Tor, dann direkt, wenn es geht: über IPv6, im selben WLAN oder über die Portfreigabe deines Routers. Malachi fragt dafür keinen STUN-Dienst und keinen Server. Klappt direkt nicht, bleibt Tor.</td>
+          <td>Dein Kontakt – schon wenn eure Geräte versuchen, sich direkt zu verbinden. Der Tor-Eintrittsknoten wie bei jeder Tor-Nutzung, aber ohne zu wissen, mit wem du sprichst.</td>
         </tr>
         <tr>
           <th scope="row">Maximal anonym (nur Tor)<br>– Vollversion</th>
           <td>Nie eine Direktverbindung. Anrufe nur als Sprache über Tor, kein Video.</td>
-          <td>Niemand, auch dein Kontakt nicht.</td>
+          <td>Weder Kontakte noch ein Server – nur der Tor-Eintrittsknoten, der nicht weiß, mit wem du sprichst.</td>
         </tr>
       </tbody>
     </table>
@@ -102,8 +97,10 @@
   <h2 id="grenzen">Ehrliche Grenzen</h2>
   <ul>
     <li>Damit eine Nachricht ankommt, müssen beide Geräte irgendwann gleichzeitig erreichbar sein – es gibt keinen Server, der sie zwischenspeichert.</li>
-    <li>Gegen Schadsoftware auf dem Handy selbst oder ein entsperrtes Gerät in fremden Händen hilft keine Verschlüsselung.</li>
-    <li>Verschlüsselung versteckt Inhalte, nicht jede Spur: Je nach Verbindungsweg sehen STUN-Dienste oder dein Kontakt deine IP-Adresse (siehe oben).</li>
+    <li>Gegen Schadsoftware mit vollem Zugriff auf das Handy hilft keine Verschlüsselung. Ist Malachi gesperrt, sind deine Chatverläufe zusätzlich mit einem Schlüssel aus deiner App-PIN verschlüsselt – auch wenn jemand das entsperrte Handy in der Hand hat. Wer das Handy hat und es mit Spezialwerkzeugen angreift, kann eine kurze PIN eher durchprobieren als eine lange. Kontaktliste und noch nicht zugestellte eigene Nachrichten braucht der Empfang im Hintergrund; sie sind nur mit dem Schlüssel des Geräts verschlüsselt, nicht zusätzlich mit der PIN.</li>
+    <li>Sicherheitsupdates gibt es, solange Malachi angeboten wird – mindestens bis zum 31.12.2031. Das Datum rückt jedes Jahr um ein Jahr weiter; ein Ende kündigen wir mindestens zwölf Monate vorher an. Sicherheitsupdates sind immer kostenlos.</li>
+    <li>Verschlüsselung versteckt Inhalte, nicht jede Spur: Bei Direktverbindungen sieht dein Kontakt deine IP-Adresse, den Tor-Eintrittsknoten sieht sie immer (siehe oben). Malachi selbst fragt keine STUN-Dienste; nur die Tor-Brücke Snowflake nutzt eigene, wenn Tor in deinem Netz gesperrt ist.</li>
+    <li>Ohne STUN klappen Direktverbindungen in manchen Netzen seltener (nur IPv4, Mobilfunk ohne IPv6, Hotel-WLAN). Dann läuft alles über Tor: langsamer, Anrufe nur als Sprache mit Verzögerung.</li>
     <li>Malachi wurde bisher nicht von einer unabhängigen Stelle geprüft.</li>
     <li>Malachi gibt es derzeit nur für Android (ab Version 7.0).</li>
   </ul>

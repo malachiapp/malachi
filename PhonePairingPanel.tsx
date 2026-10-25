@@ -16,7 +16,7 @@ import { View, Text, TextInput, TouchableOpacity, AppState } from 'react-native'
 import Icon from 'react-native-vector-icons/Feather';
 import { t } from './i18n';
 import { getTheme, subscribeTheme } from './Themes';
-import { normalizePhoneNumber, startPhonePairing, PHONE_PAIR_WINDOW_MS } from './PhonePairing';
+import { normalizePairingId, startPhonePairing, PHONE_PAIR_WINDOW_MS, ID_MIN_LEN, ID_MAX_LEN } from './PhonePairing';
 
 // Farben aus dem gewaehlten Design (wie P in App.tsx bzw. C in SiegelScreen).
 const C: any = {};
@@ -36,7 +36,9 @@ const RUNNING = new Set(['preparing', 'waiting', 'handshake', 'compare', 'confir
 // als Getter, damit ein Sprachwechsel ohne Neustart greift.
 const PHONE_ERROR_KEYS = {
   'invalid-number': 'phonePairing.err.invalid-number',
+  'invalid-id': 'phonePairing.err.invalid-id',
   'same-number': 'phonePairing.err.same-number',
+  'same-id': 'phonePairing.err.same-id',
   unsupported: 'phonePairing.err.unsupported',
   tor: 'phonePairing.err.tor',
   timeout: 'phonePairing.err.timeout',
@@ -77,6 +79,9 @@ const mmss = (ms) => {
 };
 
 export default function PhonePairingPanel({ onPaired }: { onPaired: (contact: any, rtc: any) => void }) {
+  // Telefonnummern oder freie Kennungen (Nutzerwunsch 2026-10-25) - beide
+  // Seiten muessen dieselbe Art waehlen.
+  const [mode, setMode] = useState<'phone' | 'id'>('phone');
   const [own, setOwn] = useState('');
   const [other, setOther] = useState('');
   const [inputError, setInputError] = useState('');
@@ -117,19 +122,20 @@ export default function PhonePairingPanel({ onPaired }: { onPaired: (contact: an
 
   const start = () => {
     if (ctrl.current) return;
-    const a = normalizePhoneNumber(own);
-    const b = normalizePhoneNumber(other);
-    if (!a) { setInputError('Deine Nummer ist ungültig. Beispiel: 0176 12345678 oder +49 176 12345678.'); return; }
-    if (!b) { setInputError('Die Nummer deines Kontakts ist ungültig. Beispiel: 0176 12345678 oder +49 176 12345678.'); return; }
-    if (a === b) { setInputError(PHONE_ERROR_TEXT['same-number']); return; }
+    const a = normalizePairingId(own, mode);
+    const b = normalizePairingId(other, mode);
+    if (!a) { setInputError(mode === 'id' ? t('phonePairing.err.ownInvalidId', { min: ID_MIN_LEN }) : t('phonePairing.err.ownInvalid')); return; }
+    if (!b) { setInputError(mode === 'id' ? t('phonePairing.err.otherInvalidId', { min: ID_MIN_LEN }) : t('phonePairing.err.otherInvalid')); return; }
+    if (a === b) { setInputError(PHONE_ERROR_TEXT[mode === 'id' ? 'same-id' : 'same-number']); return; }
     setInputError('');
     // Nummern sofort aus dem Eingabezustand entfernen - die Sitzung braucht sie
     // nur bis zur Schluesselableitung. Angezeigt werden nur zwei Endziffern.
     setOwn('');
     setOther('');
-    setTail(b.slice(-2));
+    setTail([...b].slice(-2).join(''));
     setSt({ phase: 'preparing' });
     ctrl.current = startPhonePairing({
+      mode,
       ownNumber: a,
       otherNumber: b,
       onState: (s) => {
@@ -154,26 +160,43 @@ export default function PhonePairingPanel({ onPaired }: { onPaired: (contact: an
 
   return (
     <View style={{ gap: 16 }}>
-      <Text style={{ fontSize: 15, fontWeight: '600', color: C.text }}>{t('phonePairing.perTelefonnummerVerbinden')}</Text>
+      <Text style={{ fontSize: 15, fontWeight: '600', color: C.text }}>
+        {mode === 'id' ? t('phonePairing.perKennungVerbinden') : t('phonePairing.perTelefonnummerVerbinden')}
+      </Text>
+      {(st.phase === 'idle' || st.phase === 'error') && (
+        <View testID="phone-mode" accessibilityRole="tablist" style={{ flexDirection: 'row', backgroundColor: C.surfaceAlt, borderRadius: 12, padding: 3 }}>
+          {([['phone', t('phonePairing.modePhone')], ['id', t('phonePairing.modeId')]] as const).map(([m, text]) => {
+            const on = mode === m;
+            return (
+              <TouchableOpacity key={m} testID={'phone-mode-' + m} accessibilityRole="tab" accessibilityState={{ selected: on }}
+                onPress={() => { if (!on) { setMode(m); clearInputs(); setInputError(''); } }}
+                style={{ flex: 1, borderRadius: 10, paddingVertical: 9, alignItems: 'center', backgroundColor: on ? C.surface : 'transparent',
+                  borderWidth: on ? 0.5 : 0, borderColor: C.border }}>
+                <Text style={{ fontSize: 13, fontWeight: on ? '600' : '500', color: on ? C.text : C.sub }}>{text}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
       <Text style={{ fontSize: 13, color: C.sub, lineHeight: 20 }}>
-        {t('phonePairing.amBestenWaehrendIhrMiteinander')}
+        {mode === 'id' ? t('phonePairing.idHint', { min: ID_MIN_LEN }) : t('phonePairing.amBestenWaehrendIhrMiteinander')}
       </Text>
 
       {(st.phase === 'idle' || st.phase === 'error') && (
         <View style={{ gap: 12 }}>
           <View>
-            <Text style={label}>{t('phonePairing.deineNummer')}</Text>
+            <Text style={label}>{mode === 'id' ? t('phonePairing.deineKennung') : t('phonePairing.deineNummer')}</Text>
             <TextInput testID="phone-own" style={inputStyle} value={own} onChangeText={setOwn}
-              placeholder="z. B. 0176 12345678" placeholderTextColor={C.muted}
-              keyboardType="phone-pad" autoComplete="off" importantForAutofill="no" textContentType="none"
-              autoCorrect={false} autoCapitalize="none" maxLength={30} />
+              placeholder={mode === 'id' ? t('phonePairing.idPlaceholderOwn') : 'z. B. 0176 12345678'} placeholderTextColor={C.muted}
+              keyboardType={mode === 'id' ? 'default' : 'phone-pad'} autoComplete="off" importantForAutofill="no" textContentType="none"
+              autoCorrect={false} autoCapitalize="none" maxLength={mode === 'id' ? ID_MAX_LEN * 2 : 30} />
           </View>
           <View>
-            <Text style={label}>{t('phonePairing.nummerDeinesKontakts')}</Text>
+            <Text style={label}>{mode === 'id' ? t('phonePairing.kennungDeinesKontakts') : t('phonePairing.nummerDeinesKontakts')}</Text>
             <TextInput testID="phone-other" style={inputStyle} value={other} onChangeText={setOther}
-              placeholder="z. B. +49 151 98765432" placeholderTextColor={C.muted}
-              keyboardType="phone-pad" autoComplete="off" importantForAutofill="no" textContentType="none"
-              autoCorrect={false} autoCapitalize="none" maxLength={30} />
+              placeholder={mode === 'id' ? t('phonePairing.idPlaceholderOther') : 'z. B. +49 151 98765432'} placeholderTextColor={C.muted}
+              keyboardType={mode === 'id' ? 'default' : 'phone-pad'} autoComplete="off" importantForAutofill="no" textContentType="none"
+              autoCorrect={false} autoCapitalize="none" maxLength={mode === 'id' ? ID_MAX_LEN * 2 : 30} />
           </View>
           {!!inputError && <Text testID="phone-input-error" style={{ color: C.danger, fontSize: 13, lineHeight: 19 }}>{inputError}</Text>}
           {st.phase === 'error' && (
@@ -241,7 +264,7 @@ export default function PhonePairingPanel({ onPaired }: { onPaired: (contact: an
 
       <View style={{ backgroundColor: C.accentSoft, borderRadius: 12, padding: 14, gap: 8 }}>
         {[
-          ['lock', t('phonePairing.dieNummernWerdenNichtGespeichert')],
+          ['lock', mode === 'id' ? t('phonePairing.kennungenWerdenNichtGespeichert') : t('phonePairing.dieNummernWerdenNichtGespeichert')],
           ['clock', t('phonePairing.beideMuessenGleichzeitigStartenInnerhalb')],
           ['shield', t('phonePairing.danachZeigenBeideHandysEinen')],
         ].map(([icon, text]) => (

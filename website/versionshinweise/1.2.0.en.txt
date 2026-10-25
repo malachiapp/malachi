@@ -1,0 +1,30 @@
+Malachi 1.2 – more protection for your data, no more STUN services, new Tor.
+
+Important when updating:
+- After the update, unlock once with your PIN (not with your fingerprint). This sets up the new PIN vault; after that your fingerprint works again.
+- All chats, contacts, groups and media are kept.
+
+Privacy and security:
+- PIN vault: chat histories, the preview texts of the chat list and unread messages are additionally encrypted with a key derived from your app PIN. While Malachi is locked, they cannot be read without the PIN or your fingerprint, even by someone holding the unlocked phone. The PIN itself is no longer stored. You choose 4 or 6 digits; a longer PIN is harder to guess.
+- Voice messages are recorded and played only in memory; no audio file is created anymore. From Android 11, no other app can listen in while you record.
+- Malachi no longer asks any STUN services. Direct connections are only made over IPv6, within the same Wi-Fi or via your router's port forwarding; otherwise the connection stays on Tor. Only the Tor bridge Snowflake uses its own STUN servers when Tor is blocked on your network.
+- Instead of three there are two connection modes: "Direct when possible" and "Maximum anonymity (Tor only)". If you had "Fast" selected, you are switched over automatically and informed once.
+- Place names when sharing your location are gone; the app no longer asks a map service for them.
+- Tor 0.4.9: the previous Tor version 0.4.8 no longer receives security updates and is being phased out by the Tor network.
+- More honest wording: calls are end-to-end encrypted, but not yet protected against future quantum computers. When you share an invitation link, the app reminds you to compare the safety code.
+
+New:
+- Speaker button during calls.
+- Voice messages with a real waveform: tap to jump to that point, and a preview after recording. With the full version: an animated pixel wave.
+- Seal mode right from the home screen (small button above the +).
+- Pair with an agreed identifier instead of a phone number (at least 8 characters).
+- Groups: members who don't know each other yet can connect through the group, only if both agree. The admin can switch this off.
+- Channels with up to 250 subscribers: only admins write, and subscribers can't see each other.
+- Diagnostics in the settings: counts locally how connections are made (no IP addresses or names), to copy for bug reports.
+
+Fixed:
+- Your own voice messages were not stored permanently. Your own voice messages sent with 1.0 cannot be restored; the recipient still has them in full.
+- Opening a chat could lose older voice messages and pictures.
+- Your profile picture sometimes disappeared, and waiting messages stayed unsent because of it.
+
+Security updates are provided as long as Malachi is offered, at least until 31 December 2031.

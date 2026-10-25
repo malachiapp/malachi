@@ -110,8 +110,9 @@ Kaskade (Algorithmen-Vielfalt) bleibt außen in der Verbindungsschicht erhalten.
 Unverändert nach Signal: bei jedem neuen Ratchet-Key der Gegenseite
 `(rk, CKr) = KDF_RK(rk, DH(DHs, DHr), KEMs der Gegenseite)`, neues eigenes Paar,
 `(rk, CKs) = KDF_RK(rk, DH(DHs', DHr), eigene KEMs)`. Übersprungene Schlüssel:
-höchstens 1000 pro Nachricht und 1000 insgesamt (älteste fallen weg), Ablauf
-nach 72 h. Nachrichten abgelöster Ketten ohne gespeicherten Schlüssel werden sofort
+höchstens 10 000 werden je Nachricht vorgerechnet (`MAX_SKIP`), gespeichert
+bleiben höchstens die 1000 jüngsten (`MAX_SKIPPED_KEYS`, Audit 2026-10-19 C1),
+Ablauf nach 72 h. Nachrichten abgelöster Ketten ohne gespeicherten Schlüssel werden sofort
 als Replay abgelehnt. Jede fehlerhafte Nachricht wird auf einer Kopie verarbeitet
 und verworfen – der gespeicherte Zustand bleibt unverändert.
 
@@ -133,6 +134,32 @@ und verworfen – der gespeicherte Zustand bleibt unverändert.
   Sperre erst danach geöffnet. Speicherfehler sind (wie beim Secret selbst)
   nicht fatal: der Eintrag bleibt im Arbeitsspeicher und wird mit dem nächsten
   Ratchet-Speichervorgang geschrieben.
+* **Aufbewahrung von `held` (seit Krypto-Review 2026-10-25, V4/K-08).** Ein
+  `held`-Eintrag ist das Geheimnis einer früheren Verbindung und soll so kurz
+  wie möglich liegen – aber nie kürzer, als er gebraucht werden kann, sonst
+  bekäme die Gegenseite in ihrer Richtung dauerhaft `kem-unknown`.
+  Begründung der Regel:
+  1. Ketten wechseln streng abwechselnd: Die Gegenseite legt ihre nächste Kette
+     erst an, wenn sie unseren aktuellen Ratchet-Schlüssel empfangen hat; jede
+     ihrer früheren Ketten haben wir bereits verarbeitet.
+  2. Sie mischt ein Geheimnis nur ein, solange es bei ihr höchstens 7 Tage alt
+     ist (auch in 1.0/1.1).
+  3. Unseren aktuellen Schlüssel kann sie frühestens erhalten, wenn wir damit
+     das erste Mal gesendet haben – Zeitpunkt `sa` im Zustand (bei `ns = 0`:
+     frühestens jetzt).
+  Also ist jeder Eintrag, der älter als `sa − 7 Tage − 1 Tag Uhren-Spielraum`
+  ist, in keiner noch ausstehenden Kette mehr möglich und wird gelöscht. Im
+  laufenden Gespräch sind das rund 8 Tage (vorher 30). Jüngere Einträge bleiben
+  bis zum Verbrauch, auch länger als 14 Tage – das passiert nur, wenn seither
+  keine Verbindung zustande kam (jede Verbindung bringt die ausstehende Kette,
+  `profile_name` läuft durch den Ratchet); höchstens 64 Einträge. Ohne Sitzung:
+  14 Tage, 8 Einträge. Zustände aus 1.0/1.1 ohne `sa` behalten bis zum nächsten
+  eigenen DH-Schritt das alte Verhalten (30 Tage, 32 Einträge), damit ein
+  Update nie etwas löscht, das noch gebraucht wird. Hinweis: Die bisherige
+  Grenze „32 jüngste Einträge“ konnte bei vielen Verbindungen ohne Nachricht
+  der Gegenseite einen noch benötigten Eintrag verdrängen – auch das ist damit
+  behoben. Tests: `ratchet.heldRetention.test.js`, `ratchet.integration.test.js`
+  („20 Tage keine Verbindung“).
 * Vorbild: PQXDH (Hybrid-KDF über DH ‖ KEM) und Signals Triple Ratchet/SPQR
   (laufender PQ-Beitrag). Anders als SPQR transportiert Malachi keine eigenen
   ML-KEM-Schlüssel im Ratchet-Header – die Verbindungs-Schlüsseltausche liefern

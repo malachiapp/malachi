@@ -5,8 +5,13 @@
 //   - Freigaben werden erneuert und beim Schliessen geloescht (das native
 //     Modul nimmt dafuer dasselbe Protokoll); spaet eintreffende Freigaben
 //     werden nie verwaist,
-//   - Stufe 2 "Privat (ohne STUN)": keine ICE-Server, laengeres Warten auf den
-//     Router (er ist dort die einzige Quelle der oeffentlichen IPv4),
+//   - "Direkt, wenn moeglich" (seit dem STUN-Ausstieg die einzige Stufe mit
+//     Direktverbindungen): keine ICE-Server; der Router ist die einzige Quelle
+//     der oeffentlichen IPv4. Kurz gewartet - was spaeter kommt, wird ueber
+//     onLateCandidates nachgereicht (Luecke L3), auch beim ICE-Neustart
+//     nach einem Netzwechsel (Luecke L2),
+//   - nachgereichte Kandidaten der Gegenseite werden erst angewendet, wenn
+//     deren Beschreibung fuer GENAU diese Aushandlung gesetzt ist,
 //   - Stufe 3: keine PeerConnection, keine Anfrage an den Router,
 //   - Hole Punching: die Antwortseite startet ihre ICE-Pruefungen (Angebot und
 //     eigene Beschreibung angewendet) BEVOR sie auf den Router wartet und
@@ -29,9 +34,14 @@ jest.mock('react-native-webrtc', () => {
     createDataChannel() { return { readyState: 'connecting', send() {}, close() {} }; }
     async createOffer() { return { type: 'offer', sdp: global.__localSdp }; }
     async createAnswer() { return { type: 'answer', sdp: global.__localSdp }; }
-    async setLocalDescription(d) { global.__events.push('setLocalDescription:' + d.type); this.localDescription = d; }
+    async setLocalDescription(d) {
+      global.__events.push('setLocalDescription:' + d.type);
+      this.localDescription = d;
+      // Sammeln sofort fertig (wie ohne STUN): auch fuer den ICE-Neustart.
+      setTimeout(() => { this.onicegatheringstatechange?.(); }, 5);
+    }
     async setRemoteDescription(d) { global.__events.push('setRemoteDescription:' + d.type); this.remoteDescription = d; }
-    async addIceCandidate() {}
+    async addIceCandidate(c) { global.__events.push('addIceCandidate'); (this.added = this.added || []).push(c); }
     close() { this.closed = true; }
   }
   return {
@@ -48,7 +58,7 @@ jest.mock('react-native-webrtc', () => {
 const EncryptedStorage = require('react-native-encrypted-storage').default;
 const W = require('../../WebRTCManager');
 const CM = require('../../ConnectionMode');
-const { STUN_POOL } = require('../../AppConfig');
+const PM = require('../../PortMapping');
 
 const SDP = [
   'v=0',
@@ -125,7 +135,7 @@ describe('NAT-PMP-/UPnP-Ergebnisse werden zu Kandidaten', () => {
       { protocol: 'udp', address: '2001:db8:1:2::61', port: 50002 },
       { protocol: 'tcp', address: '192.168.178.61', port: 50005 },
     ]);
-    expect(rtc._pcpMappings).toEqual([
+    expect(rtc._portMap.mappings).toEqual([
       { protocol: 'udp', address: '192.168.178.61', port: 50001 },
       { protocol: 'tcp', address: '192.168.178.61', port: 50005 },
     ]);
@@ -138,7 +148,7 @@ describe('NAT-PMP-/UPnP-Ergebnisse werden zu Kandidaten', () => {
       { protocol: 'udp', address: '192.168.178.61', port: 50001 },
       { protocol: 'tcp', address: '192.168.178.61', port: 50005 },
     ]);
-    expect(rtc._pcpMappings).toBeNull();
+    expect(rtc._portMap.mappings).toBeNull();
   });
 
   test('Router meldet "nicht erlaubt" (FritzBox ohne Selbststaendige Portfreigaben): Status NOT_AUTHORIZED, kein Kandidat', async () => {
@@ -151,38 +161,68 @@ describe('NAT-PMP-/UPnP-Ergebnisse werden zu Kandidaten', () => {
   });
 });
 
-describe('Stufen: ICE-Server und Warten auf den Router', () => {
-  test('Stufe 1: STUN; Stufe 2: keine ICE-Server - und laengeres Warten, damit die Router-Adresse ins Angebot kommt', async () => {
-    W.PORT_MAPPING_MAX_WAIT_MS[CM.MODE_FAST] = 40;
-    W.PORT_MAPPING_MAX_WAIT_MS[CM.MODE_PRIVATE] = 400;
-    installPcpMock({ rows: NATPMP_UPNP_ROWS, delayMs: 120 });
-
-    const fast = new W.WebRTCManager(() => {}, () => {}, () => {});
-    const offerFast = JSON.parse(await fast.createOffer()).sdp.sdp;
-    expect(pcs()[0].config.iceServers).toHaveLength(2);
-    for (const s of pcs()[0].config.iceServers) expect(STUN_POOL.map((p) => p.url)).toContain(s.urls);
-    expect(offerFast).not.toMatch(/typ srflx/);           // Router zu langsam fuer Stufe 1
-    await tick(150);
-    // Spaet eingetroffen: trotzdem gemerkt (Erneuern/Loeschen), nie verwaist.
-    expect(fast._pcpMappings).toHaveLength(2);
-    fast.close();
-
-    await CM.setConnectionMode(CM.MODE_PRIVATE);
-    const priv = new W.WebRTCManager(() => {}, () => {}, () => {});
-    const offerPriv = JSON.parse(await priv.createOffer()).sdp.sdp;
-    expect(pcs()[1].config.iceServers).toEqual([]);
-    expect(pcs()[1].config.iceTransportPolicy).toBe('all');
-    expect(offerPriv).toMatch(/a=candidate:natpmp0 .* typ srflx/);
+describe('Ohne STUN: ICE-Server und Warten auf den Router', () => {
+  test('keine ICE-Server; antwortet der Router rechtzeitig, steht seine Adresse im Angebot (IPv6-Host bleibt)', async () => {
+    W.PORT_MAPPING_MAX_WAIT_MS.offer = 400;
+    installPcpMock({ rows: NATPMP_UPNP_ROWS, delayMs: 30 });
+    const rtc = new W.WebRTCManager(() => {}, () => {}, () => {});
+    const offer = JSON.parse(await rtc.createOffer()).sdp.sdp;
+    expect(pcs()[0].config.iceServers).toEqual([]);
+    expect(pcs()[0].config.iceTransportPolicy).toBe('all');
+    expect(offer).toMatch(/a=candidate:natpmp0 .* typ srflx/);
     // IPv6-Host-Kandidat bleibt im Angebot (Weg ohne STUN und ohne Router-NAT).
-    expect(offerPriv).toMatch(/2001:db8:1:2::61 50002 typ host/);
-    priv.close();
+    expect(offer).toMatch(/2001:db8:1:2::61 50002 typ host/);
+    rtc.close();
   });
 
-  test('spaete Freigabe nach dem Schliessen wird sofort wieder geloescht', async () => {
-    W.PORT_MAPPING_MAX_WAIT_MS[CM.MODE_FAST] = 20;
+  test('Wartezeit ohne STUN kurz (1,5 s, Neustart 1 s) - Spaeteres wird nachgereicht statt laenger zu warten', () => {
+    expect(PM.PORT_MAPPING_MAX_WAIT_MS).toBe(W.PORT_MAPPING_MAX_WAIT_MS);
+    expect(ORIGINAL_WAIT).toEqual({ offer: 1500, restart: 1000 });
+  });
+
+  test('L3: Router zu langsam - Angebot ohne Router-Adresse, die spaete Freigabe wird gemerkt und unter der Aushandlungs-ID nachgereicht', async () => {
+    W.PORT_MAPPING_MAX_WAIT_MS.offer = 40;
+    installPcpMock({ rows: NATPMP_UPNP_ROWS, delayMs: 120 });
+    const rtc = new W.WebRTCManager(() => {}, () => {}, () => {});
+    const late = [];
+    rtc.onLateCandidates = (cands, id) => late.push({ cands, id });
+    const offer = JSON.parse(await rtc.createOffer({ negotiationId: 'a1b2c3d4e5f60718' })).sdp.sdp;
+    expect(offer).not.toMatch(/typ srflx/);
+    expect(late).toEqual([]);
+    await tick(150);
+    // Spaet eingetroffen: gemerkt (Erneuern/Loeschen), nie verwaist ...
+    expect(rtc._portMap.mappings).toHaveLength(2);
+    // ... und nachgereicht: nur srflx mit oeffentlicher IPv4, gueltig gepruefte Form.
+    expect(late).toHaveLength(1);
+    expect(late[0].id).toBe('a1b2c3d4e5f60718');
+    expect(late[0].cands.map((c) => c.candidate)).toEqual([
+      'candidate:natpmp10 1 udp 1686052607 203.0.113.9 40001 typ srflx raddr 192.168.178.61 rport 50001',
+      'candidate:upnp11 1 tcp 1686052607 203.0.113.9 50005 typ srflx raddr 192.168.178.61 rport 50005 tcptype passive',
+    ]);
+    for (const c of late[0].cands) expect(PM.isValidMappedCandidate(c)).toBe(true);
+    rtc.close();
+  });
+
+  test('L3: ohne Aushandlungs-ID (z. B. alte Kopplung ueber createAnswer) wird nichts nachgereicht, aber trotzdem nie verwaist', async () => {
+    W.PORT_MAPPING_MAX_WAIT_MS.offer = 20;
+    installPcpMock({ rows: NATPMP_UPNP_ROWS, delayMs: 60 });
+    const rtc = new W.WebRTCManager(() => {}, () => {}, () => {});
+    const late = jest.fn();
+    rtc.onLateCandidates = late;
+    await rtc.createOffer();
+    await tick(100);
+    expect(late).not.toHaveBeenCalled();
+    expect(rtc._portMap.mappings).toHaveLength(2);
+    rtc.close();
+  });
+
+  test('spaete Freigabe nach dem Schliessen wird sofort wieder geloescht (und nicht mehr nachgereicht)', async () => {
+    W.PORT_MAPPING_MAX_WAIT_MS.offer = 20;
     const calls = installPcpMock({ rows: NATPMP_UPNP_ROWS, delayMs: 80 });
     const rtc = new W.WebRTCManager(() => {}, () => {}, () => {});
-    await rtc.createOffer();
+    const late = jest.fn();
+    rtc.onLateCandidates = late;
+    await rtc.createOffer({ negotiationId: 'b1b2c3d4e5f60718' });
     rtc.close();
     expect(calls.some((c) => c.lifetime === 0)).toBe(false);
     await tick(120);
@@ -191,6 +231,7 @@ describe('Stufen: ICE-Server und Warten auf den Router', () => {
       { protocol: 'udp', address: '192.168.178.61', port: 50001 },
       { protocol: 'tcp', address: '192.168.178.61', port: 50005 },
     ]);
+    expect(late).not.toHaveBeenCalled();
   });
 
   test('Stufe 3: keine PeerConnection, keine Anfrage an den Router', async () => {
@@ -204,9 +245,114 @@ describe('Stufen: ICE-Server und Warten auf den Router', () => {
   });
 });
 
+describe('L2: ICE-Neustart nach Netzwechsel fragt den Router', () => {
+  async function connectedOfferer() {
+    installPcpMock({ rows: [] });
+    const rtc = new W.WebRTCManager(() => {}, () => {}, () => {});
+    await rtc.createOffer({ negotiationId: 'c1b2c3d4e5f60718' });
+    await rtc.handleAnswer(JSON.stringify({ sdp: { type: 'answer', sdp: SDP } }));
+    return rtc;
+  }
+
+  test('Neustart-Angebot und Neustart-Antwort enthalten die Router-Freigabe des neuen Netzes', async () => {
+    const rtc = await connectedOfferer();
+    const calls = installPcpMock({ rows: NATPMP_UPNP_ROWS });
+    const offer = await rtc.createIceRestartOffer({ negotiationId: 'd1b2c3d4e5f60718' });
+    expect(offer.type).toBe('offer');
+    expect(offer.sdp).toMatch(/a=candidate:natpmp0 1 udp 1686052607 203\.0\.113\.9 40001 typ srflx/);
+    expect(calls[0].mappings).toHaveLength(3);
+    rtc.close();
+
+    const answerer = new W.WebRTCManager(() => {}, () => {}, () => {});
+    installPcpMock({ rows: [] });
+    await answerer.createAnswerDirect(JSON.stringify({ sdp: { type: 'offer', sdp: SDP } }), { negotiationId: 'e1b2c3d4e5f60718' });
+    installPcpMock({ rows: NATPMP_UPNP_ROWS });
+    const answer = await answerer.acceptIceRestartOffer({ type: 'offer', sdp: SDP }, { negotiationId: 'f1b2c3d4e5f60718' });
+    expect(answer.type).toBe('answer');
+    expect(answer.sdp).toMatch(/typ srflx/);
+    answerer.close();
+  });
+
+  test('Router beim Neustart zu langsam: Neustart wartet hoechstens 1 s, die Freigabe wird unter der Neustart-ID nachgereicht', async () => {
+    const rtc = await connectedOfferer();
+    W.PORT_MAPPING_MAX_WAIT_MS.restart = 30;
+    installPcpMock({ rows: NATPMP_UPNP_ROWS, delayMs: 90 });
+    const late = [];
+    rtc.onLateCandidates = (cands, id) => late.push(id);
+    const t0 = Date.now();
+    const offer = await rtc.createIceRestartOffer({ negotiationId: 'a2b2c3d4e5f60718' });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(offer.sdp).not.toMatch(/typ srflx/);
+    await tick(120);
+    expect(late).toEqual(['a2b2c3d4e5f60718']);
+    rtc.close();
+  });
+});
+
+describe('L3: nachgereichte Kandidaten der Gegenseite', () => {
+  const CAND = { candidate: 'candidate:pcp10 1 udp 1686052607 203.0.113.77 40100 typ srflx raddr 192.168.1.20 rport 50010', sdpMid: '0', sdpMLineIndex: 0 };
+
+  test('erst nach der Antwort angewendet (Signale laufen nebeneinander); nach dem Schliessen nichts mehr', async () => {
+    installPcpMock({ rows: [] });
+    const rtc = new W.WebRTCManager(() => {}, () => {}, () => {});
+    await rtc.createOffer({ negotiationId: 'b3b2c3d4e5f60718' });
+    const pc = pcs()[0];
+    global.__events.length = 0;
+    const applied = rtc.addLateRemoteCandidate('b3b2c3d4e5f60718', CAND);
+    await tick(10);
+    expect(pc.added).toBeUndefined();                       // Antwort noch nicht da
+    await rtc.handleAnswer(JSON.stringify({ sdp: { type: 'answer', sdp: SDP } }));
+    expect(await applied).toBe(true);
+    expect(global.__events).toEqual(['setRemoteDescription:answer', 'addIceCandidate']);
+    expect(pc.added).toEqual([CAND]);
+    rtc.close();
+    // Nach dem Schliessen: nichts mehr.
+    expect(await rtc.addLateRemoteCandidate('b3b2c3d4e5f60718', CAND)).toBe(false);
+  });
+
+  test('Obergrenze je Aushandlung (8); Tor-Verbindungen nehmen nie Kandidaten an', async () => {
+    installPcpMock({ rows: [] });
+    const rtc = new W.WebRTCManager(() => {}, () => {}, () => {});
+    await rtc.createAnswerDirect(JSON.stringify({ sdp: { type: 'offer', sdp: SDP } }), { negotiationId: 'c3b2c3d4e5f60718' });
+    const results = [];
+    for (let i = 0; i < 10; i++) results.push(await rtc.addLateRemoteCandidate('c3b2c3d4e5f60718', CAND));
+    expect(results.filter(Boolean)).toHaveLength(PM.MAX_LATE_CANDIDATES);
+    expect(PM.MAX_LATE_CANDIDATES).toBe(8);
+    rtc.close();
+    const tor = new W.WebRTCManager(() => {}, () => {}, () => {});
+    tor.attachTorChannel({ readyState: 'open', send() {}, close() {} }, true);
+    expect(await tor.addLateRemoteCandidate('c3b2c3d4e5f60718', CAND)).toBe(false);
+    tor.close();
+  });
+
+  test('Pruefung: nur srflx-Router-Kandidaten mit oeffentlicher IPv4 und privater Basisadresse', () => {
+    const ok = (candidate, extra = {}) => PM.isValidMappedCandidate({ candidate, sdpMid: '0', sdpMLineIndex: 0, ...extra });
+    expect(ok(CAND.candidate)).toBe(true);
+    expect(ok('candidate:upnp3 1 tcp 1686052607 203.0.113.77 40100 typ srflx raddr 192.168.1.20 rport 50010 tcptype passive')).toBe(true);
+    // keine Host-Kandidaten, kein IPv6, kein Carrier-NAT/privat als oeffentliche Adresse
+    expect(ok('candidate:1 1 udp 2122260223 192.168.1.20 50010 typ host')).toBe(false);
+    expect(ok('candidate:pcp1 1 udp 1686052607 2001:db8::1 40100 typ srflx raddr 192.168.1.20 rport 50010')).toBe(false);
+    expect(ok('candidate:pcp1 1 udp 1686052607 100.64.3.4 40100 typ srflx raddr 192.168.1.20 rport 50010')).toBe(false);
+    expect(ok('candidate:pcp1 1 udp 1686052607 10.0.0.9 40100 typ srflx raddr 192.168.1.20 rport 50010')).toBe(false);
+    // Basisadresse muss privat sein, Ports gueltig, tcp nur passiv
+    expect(ok('candidate:pcp1 1 udp 1686052607 203.0.113.77 40100 typ srflx raddr 198.51.100.1 rport 50010')).toBe(false);
+    expect(ok('candidate:pcp1 1 udp 1686052607 203.0.113.77 0 typ srflx raddr 192.168.1.20 rport 50010')).toBe(false);
+    expect(ok('candidate:pcp1 1 tcp 1686052607 203.0.113.77 40100 typ srflx raddr 192.168.1.20 rport 50010')).toBe(false);
+    // fremde Foundation (z. B. ein STUN- oder TURN-Kandidat), Zusatzfelder, falsche Komponente
+    expect(ok('candidate:842163049 1 udp 1686052607 203.0.113.77 40100 typ srflx raddr 192.168.1.20 rport 50010')).toBe(false);
+    expect(ok('candidate:pcp1 1 udp 1686052607 203.0.113.77 40100 typ relay raddr 192.168.1.20 rport 50010')).toBe(false);
+    expect(ok(CAND.candidate + ' generation 0')).toBe(false);
+    expect(ok(CAND.candidate.replace(' 1 udp', ' 2 udp'))).toBe(false);
+    // sdpMid/Index
+    expect(ok(CAND.candidate, { sdpMid: 'x'.repeat(40) })).toBe(false);
+    expect(ok(CAND.candidate, { sdpMid: null, sdpMLineIndex: null })).toBe(false);
+    expect(PM.isValidMappedCandidate(null)).toBe(false);
+    expect(PM.isValidMappedCandidate({ candidate: 5 })).toBe(false);
+  });
+});
+
 describe('Hole Punching ohne Zeitabstimmung', () => {
   test('Antwortseite: ICE startet (Angebot + eigene Beschreibung angewendet) bevor auf den Router gewartet wird', async () => {
-    await CM.setConnectionMode(CM.MODE_PRIVATE);
     installPcpMock({ rows: NATPMP_UPNP_ROWS, delayMs: 30 });
     const answerer = new W.WebRTCManager(() => {}, () => {}, () => {});
     const answerJSON = await answerer.createAnswerDirect(JSON.stringify({ sdp: { type: 'offer', sdp: SDP } }));

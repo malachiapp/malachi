@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Malachi – Messenger without a phone number, without an account, without a server</title>
-<meta name="description" content="Malachi is a free messenger for Android: no phone number, no account, no Malachi server. Messages are end-to-end encrypted and go straight from device to device, via Tor first.">
+<title>Malachi – Messenger without a phone number, without an account, without a server for your messages</title>
+<meta name="description" content="Malachi is a free messenger for Android: no phone number, no account, no Malachi server. Messages are end-to-end encrypted and go straight from device to device, via Tor first. No server stores or forwards them.">
 {{TEIL:meta}}
 </head>
 <body>
@@ -24,7 +24,7 @@
   <ul class="raster">
     <li class="karte">
       <h3>No account, no number</h3>
-      <p>You don't sign up anywhere. You add contacts by exchanging an invitation – ideally in person via QR code, otherwise as a link or code.</p>
+      <p>You don't sign up anywhere. You add contacts by exchanging an invitation – ideally in person via QR code, otherwise as a link or code. Or you both enter your phone numbers or an agreed identifier; your devices use them to calculate a meeting point in the Tor network, and none of it is stored or sent.</p>
     </li>
     <li class="karte">
       <h3>No Malachi server</h3>
@@ -32,11 +32,11 @@
     </li>
     <li class="karte">
       <h3>End-to-end encrypted</h3>
-      <p>Every message gets its own key (Double Ratchet). The key exchange combines X25519 with ML-KEM-768, a scheme designed to resist future quantum computers.</p>
+      <p>Every message gets its own key (Double Ratchet). Every connection negotiates a secret with ML-KEM-768, a scheme designed to resist future quantum computers; the Double Ratchet combines it with X25519. Voice and video calls are end-to-end encrypted, but not yet protected against future quantum computers.</p>
     </li>
     <li class="karte">
       <h3>Everything a messenger needs</h3>
-      <p>One-to-one and group chats, voice messages, pictures and files, voice and video calls – all encrypted.</p>
+      <p>One-to-one and group chats, channels with up to 250 subscribers, voice messages, pictures and files, voice and video calls – all encrypted. Group members who don't know each other yet can connect through the group – only if both agree.</p>
     </li>
     <li class="karte">
       <h3>Seal mode</h3>
@@ -70,19 +70,14 @@
       </thead>
       <tbody>
         <tr>
-          <th scope="row">Fast (default)</th>
-          <td>Via Tor first, then directly if possible. For the direct route the app asks two public STUN services run by German providers for its own public address.</td>
-          <td>The two STUN services asked (no content, no contacts) and your contact during a direct connection.</td>
-        </tr>
-        <tr>
-          <th scope="row">Private (without STUN)</th>
-          <td>Like "Fast", but without STUN services. A direct connection works less often – otherwise it stays on Tor.</td>
-          <td>Only your contact, and only during a direct connection.</td>
+          <th scope="row">Direct when possible (default)</th>
+          <td>Via Tor first, then directly whenever possible: over IPv6, on the same Wi-Fi or via your router's port forwarding. Malachi asks no STUN service and no server for this. If direct does not work, it stays on Tor.</td>
+          <td>Your contact – already when your devices try to connect directly. The Tor entry node, as with any use of Tor, but without knowing who you are talking to.</td>
         </tr>
         <tr>
           <th scope="row">Maximum anonymity (Tor only)<br>– full version</th>
           <td>Never a direct connection. Calls are voice only over Tor, no video.</td>
-          <td>Nobody, not even your contact.</td>
+          <td>Neither contacts nor any server – only the Tor entry node, which does not know who you are talking to.</td>
         </tr>
       </tbody>
     </table>
@@ -102,8 +97,10 @@
   <h2 id="limits">Honest limits</h2>
   <ul>
     <li>For a message to arrive, both devices have to be reachable at the same time at some point – there is no server that keeps it in the meantime.</li>
-    <li>No encryption helps against malware on the phone itself or an unlocked device in someone else's hands.</li>
-    <li>Encryption hides content, not every trace: depending on the connection mode, STUN services or your contact can see your IP address (see above).</li>
+    <li>No encryption helps against malware with full access to the phone. While Malachi is locked, your chat histories are additionally encrypted with a key derived from your app PIN – even if someone holds the unlocked phone. Someone who has the phone and attacks it with special tools can try out a short PIN more easily than a long one. The contact list and your own messages not yet delivered are needed for receiving in the background; they are encrypted only with the device key, not additionally with the PIN.</li>
+    <li>Security updates are provided as long as Malachi is offered – at least until 31 December 2031. The date moves forward by one year every year; we announce an end at least twelve months in advance. Security updates are always free.</li>
+    <li>Encryption hides content, not every trace: with direct connections your contact sees your IP address, and the Tor entry node always sees it (see above). Malachi itself asks no STUN services; only the Tor bridge Snowflake uses its own when Tor is blocked on your network.</li>
+    <li>Without STUN, direct connections work less often on some networks (IPv4 only, mobile data without IPv6, hotel Wi-Fi). Then everything runs over Tor: slower, calls only as voice with delay.</li>
     <li>Malachi has not been reviewed by an independent auditor yet.</li>
     <li>Malachi is currently only available for Android (version 7.0 and later).</li>
   </ul>

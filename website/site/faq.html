@@ -16,7 +16,7 @@
 
 <details>
   <summary>Wie finde ich Kontakte ohne Telefonnummer?</summary>
-  <p>Gar nicht automatisch – und das ist Absicht. Malachi lädt kein Adressbuch hoch und kennt keine Nutzerverzeichnisse. Ihr tauscht eine Einladung aus: am besten persönlich per QR-Code, sonst als Link oder Code über einen Weg, dem ihr vertraut. Vergleicht danach den Sicherheitscode (Schild-Symbol im Chat).</p>
+  <p>Gar nicht automatisch – und das ist Absicht. Malachi lädt kein Adressbuch hoch und kennt keine Nutzerverzeichnisse. Ihr tauscht eine Einladung aus: am besten persönlich per QR-Code, sonst als Link oder Code über einen Weg, dem ihr vertraut. Wer einen Link teilt, sollte danach den Sicherheitscode vergleichen (Schild-Symbol im Chat) – wer den Link unterwegs abfängt, könnte sich sonst dazwischensetzen. Alternativ gebt ihr beide eure Telefonnummern oder eine vereinbarte Kennung (mindestens 8 Zeichen) ein; daraus entsteht ein Treffpunkt im Tor-Netz, die Eingaben werden weder gespeichert noch übertragen.</p>
 </details>
 
 <details>
@@ -26,12 +26,12 @@
 
 <details>
   <summary>Wer kann meine IP-Adresse sehen?</summary>
-  <p>Das hängt vom Verbindungsweg ab (Einstellungen → Verbindungsweg). Im Standard „Schnell“ sehen zwei öffentliche STUN-Dienste deutscher Anbieter und – bei einer Direktverbindung – dein Kontakt deine IP-Adresse, aber keine Inhalte. Bei „Privat“ sieht sie nur dein Kontakt bei einer Direktverbindung. Bei „Maximal anonym (nur Tor)“ (Vollversion) sieht sie niemand. Die Übersicht steht auf der <a href="index.html#wer-sieht-was">Startseite</a>.</p>
+  <p>Das hängt vom Verbindungsweg ab (Einstellungen → Verbindung &amp; Tor). Im Standard „Direkt, wenn möglich“ sieht dein Kontakt deine IP-Adresse – schon wenn eure Geräte versuchen, sich direkt zu verbinden. Malachi fragt dafür keinen STUN-Dienst und keinen Server. Bei „Maximal anonym (nur Tor)“ (Vollversion) sehen sie weder Kontakte noch ein Server. Den Tor-Eintrittsknoten erreicht deine IP-Adresse in jedem Fall, wie bei jeder Tor-Nutzung – er weiß aber nicht, mit wem du sprichst. Nur wenn Tor in deinem Netz gesperrt ist und die Bridge Snowflake einspringt, fragt diese eigene STUN-Server des Tor-Projekts. Die Übersicht steht auf der <a href="index.html#wer-sieht-was">Startseite</a>.</p>
 </details>
 
 <details>
   <summary>Wie ist Malachi verschlüsselt?</summary>
-  <p>Ende-zu-Ende: Nachrichten werden auf deinem Gerät ver- und erst beim Kontakt entschlüsselt. Jede Nachricht bekommt einen eigenen Schlüssel, der nach Gebrauch gelöscht wird (Double Ratchet). Wird ein Gerät kurzzeitig ausgespäht, erholt sich die Verbindung mit den nächsten Nachrichten wieder. Der Schlüsseltausch kombiniert das bewährte X25519 mit ML-KEM-768, einem standardisierten Verfahren, das auch gegen künftige Quantencomputer schützen soll.</p>
+  <p>Ende-zu-Ende: Nachrichten werden auf deinem Gerät ver- und erst beim Kontakt entschlüsselt. Jede Nachricht bekommt einen eigenen Schlüssel, der nach Gebrauch gelöscht wird (Double Ratchet). Wird ein Gerät kurzzeitig ausgespäht, erholt sich die Verbindung mit den nächsten Nachrichten wieder – sofern der Angreifer nicht aktiv eingreift; dagegen hilft der Vergleich des Sicherheitscodes. Jede Verbindung handelt ein Geheimnis mit ML-KEM-768 aus, einem standardisierten Verfahren, das auch gegen künftige Quantencomputer schützen soll; der Double Ratchet verbindet es mit dem bewährten X25519. Das gilt für Nachrichten, Bilder, Dateien und Sprachnachrichten. Sprach- und Videoanrufe sind Ende-zu-Ende verschlüsselt (DTLS-SRTP), aber noch nicht gegen künftige Quantencomputer geschützt.</p>
 </details>
 
 <details>
@@ -41,7 +41,7 @@
 
 <details>
   <summary>Ist Malachi unknackbar?</summary>
-  <p>Nein – das kann keine Software ehrlich versprechen. Malachi baut auf bewährten, öffentlich bekannten Verfahren auf (unter anderem X25519, ML-KEM-768 und XChaCha20-Poly1305) statt auf selbst erfundenen. Malachi wurde bisher aber nicht von einer unabhängigen Stelle geprüft. Gegen Schadsoftware auf dem Gerät oder ein entsperrtes Handy in fremden Händen hilft keine Verschlüsselung.</p>
+  <p>Nein – das kann keine Software ehrlich versprechen. Malachi baut auf bewährten, öffentlich bekannten Verfahren auf (unter anderem X25519, ML-KEM-768 und XChaCha20-Poly1305) statt auf selbst erfundenen. Malachi wurde bisher aber nicht von einer unabhängigen Stelle geprüft. Gegen Schadsoftware mit vollem Zugriff auf das Handy hilft keine Verschlüsselung.</p>
 </details>
 
 <details>
@@ -68,7 +68,7 @@
 
 <details>
   <summary>Wie bekomme ich Updates?</summary>
-  <p>Die App sucht höchstens einmal am Tag über Tor nach einer neuen Version und lädt sie erst, wenn du darauf tippst; neue Versionen erscheinen außerdem auf der <a href="download.html">Download-Seite</a>. Installiere sie einfach über die alte Version; deine Daten bleiben erhalten. Android nimmt ein Update nur an, wenn es mit demselben Schlüssel signiert ist wie die installierte App.</p>
+  <p>Die App sucht höchstens einmal am Tag über Tor nach einer neuen Version und lädt sie erst, wenn du darauf tippst; neue Versionen erscheinen außerdem auf der <a href="download.html">Download-Seite</a>. Installiere sie einfach über die alte Version; deine Daten bleiben erhalten. Android nimmt ein Update nur an, wenn es mit demselben Schlüssel signiert ist wie die installierte App. Sicherheitsupdates gibt es, solange Malachi angeboten wird – mindestens bis zum 31.12.2031. Das Datum rückt jedes Jahr um ein Jahr weiter; ein Ende kündigen wir mindestens zwölf Monate vorher an. Sicherheitsupdates sind immer kostenlos.</p>
 </details>
 
 <details>
@@ -95,7 +95,7 @@
 
 <details>
   <summary>Was passiert mit meinen Chats, wenn ich das Handy verliere?</summary>
-  <p>Deine Chats liegen nur auf deinem Gerät, nicht in einer Cloud und nicht auf einem Server. Ohne das Gerät sind sie weg. Schütze die App mit einer PIN; mit der Vollversion kannst du außerdem festlegen, dass nach fünf falschen PINs alles gelöscht wird.</p>
+  <p>Deine Chats liegen nur auf deinem Gerät, nicht in einer Cloud und nicht auf einem Server. Eine Sicherungskopie bietet Malachi derzeit nicht an – ohne das Gerät sind sie weg. Wer das Handy findet, kommt ohne deine App-PIN nicht an die Verläufe: Sie sind zusätzlich mit einem Schlüssel aus der PIN verschlüsselt, Sprachnachrichten werden nur im Arbeitsspeicher aufgenommen und abgespielt. Ob du 4 oder 6 Stellen wählst, entscheidest du; eine längere PIN ist schwerer durchzuprobieren. Mit der Vollversion kannst du außerdem festlegen, dass nach fünf falschen PINs alles gelöscht wird.</p>
 </details>
 
 </main>

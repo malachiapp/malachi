@@ -21,16 +21,18 @@ Status: 1.0 (Android 7.0+) · License: [AGPL-3.0](LICENSE) · Security: [SECURIT
 ### Connection modes
 | Mode | Behaviour | Who can see your IP address |
 |---|---|---|
-| Fast (default) | Tor, then direct; two public STUN servers help | the two STUN servers (no content, no contacts) and your contact during a direct connection |
-| Private | like Fast, without STUN | only your contact, during a direct connection |
-| Maximum anonymity | Tor only, calls voice-only (Opus over Tor) | nobody, not even your contact |
+| Direct when possible (default) | Tor, then direct over IPv6, the same Wi-Fi or your router's port forwarding (PCP/NAT-PMP/UPnP); otherwise Tor. **No STUN, no TURN** – Malachi asks no third party for its address | your contact – already during a direct connection attempt; the Tor entry node (as with any Tor use, without knowing who you talk to) |
+| Maximum anonymity | Tor only, calls voice-only (Opus over Tor) | neither contacts nor any server – only the Tor entry node |
+
+Malachi itself never contacts a STUN service. The only exception is outside Malachi's own connection code: if Tor is blocked and the built-in Snowflake bridge is used, Snowflake queries STUN servers specified by the Tor Project ([`TorBridges.js`](TorBridges.js)). Location messages carry only coordinates (no reverse geocoding). See [`STUN_AUSSTIEG_PLAN.md`](STUN_AUSSTIEG_PLAN.md).
 
 ## Cryptography
 
 - **Double Ratchet** following the Signal specification, extended with a post-quantum step: **ML-KEM-768** shared secrets are mixed into the root KDF alongside the **X25519** output (PQXDH-style). See [`DoubleRatchet.js`](DoubleRatchet.js), [`RatchetSession.js`](RatchetSession.js), [`RATCHET_DESIGN.md`](RATCHET_DESIGN.md).
 - KDF: HKDF-SHA256 (root), HMAC-SHA256 (chains). AEAD: XChaCha20-Poly1305 with the canonical header as associated data.
 - Only established libraries, no home-made primitives: `@noble/curves`, `@noble/ciphers`, `@noble/hashes` (JavaScript) and Bouncy Castle (ML-KEM-768 and Argon2id in the Android native modules).
-- Per-contact safety code against MITM. Groups are encrypted pairwise; group calls are a mesh with DTLS-SRTP.
+- Safety code against MITM (currently derived from the secret of the current connection, so it changes with every new connection). Groups are encrypted pairwise; group calls are a mesh with DTLS-SRTP.
+- Calls (1:1 and group) use WebRTC DTLS-SRTP with classical ECDHE: end-to-end encrypted, but **not** post-quantum. The post-quantum protection covers messages, media and files.
 - On the device: everything is stored locally and encrypted (per-file keys for media), Secret Chat stays in RAM only, screenshot protection (FLAG_SECURE), clipboard cleared after 60 s, app PIN, emergency (duress) PIN.
 - Updates (website version) are fetched over Tor; the manifest is signed with **Ed25519** and the signing key never touches the server.
 

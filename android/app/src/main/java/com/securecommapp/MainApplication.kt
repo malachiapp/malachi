@@ -6,6 +6,7 @@ import com.securecommapp.clipboard.MalachiClipboardPackage
 import com.securecommapp.license.MalachiLicensePackage
 import com.securecommapp.siegel.MalachiSiegelPackage
 import com.securecommapp.tor.MalachiTorPackage
+import com.securecommapp.vault.MalachiVaultPackage
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
@@ -27,6 +28,7 @@ class MainApplication : Application(), ReactApplication {
           add(MalachiTorPackage())
           add(MalachiLicensePackage())
           add(MalachiSiegelPackage())
+          add(MalachiVaultPackage())
           add(MalachiClipboardPackage())
           add(AppIconPackage())
           add(ScreenSecurityPackage())
