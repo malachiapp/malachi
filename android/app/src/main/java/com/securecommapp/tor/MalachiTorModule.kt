@@ -111,6 +111,29 @@ class MalachiTorModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModul
         internal fun activeSocksPort(): Int =
             if (torCtl != null && sharedStatus == "ON" && socksPort > 0) socksPort else 0
 
+        /** Port aus GETINFO net/listeners/socks ("127.0.0.1:38383"); 0 = keiner offen. */
+        private fun parseSocksPort(listeners: String): Int =
+            Regex(":(\\d+)").findAll(listeners).lastOrNull()?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+        /**
+         * SOCKS-Port neu bei tor erfragen. "DisableNetwork 1" schliesst alle
+         * Listener ausser der Steuerverbindung, "SocksPort auto" oeffnet danach
+         * auf einem NEUEN Zufallsport. Live 2026-10-25 (Pixel 7a): gemerkt war
+         * 45515 (ECONNREFUSED), tor lauschte auf 38383 - nach jedem Netzwechsel
+         * scheiterte so jede neue Tor-Verbindung (Kontakte, Selbsttest,
+         * In-App-Updates) bis zum naechsten tor-Neustart.
+         * Liefert den aktuellen Port (bei Fehler den bisherigen).
+         */
+        internal fun refreshSocksPort(): Int {
+            val c = torCtl ?: return 0
+            val port = try { parseSocksPort(c.getInfo("net/listeners/socks")) } catch (_: Exception) { 0 }
+            if (port > 0 && torCtl === c) {
+                if (port != socksPort) Log.i(TAG, "SOCKS-Port neu erfragt (war veraltet)")
+                socksPort = port
+            }
+            return if (port > 0) port else socksPort
+        }
+
         /**
          * SOCKS5-Aufbau zu einer .onion-Adresse mit eigener Zufalls-Anmeldung je
          * Versuch. tor gibt Verbindungen mit unterschiedlicher SOCKS-Anmeldung
@@ -121,7 +144,19 @@ class MalachiTorModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModul
          * Im companion, damit auch MalachiUpdaterModule ihn nutzen kann (eigene,
          * von allen Kontakt-Verbindungen getrennte Kreise je Update-Abruf).
          */
-        internal fun openIsolatedSocks(onion: String, port: Int, proxyPort: Int, timeoutMs: Int): Socket {
+        internal fun openIsolatedSocks(onion: String, port: Int, proxyPort: Int, timeoutMs: Int): Socket =
+            try {
+                openIsolatedSocksOnce(onion, port, proxyPort, timeoutMs)
+            } catch (e: java.net.ConnectException) {
+                // Nur der Aufbau zum lokalen SOCKS-Port wirft ConnectException
+                // (tors Antworten sind IOException): Port veraltet? Einmal neu
+                // erfragen und mit dem neuen Port wiederholen.
+                val fresh = refreshSocksPort()
+                if (fresh <= 0 || fresh == proxyPort) throw e
+                openIsolatedSocksOnce(onion, port, fresh, timeoutMs)
+            }
+
+        private fun openIsolatedSocksOnce(onion: String, port: Int, proxyPort: Int, timeoutMs: Int): Socket {
             val deadline = System.currentTimeMillis() + timeoutMs
             fun remaining(): Int {
                 val r = deadline - System.currentTimeMillis()
@@ -319,6 +354,8 @@ class MalachiTorModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModul
                 control.setConf("DisableNetwork", "1")
                 Thread.sleep(500)
                 control.setConf("DisableNetwork", "0")
+                // SOCKS-Listener ist jetzt auf einem neuen Port (refreshSocksPort).
+                refreshSocksPort()
                 // Neue Kreise fuer neue Verbindungen erzwingen - alte haengen am
                 // weggefallenen Netz.
                 try { control.signal("NEWNYM") } catch (_: Exception) {}
@@ -348,6 +385,7 @@ class MalachiTorModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModul
                 control.setConf("DisableNetwork", "1")
                 Thread.sleep(300)
                 control.setConf("DisableNetwork", "0")
+                refreshSocksPort()
                 try { control.signal("ACTIVE") } catch (_: Exception) {}
                 promise.resolve(true)
             } catch (e: Exception) {
@@ -668,7 +706,7 @@ class MalachiTorModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModul
                 val c = net.freehaven.tor.control.TorControlConnection(ls.inputStream, ls.outputStream)
                 c.launchThread(true)
                 c.authenticate(ByteArray(0))
-                val port = Regex(":(\\d+)").findAll(c.getInfo("net/listeners/socks")).lastOrNull()?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                val port = parseSocksPort(c.getInfo("net/listeners/socks"))
                 if (port <= 0) throw IllegalStateException("SOCKS-Port noch nicht offen")
                 controlSocket = ls
                 torCtl = c
@@ -1029,7 +1067,10 @@ class MalachiTorModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModul
             try {
                 val total = timeoutMs.coerceIn(5_000, 180_000)
                 val deadline = System.currentTimeMillis() + total
-                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort))
+                // Ueber Javas SOCKS-Proxy ist ein veralteter Port nicht sauber
+                // vom Zielfehler zu trennen - daher vorher frisch erfragen.
+                val livePort = refreshSocksPort().takeIf { it > 0 } ?: proxyPort
+                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", livePort))
                 val s = Socket(proxy)
                 socket = s
                 s.connect(InetSocketAddress.createUnresolved(targetHost, port), total)
