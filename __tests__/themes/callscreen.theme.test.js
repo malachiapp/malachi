@@ -14,8 +14,8 @@ test('statisch: Anrufbildschirm ohne feste Farben (ausser Weiss ueber dem Video)
   expect(call).toMatch(/backgroundColor:P\.surfaceAlt/);
   expect(call).toMatch(/backgroundColor:P\.dangerFill/);
   expect(call).toMatch(/const onSuccess = bestOn\(P\.success\)/);
-  expect(call.match(/'#FFFFFF'/g).length).toBe(3);                // nur overVideo-Zweige
-  expect(call.match(/overVideo \? '#FFFFFF'/g).length).toBe(3);
+  expect(call.match(/'#FFFFFF'/g).length).toBe(4);                // nur overVideo-Zweige (4.: Tor-Hinweis, 1.3.0)
+  expect(call.match(/overVideo \? '#FFFFFF'/g).length).toBe(4);
 });
 
 test('Anrufbildschirm: Annehmen-Symbol auf Erfolgsfarbe in jedem Design lesbar', () => {

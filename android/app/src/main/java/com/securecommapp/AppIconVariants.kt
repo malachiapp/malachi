@@ -41,5 +41,14 @@ object AppIconVariants {
         "elfenbein",
         "champagner",
         "platin",
+        "sternbild",
+        "synthwave",
+        "papierschnitt",
+        "bauhaus",
+        "tiefsee",
+        "kintsugi",
+        "tarnwald",
+        "tarnstadt",
+        "leopard",
     )
 }

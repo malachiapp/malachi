@@ -30,6 +30,8 @@ import * as V from './SiegelVault';
 import { INVITE_PREFIX, ACK_PREFIX, MESSAGE_PREFIX, splitForQr, QrAssembler, siegelKind, isSiegelMedia, MAX_MEDIA_BYTES } from './SiegelCrypto';
 import * as SF from './SiegelFiles';
 import { claimAudio, releaseAudio } from './AppFocus';
+// Aufnehmen, Anhalten/Vorschau, Weiter aufnehmen, Senden - wie in den Chats.
+import { useVoiceDraft, VoiceRecordingBar, VoiceDraftBar } from './VoiceDraft';
 import { getVoicePlayer } from './SecureAudio';
 import { getTheme, subscribeTheme } from './Themes';
 import { forceScreenProtection } from './ScreenSecurity';
@@ -92,10 +94,6 @@ function mediaErrorText(e) {
     case 'too-long': return t('siegel.mediaErr.tooLong');
     default: return errorText(e);
   }
-}
-
-function fmtSecs(s) {
-  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
 function isCancel(e) {
@@ -236,6 +234,7 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
   const [notice, setNotice] = useState('');
   const [pass1, setPass1] = useState('');
   const [pass2, setPass2] = useState('');
+  const [passOld, setPassOld] = useState('');      // Passphrase aendern: bisherige
   const [contacts, setContacts] = useState([]);
   const [qr, setQr] = useState('');
   const [pairName, setPairName] = useState('');
@@ -253,17 +252,13 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
   const [media, setMedia] = useState(null);
   const [sealedOut, setSealedOut] = useState(null); // { path, name } Siegel-Datei zum erneuten Teilen
   const [playing, setPlaying] = useState(false);
-  const [recSecs, setRecSecs] = useState(null);     // null = keine Aufnahme
   const pendingMsg = useRef(null);
   const pendingMedia = useRef(null);
   const playPath = useRef(null);
-  const recPath = useRef(null);
   // An wen der naechste Anhang geht: Kontakt-Fenster oder Absender der gerade
   // gelesenen Nachricht/des gelesenen Anhangs (Antwort).
   const mediaTarget = useRef(null);
   const [plusFor, setPlusFor] = useState(null);     // offenes "+"-Menue (Ziel-Kontakt)
-  const recTimer = useRef(null);
-  const recStart = useRef(0);
 
   // Wiedergabe beenden (Rueckfallweg: Cache-Datei sofort loeschen).
   const stopPlayback = () => {
@@ -276,23 +271,31 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
     setPlaying(false);
   };
   // Audio-Fokus (AppFocus.js): laeuft im Chat gerade eine Sprachnachricht, wird
-  // sie beendet, bevor Siegel abspielt/aufnimmt - und umgekehrt.
-  const stopSiegelAudio = () => { stopPlayback(); cancelRecording(); };
-  // Laufende Aufnahme verwerfen (nichts bleibt zurueck).
-  const cancelRecording = () => {
-    if (recTimer.current) { clearInterval(recTimer.current); recTimer.current = null; }
-    const p = recPath.current;
-    recPath.current = null;
-    if (p) {
-      voice().cancelRecording().catch(() => {});
-      releaseAudio('siegel');
-    }
-    setRecSecs(null);
-  };
+  // sie beendet, bevor Siegel abspielt/aufnimmt - und umgekehrt. Eine laufende
+  // Siegel-Aufnahme wird dabei zur Vorschau (VoiceDraft.yieldAudio).
+  const stopSiegelAudio = async () => { stopPlayback(); await rec.yieldAudio(); };
+  // Sprachnachricht (VoiceDraft.tsx): nur im Arbeitsspeicher, Anhalten zeigt
+  // die Vorschau, dort weiter aufnehmen oder versiegeln.
+  const rec = useVoiceDraft({
+    owner: 'siegel',
+    claim: () => claimAudio('siegel', stopSiegelAudio),
+    maxMs: MAX_RECORD_MS,
+    tempHelpers: SIEGEL_TEMP,
+    beforeUse: () => stopPlayback(),
+    ensurePermission: async () => {
+      if (await V.holdOpen(micAllowed)) return true;
+      setError(t('siegel.perm.mic'));
+      return false;
+    },
+    onTick: () => V.touch(),                       // waehrend Aufnahme/Vorschau offen halten
+    onError: (e) => setError(mediaErrorText(e)),
+  });
+  // Laufende Aufnahme bzw. Vorschau verwerfen (nichts bleibt zurueck).
+  const cancelRecording = () => { rec.cancel(); };
   const discardMedia = () => { stopPlayback(); cancelRecording(); setMedia(null); setSealedOut(null); };
 
   const clearSensitive = () => {
-    setPass1(''); setPass2(''); setInput(''); setCipher(''); setPlain(''); setPlainFrom(''); setPlainId(null); setReply('');
+    setPass1(''); setPass2(''); setPassOld(''); setInput(''); setCipher(''); setPlain(''); setPlainFrom(''); setPlainId(null); setReply('');
     setQr(''); setPaired(null); setCurrent(null); setScan(null); setError(''); setNotice(''); setPairName('');
     setPlusFor(null); mediaTarget.current = null;
     discardMedia();
@@ -332,9 +335,9 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
     return () => { alive = false; };
   }, [visible]);
 
+  // Aufnahme/Vorschau raeumt VoiceDraft beim Verlassen selbst auf.
   useEffect(() => () => {
     stopPlayback();
-    cancelRecording();
     SF.cleanupSiegelTemp();
   }, []);
 
@@ -424,16 +427,39 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
     goHome();
   });
 
+  // Fehlertexte fuer Entsperren und Passphrase-Aendern (gleicher Zaehler).
+  const passErrorText = (r) => {
+    if (r.reason === 'wrong') return t('siegel.wrongPass', { count: r.remaining }) + (r.waitMs ? ' ' + t('siegel.nextTry', { time: fmtWait(r.waitMs) }) : '');
+    if (r.reason === 'wait') return t('siegel.tooMany', { time: fmtWait(r.waitMs) });
+    if (r.reason === 'wiped') return t('siegel.wiped');
+    if (r.reason === 'storage') return t('siegelUi.derSpeicherIstGeradeNicht');
+    if (r.reason === 'nokey') return t('siegel.noKey');
+    return '';
+  };
+
   const doUnlock = () => run(async () => {
     const r = await V.unlock(pass1);
     setPass1('');
     if (r.ok) { goHome(); return; }
-    if (r.reason === 'wrong') setError('Falsche Passphrase. Noch ' + r.remaining + (r.remaining === 1 ? ' Versuch' : ' Versuche') + ', dann wird der Tresor gelöscht.' + (r.waitMs ? ' Nächster Versuch in ' + fmtWait(r.waitMs) + '.' : ''));
-    else if (r.reason === 'wait') setError('Zu viele Fehlversuche – bitte ' + fmtWait(r.waitMs) + ' warten.');
-    else if (r.reason === 'wiped') { setError('Zu viele Fehlversuche: Der Siegel-Tresor wurde gelöscht.'); setView('setup'); }
-    else if (r.reason === 'storage') setError('Der Speicher ist gerade nicht lesbar. Bitte die App neu starten – der Tresor bleibt erhalten.');
-    else if (r.reason === 'nokey') setError('Der Sicherheitsschlüssel dieses Geräts fehlt – dieser Tresor lässt sich nicht mehr öffnen. Du kannst ihn unten löschen und neu einrichten.');
+    if (r.reason === 'wiped') { setError(passErrorText(r)); setView('setup'); return; }
+    const msg = passErrorText(r);
+    if (msg) setError(msg);
     else setView('setup');
+  });
+
+  // Passphrase aendern (Nutzerwunsch 29.10.2026): nur offen UND mit der
+  // bisherigen Passphrase (SiegelVault.changePassphrase).
+  const doChangePass = () => run(async () => {
+    if (pass1 !== pass2) { setError(t('siegel.mismatch')); return; }
+    const problem = V.passphraseProblem(pass1);
+    if (problem) { setError(problem); return; }
+    const r = await V.changePassphrase(passOld, pass1);
+    setPassOld('');
+    if (r.ok) { setPass1(''); setPass2(''); refresh(); setView('list'); setNotice(t('siegel.changePass.done')); return; }
+    if (r.reason === 'same') { setError(t('siegel.changePass.same')); return; }
+    if (r.reason === 'locked') { setPass1(''); setPass2(''); setView('locked'); return; }
+    if (r.reason === 'wiped') { setPass1(''); setPass2(''); setView('setup'); setError(t('siegel.wiped')); return; }
+    setError(passErrorText(r));
   });
 
   const startInvite = () => run(async () => {
@@ -645,45 +671,17 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
 
   const startRecording = (to) => run(async () => {
     if (!canSeal) return;
-    if (recPath.current) return;
+    if (rec.isActive()) return;
     mediaTarget.current = to || current?.id || null;
-    if (!(await V.holdOpen(micAllowed))) { setError('Ohne Mikrofon keine Sprachnachricht.'); return; }
-    await claimAudio('siegel', stopSiegelAudio);
-    recPath.current = 'rec_' + Date.now();
-    try {
-      await voice().startRecording(null, SIEGEL_TEMP);
-    } catch (e) {
-      cancelRecording();
-      throw e;
-    }
-    recStart.current = Date.now();
-    setRecSecs(0);
-    recTimer.current = setInterval(() => {
-      const ms = Date.now() - recStart.current;
-      setRecSecs(Math.floor(ms / 1000));
-      V.touch();                                   // waehrend der Aufnahme offen halten
-      if (ms >= MAX_RECORD_MS) stopRecordingAndSeal();
-    }, 1000);
+    await rec.start();
   }, true);
 
-  // Aufnahme beenden und verschluesseln (Inhalt nur im Arbeitsspeicher).
+  // Senden: Aufnahme bzw. Vorschau (samt weiter aufgenommener Abschnitte)
+  // verschluesseln - Inhalt nur im Arbeitsspeicher.
   const stopRecordingAndSeal = () => run(async () => {
-    const p = recPath.current;
-    if (!p) return;
-    recPath.current = null;
-    if (recTimer.current) { clearInterval(recTimer.current); recTimer.current = null; }
-    let ms = Date.now() - recStart.current;
-    setRecSecs(null);
-    let b64 = '';
-    try {
-      const rec = await voice().stopRecording();
-      b64 = rec.base64 || '';
-      if (rec.durationMs) ms = rec.durationMs;
-    } finally {
-      releaseAudio('siegel');
-    }
-    if (ms < 500 || !b64) return;                  // versehentlich angetippt
-    await sendMedia({ kind: 'audio', mime: 'audio/mp4', name: 'Sprachnachricht.mp4', bytes: SF.b64ToBytes(b64) });
+    const r = await rec.take();
+    if (!r || !r.base64 || r.durationMs < 500) return;   // versehentlich angetippt
+    await sendMedia({ kind: 'audio', mime: 'audio/mp4', name: 'Sprachnachricht.mp4', bytes: SF.b64ToBytes(r.base64) });
   }, true);
 
   // Sprachnachricht abspielen - aus dem Arbeitsspeicher (SecureAudio.js).
@@ -750,8 +748,12 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
 
   const close = () => { V.cancelInvite(); V.lock(); clearSensitive(); onClose?.(); };
 
+  // Zurueck-Taste (onRequestClose unten): dieselbe Wirkung wie der Pfeil in
+  // der Kopfleiste der gerade gezeigten Ansicht - vorher schloss sie immer
+  // ganz Siegel, auch aus einem Kontakt heraus.
+  const headerBack = useRef(null);
   // Kopfleiste wie im Rest der App (Design-Farben der Kopfleiste).
-  const header = (title, back) => (
+  const header = (title, back) => (headerBack.current = back || null, 
     <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 10, backgroundColor: C.headerBg, borderBottomWidth: 0.5, borderBottomColor: C.headerBorder }}>
       <TouchableOpacity onPress={back || close} accessibilityLabel={back ? t('siegelUi.zurueck') : t('siegel.close')} style={{ padding: 6, marginRight: 4 }}>
         <Icon name={back ? 'arrow-left' : 'x'} size={22} color={C.headerIcon} />
@@ -785,17 +787,22 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
   // Antwort unter einer gelesenen Nachricht/einem Anhang.
   const composer = ({ value, setValue, placeholder, to, onSendText }) => {
     const round = { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' };
-    if (recSecs !== null) {
+    const voiceColors = { surfaceAlt: C.surfaceAlt, border: C.border, text: C.text, textSub: C.sub, danger: C.danger,
+      accent: C.accent, onAccent: C.onAccent };
+    if (rec.recording) {
       return (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: C.surface, borderRadius: 22, borderWidth: 1, borderColor: C.danger, padding: 6 }}>
-          <TouchableOpacity accessibilityLabel={t('siegel.discardRecording')} onPress={cancelRecording} style={[round, { backgroundColor: C.border }]}>
-            <Icon name="trash-2" size={18} color={C.text} />
-          </TouchableOpacity>
-          <Text style={{ flex: 1, color: C.text, fontSize: 15 }}>{t('siegelUi.aufnahme', { value: fmtSecs(recSecs) })}</Text>
-          <TouchableOpacity accessibilityLabel={t('siegelUi.sprachnachrichtSenden')} onPress={stopRecordingAndSeal} style={[round, { backgroundColor: C.accent }]}>
-            <Icon name="send" size={18} color={C.onAccent} />
-          </TouchableOpacity>
-        </View>
+        <VoiceRecordingBar colors={voiceColors} secs={rec.recSecs} feed={rec.feed} testPrefix="siegel"
+          onDiscard={cancelRecording} onPause={rec.pause} onSend={stopRecordingAndSeal}
+          labels={{ discard: t('siegel.discardRecording'), send: t('siegelUi.sprachnachrichtSenden'),
+            time: (v) => t('siegelUi.aufnahme', { value: v }) }} />
+      );
+    }
+    if (rec.draft) {
+      return (
+        <VoiceDraftBar colors={voiceColors} draft={rec.draft} playing={rec.playing} position={rec.position} duration={rec.duration}
+          canResume={rec.canResume} testPrefix="siegel"
+          onDiscard={cancelRecording} onPlay={rec.togglePreview} onSeek={rec.seekPreview} onResume={rec.resume} onSend={stopRecordingAndSeal}
+          labels={{ discard: t('siegel.discardRecording'), send: t('siegelUi.sprachnachrichtSenden') }} />
       );
     }
     const hasText = !!String(value || '').trim();
@@ -893,6 +900,7 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
   );
 
   let body = null;
+  headerBack.current = null;   // jede Ansicht setzt ihren Zurueck-Weg ueber header() neu
   if (view === 'loading') {
     body = <ActivityIndicator color={AC} style={{ marginTop: 40 }} />;
   } else if (view === 'setup') {
@@ -924,6 +932,10 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
           {messages}
           <Btn label={t('siegel.unlock')} color={AC} onPress={doUnlock} disabled={busy || !pass1} />
           <View style={{ height: 24 }} />
+          {/* Vergessen: keine Wiederherstellung (auch nicht durch uns) - nur
+              loeschen und neu einrichten. Die Vollversion haengt nicht am
+              Siegel-Tresor und bleibt. */}
+          <Text style={{ color: C.muted, fontSize: 12, lineHeight: 18 }}>{t('siegel.forgotHint')}</Text>
           <Btn label={t('siegel.wipeButton')} outline color={C.danger} onPress={confirmWipe} disabled={busy} />
         </ScrollView>
       </>
@@ -956,7 +968,24 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
           {messages}
           <View style={{ height: 16 }} />
           <Btn label={t('siegel.lock')} outline color={C.sub} onPress={() => V.lock()} />
+          <Btn label={t('siegel.changePass.button')} outline color={C.sub} onPress={() => { setPassOld(''); setPass1(''); setPass2(''); setError(''); setNotice(''); setView('changePass'); }} />
           <Btn label={t('siegel.wipeButton')} outline color={C.danger} onPress={confirmWipe} disabled={busy} />
+        </ScrollView>
+      </>
+    );
+  } else if (view === 'changePass') {
+    const backToList = () => { setPassOld(''); setPass1(''); setPass2(''); setError(''); setView('list'); };
+    body = (
+      <>
+        {header(t('siegel.changePass.button'), backToList)}
+        <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }} keyboardShouldPersistTaps="handled">
+          <Text style={{ color: C.sub, fontSize: 13, lineHeight: 20 }}>{t('siegel.changePass.body')}</Text>
+          <Field value={passOld} onChangeText={setPassOld} secureTextEntry placeholder={t('siegel.changePass.old')} />
+          <Field value={pass1} onChangeText={setPass1} secureTextEntry placeholder={t('siegel.changePass.new1')} />
+          <Field value={pass2} onChangeText={setPass2} secureTextEntry placeholder={t('siegel.changePass.new2')} onSubmitEditing={doChangePass} />
+          <Text style={{ color: C.muted, fontSize: 12, lineHeight: 18 }}>{t('siegel.setup.warning')}</Text>
+          {messages}
+          <Btn label={t('common.save')} color={AC} onPress={doChangePass} disabled={busy || !passOld || !pass1 || !pass2} />
         </ScrollView>
       </>
     );
@@ -1089,7 +1118,14 @@ export default function SiegelScreen({ visible, onClose, accent, initialMessage 
   }
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={() => (scan ? setScan(null) : close())}>
+    <Modal visible={visible} animationType="slide" onRequestClose={() => {
+      if (scan) setScan(null);
+      else if (rec.recording) rec.pause();
+      else if (rec.draft) cancelRecording();
+      else if (plusFor) setPlusFor(null);
+      else if (headerBack.current) headerBack.current();
+      else close();
+    }}>
       <View style={{ flex: 1, backgroundColor: C.bg, paddingBottom: insets.bottom }}
         onTouchStart={() => V.touch()}>
         {!scan && <View style={{ height: insets.top, backgroundColor: C.headerBg }} />}

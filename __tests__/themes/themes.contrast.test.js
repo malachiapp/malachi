@@ -108,10 +108,10 @@ test('unveraendertes Standard-Design: Unterschreitungen exakt wie dokumentiert (
   for (const f of failures(legacy)) expect(f.ratio).toBeGreaterThanOrEqual(2);
 });
 
-test('21 Design-Themen der Vollversion: eigene deutsche Namen, viele helle, verschiedene Paletten', () => {
-  // Wachposten: genau 21 (7 urspruengliche + 7 hellere + 7 Business, Okt. 2026) -
-  // ein neues Thema muss hier bewusst nachgezogen werden.
-  expect(T.PRO_THEMES).toHaveLength(21);
+test('30 Design-Themen der Vollversion: eigene deutsche Namen, viele helle, verschiedene Paletten', () => {
+  // Wachposten: genau 30 (7 urspruengliche + 7 hellere + 7 Business + 9 Artwork,
+  // Okt. 2026) - ein neues Thema muss hier bewusst nachgezogen werden.
+  expect(T.PRO_THEMES).toHaveLength(30);
   const N = T.PRO_THEMES.length;
   const names = T.PRO_THEMES.map(p => p.name);
   expect(new Set(names).size).toBe(N);

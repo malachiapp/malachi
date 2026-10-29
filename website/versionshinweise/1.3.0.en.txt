@@ -1,0 +1,34 @@
+Malachi 1.3 – protection against future quantum computers right from connection setup, a permanent safety code, change your PIN.
+
+Important when updating:
+- All chats, contacts, groups and media are kept.
+- The new protections take effect as soon as both sides have 1.3. You can still reach contacts on an older version as before.
+- During your next two unlocks with your PIN, the PIN vault moves to a new key in the security chip. You don't need to do anything.
+
+Privacy and security:
+- New 30-digit safety code: it belongs to your encrypted session and stays the same even when the connection changes (Tor or direct). Compare it once in person or during a call and confirm it. If it changes later, Malachi warns you. Contacts on an older version still see the previous 16-digit code.
+- Protection against future quantum computers (ML-KEM-768 in addition to X25519) is now also part of the connection key. The chat encryption also mixes in fresh key material regularly (every 24 hours or 100 messages), so this protection keeps renewing itself.
+- Calls are still end-to-end encrypted, but not yet protected against future quantum computers.
+- PIN vault: the key in the security chip now only works while the phone is unlocked (Android 9 and later).
+- Improved outer encryption layer and Tor sign-in: a separate key for each direction, less ambiguous checksums.
+- Crypto library BouncyCastle updated to 1.86; all crypto libraries are pinned to exact versions.
+- Messages with a timer: the chat list only shows "Read-once message" or "Message with timer" instead of the content. Expired messages disappear from all chats after every unlock.
+
+New:
+- Change your app PIN (Settings › Security), only with your current PIN. Wrong attempts count just like on the lock screen.
+- Setting, changing or removing the duress PIN now requires your app PIN (full version).
+- Seal: change your passphrase with the old one. A forgotten passphrase cannot be recovered.
+- Voice messages: pausing shows a preview in the input field, and you can then keep recording – in chats, groups and seal mode. Everything stays in memory.
+- A chat's timer is synced with your contact; the more recent setting wins. Location messages follow the timer.
+- Nine new designs (full version): Constellation, Synthwave, Paper Cut, Bauhaus, Deep Sea, Kintsugi, Digital Camo Forest, Digital Camo Urban and Leopard.
+- Group chats show your own background image or the background colour you picked.
+- The back button now closes whatever you opened last first (selection, search, recording, dialogs).
+
+Fixed:
+- After switching between Wi-Fi and mobile data, new Tor connections failed until Tor restarted.
+- Leaving a chat while recording left the microphone on.
+- Your own voice messages and pictures didn't appear in the chat list; in groups this preview was always in German.
+- The "All / Chats / Groups" filters in the chat list weren't translated.
+- The PIN dialog was partly hidden by the number keyboard.
+
+Security updates are provided as long as Malachi is offered, at least until 31 December 2031.

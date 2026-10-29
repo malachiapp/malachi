@@ -34,13 +34,20 @@
  */
 import EncryptedStorage from 'react-native-encrypted-storage';
 import { Buffer } from 'buffer';
+import { sha256 } from '@noble/hashes/sha2';
+import { hkdf } from '@noble/hashes/hkdf';
 import * as DR from './DoubleRatchet';
 import { secureRandomBytes } from './MessageCrypto';
+import { generateKyberKeypair, kyberEncapsulate, kyberDecapsulate } from './HybridCrypto';
 
 // Hauptschalter (nur fuer Notfaelle): false = keine NEUEN Sitzungen. Bestehende
 // Sitzungen laufen weiter (sonst waere das ein Downgrade).
 export const RATCHET_ENABLED = true;
-export const RATCHET_CAP_VERSION = 1;
+// Faehigkeit im profile_name (caps.ratchet): 1 = Double Ratchet (1.0/1.1),
+// 2 = zusaetzlich regelmaessiges ML-KEM-Nachmischen (V6, siehe unten). Aeltere
+// Gegenseiten pruefen ">= 1" - fuer sie aendert sich nichts.
+export const RATCHET_CAP_VERSION = 2;
+export const RATCHET_PQ_VERSION = 2;
 
 const KEY_PREFIX = 'ratchet_';
 const RECORD_VERSION = 1;
@@ -136,6 +143,10 @@ function normalizeRecord(raw) {
     held: Array.isArray(r.held) ? r.held.filter(isPoolEntry) : [],
     own: Array.isArray(r.own) ? r.own.filter(isPoolEntry) : [],
     ...(r.cap === 0 || r.cap === 1 ? { cap: r.cap } : {}),
+    // V6 (additiv; 1.0/1.1 lassen die Felder beim Lesen weg): Ratchet-Version
+    // der Gegenseite (klebrig) und Zustand des ML-KEM-Nachmischens.
+    ...(r.rv === RATCHET_PQ_VERSION ? { rv: r.rv } : {}),
+    ...(normalizePq(r.pq) ? { pq: normalizePq(r.pq) } : {}),
   };
 }
 
@@ -260,6 +271,195 @@ function takeOwnKems(work, now) {
   return eligible.map((e) => ({ kid: e.kid, secret: e.k }));
 }
 
+// ─── Regelmaessiges ML-KEM-Nachmischen (Krypto-Review 2026-10-25, V6/K-06) ──
+// Bisher kam frisches ML-KEM-Material nur mit einer NEUEN Verbindung in den
+// Ratchet - bei Dauerverbindungen tagelang nicht. Jetzt (nur mit Gegenseiten,
+// die caps.ratchet >= 2 melden; klebrig) bietet jede Seite spaetestens alle
+// 24 h bzw. 100 eigene Nachrichten einen frischen ML-KEM-768-Schluessel an
+// (SPQR-artig, aber ungestueckelt - P2P-Pakete sind gross genug):
+//   A -> B  pq_offer {id, pk}            (durch den Ratchet)
+//   B       kapselt, leitet das Geheimnis ab, traegt es in "held" ein und
+//           SPEICHERT, erst danach:
+//   B -> A  pq_ct {id, ct, kid}          (durch den Ratchet)
+//   A       entkapselt, leitet ab, prueft kid (Schluesselbestaetigung) und
+//           traegt es in "own" ein -> fliesst in A's naechsten DH-Schritt ein
+//           (wie ein Verbindungs-Geheimnis, gleiche Regeln, gleiche Pruefung).
+// Geheimnis = HKDF(ss, salt = SHA-256(lp: Label, id, SHA-256(pk), SHA-256(ct),
+// AD_s), info = "...|secret") - an Angebot, Chiffrat und Sitzung gebunden.
+// Robust: verlorenes Angebot/Antwort -> nach PQ_PENDING_MAX_AGE_MS neues
+// Angebot; passt kid nicht (anderer Sitzungsstand, Manipulation), wird nichts
+// eingemischt - die Gegenseite kaeme sonst nicht mehr mit (kem-unknown).
+// Write-Ahead: offener ML-KEM-Schluessel bzw. held-Eintrag sind gespeichert,
+// bevor die jeweilige Nachricht hinausgeht. Nachrichten pq_* werden nur
+// angenommen, wenn sie durch den Ratchet kamen (WebRTCManager).
+export const PQ_REFRESH_MS = 24 * 60 * 60 * 1000;
+export const PQ_REFRESH_MSGS = 100;
+export const PQ_PENDING_MAX_AGE_MS = 60 * 60 * 1000;
+const PQ_PENDING_MAX = 2;
+const PQ_ACCEPTED_MAX = 16;
+const PQ_ACCEPT_MIN_GAP_MS = 60 * 1000;
+const PQ_LABEL = 'malachi-dr-v2-pq';
+const PQ_ID_RE = /^[0-9a-f]{16}$/;
+const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function normalizePq(p) {
+  if (!p || typeof p !== 'object') return null;
+  const pending = Array.isArray(p.pending)
+    ? p.pending.filter((e) => e && PQ_ID_RE.test(e.id) && typeof e.sk === 'string' && typeof e.ph === 'string' && Number.isFinite(e.t)).slice(-PQ_PENDING_MAX)
+    : [];
+  const acc = Array.isArray(p.acc) ? p.acc.filter((x) => typeof x === 'string' && PQ_ID_RE.test(x)).slice(-PQ_ACCEPTED_MAX) : [];
+  return {
+    pending,
+    acc,
+    last: Number.isFinite(p.last) ? p.last : 0,
+    n: Number.isInteger(p.n) && p.n >= 0 ? p.n : 0,
+    la: Number.isFinite(p.la) ? p.la : 0,
+  };
+}
+
+function lpBuf(u8) {
+  const out = new Uint8Array(4 + u8.length);
+  out[0] = (u8.length >>> 24) & 255; out[1] = (u8.length >>> 16) & 255; out[2] = (u8.length >>> 8) & 255; out[3] = u8.length & 255;
+  out.set(u8, 4);
+  return out;
+}
+function joinBytes(parts) {
+  let n = 0;
+  for (const p of parts) n += p.length;
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+const b64u = (s) => Uint8Array.from(Buffer.from(String(s), 'base64'));
+const b64s = (u8) => Buffer.from(u8).toString('base64');
+
+// Abgeleitetes Nachmisch-Geheimnis (Base64). ad: AD_s der Sitzung (Base64).
+export function derivePqSecret(ssB64, { id, pkHash, ct, ad }) {
+  const salt = sha256(joinBytes([
+    lpBuf(utf8(PQ_LABEL)), lpBuf(utf8(id)), lpBuf(b64u(pkHash)), lpBuf(sha256(b64u(ct))), lpBuf(b64u(ad)),
+  ]));
+  return b64s(hkdf(sha256, b64u(ssB64), salt, utf8(PQ_LABEL + '|secret'), 32));
+}
+
+function ctEqualStr(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
+function pqState(work, now) {
+  if (!work.pq) work.pq = { pending: [], acc: [], last: now, n: 0, la: 0 };
+  work.pq.pending = work.pq.pending.filter((e) => now - e.t <= PQ_PENDING_MAX_AGE_MS && e.t <= now + DAY_MS);
+  return work.pq;
+}
+
+const pqActive = (rec) => !!(rec && !rec.corrupt && rec.rv === RATCHET_PQ_VERSION && rec.s && rec.s.active);
+
+/** Faellig: Gegenseite v2, Sitzung bestaetigt, 24 h bzw. 100 Nachrichten seit dem letzten Mal, kein offenes Angebot. */
+export function pqRefreshDue(chatId) {
+  if (!chatId) return Promise.resolve(false);
+  return withLock(chatId, async () => {
+    const rec = await loadRecord(chatId);
+    if (!pqActive(rec)) return false;
+    const now = Date.now();
+    const pq = rec.pq ? normalizePq(rec.pq) : null;
+    if (!pq) return false;           // Zaehlung beginnt mit dem naechsten Senden (seal)
+    if (pq.pending.some((e) => now - e.t <= PQ_PENDING_MAX_AGE_MS)) return false;
+    return now - pq.last >= PQ_REFRESH_MS || pq.n >= PQ_REFRESH_MSGS;
+  }).catch(() => false);
+}
+
+/** Neues Angebot: ML-KEM-Paar erzeugen, geheimen Teil speichern (Write-Ahead). -> {id, pk} | null */
+export function preparePqOffer(chatId) {
+  if (!chatId) return Promise.resolve(null);
+  const snap = snapshot(chatId);
+  return withLock(chatId, async () => {
+    const rec = await loadRecord(chatId);
+    if (!pqActive(rec)) return null;
+    const kp = await generateKyberKeypair();
+    if (!kp || typeof kp.publicKey !== 'string' || typeof kp.secretKey !== 'string') throw new Error('ML-KEM-Schluessel ungueltig');
+    const id = Buffer.from(await secureRandomBytes(8)).toString('hex');
+    const work = clone(rec);
+    const now = Date.now();
+    const pq = pqState(work, now);
+    pq.pending = [...pq.pending, { id, sk: kp.secretKey, ph: b64s(sha256(b64u(kp.publicKey))), t: now }].slice(-PQ_PENDING_MAX);
+    await commit(chatId, work, snap);
+    return { id, pk: kp.publicKey };
+  });
+}
+
+/**
+ * Angebot der Gegenseite annehmen: kapseln, ableiten, in "held" eintragen und
+ * speichern - erst dann die Antwort liefern (Write-Ahead). -> {id, ct, kid} | null
+ */
+export function acceptPqOffer(chatId, offer) {
+  if (!chatId) return Promise.resolve(null);
+  const snap = snapshot(chatId);
+  return withLock(chatId, async () => {
+    const rec = await loadRecord(chatId);
+    if (!pqActive(rec)) return null;
+    const id = offer?.id;
+    const pk = offer?.pk;
+    if (typeof id !== 'string' || !PQ_ID_RE.test(id) || typeof pk !== 'string' || pk.length > 4096 || !B64_RE.test(pk)) return null;
+    const now = Date.now();
+    const work = clone(rec);
+    const pq = pqState(work, now);
+    if (pq.acc.includes(id)) return null;                          // schon beantwortet
+    if (now - (pq.la || 0) < PQ_ACCEPT_MIN_GAP_MS) return null;    // Flut eines (authentischen) Gegenuebers bremsen
+    const enc = await kyberEncapsulate(pk);
+    if (!enc || typeof enc.sharedSecret !== 'string' || typeof enc.cipherText !== 'string') return null;
+    const secret = derivePqSecret(enc.sharedSecret, { id, pkHash: b64s(sha256(b64u(pk))), ct: enc.cipherText, ad: work.s.ad });
+    const kid = DR.kemId(secret);
+    if (!work.held.some((e) => e.kid === kid)) work.held.push({ kid, k: secret, t: now });
+    pq.acc = [...pq.acc, id].slice(-PQ_ACCEPTED_MAX);
+    pq.la = now;
+    prunePools(work, now);
+    await commit(chatId, work, snap);
+    return { id, ct: enc.cipherText, kid };
+  });
+}
+
+/** Antwort auf das eigene Angebot: entkapseln, ableiten, kid pruefen, in "own" eintragen. -> true | false */
+export function completePqOffer(chatId, answer) {
+  if (!chatId) return Promise.resolve(false);
+  const snap = snapshot(chatId);
+  return withLock(chatId, async () => {
+    const rec = await loadRecord(chatId);
+    if (!pqActive(rec) || !rec.pq) return false;
+    const id = answer?.id;
+    const ct = answer?.ct;
+    if (typeof id !== 'string' || !PQ_ID_RE.test(id) || typeof ct !== 'string' || ct.length > 4096 || !B64_RE.test(ct)
+        || typeof answer?.kid !== 'string' || !DR.KID_RE.test(answer.kid)) return false;
+    const now = Date.now();
+    const work = clone(rec);
+    const pq = pqState(work, now);
+    const p = pq.pending.find((e) => e.id === id);
+    if (!p) return false;
+    pq.pending = pq.pending.filter((e) => e.id !== id);              // so oder so verbraucht
+    let ok = false;
+    try {
+      const ss = await kyberDecapsulate(ct, p.sk);
+      const secret = derivePqSecret(ss, { id, pkHash: p.ph, ct, ad: work.s.ad });
+      const kid = DR.kemId(secret);
+      if (ctEqualStr(kid, answer.kid)) {
+        if (!work.own.some((e) => e.kid === kid)) work.own.push({ kid, k: secret, t: now });
+        pq.last = now;
+        pq.n = 0;
+        ok = true;
+      } else {
+        console.warn('[Ratchet] ML-KEM-Nachmischen: Kennung passt nicht - nichts eingemischt');
+      }
+    } catch (e) {
+      console.warn('[Ratchet] ML-KEM-Nachmischen: Antwort nicht verwendbar -', e?.message || e);
+    }
+    prunePools(work, now);
+    await commit(chatId, work, snap);
+    return ok;
+  });
+}
+
 // ─── Oeffentliche Schnittstelle ─────────────────────────────────────────────
 
 // Laedt den Eintrag vorab in den Speicher (z.B. beim App-Start).
@@ -287,22 +487,39 @@ export function isActive(chatId) {
   });
 }
 
+// Stabiler Sicherheitscode (SafetyNumber.js, Krypto-Review V1): Sitzungs-
+// bindung AD_s und ob die Gegenseite die Sitzung schon bestaetigt hat. Vorher
+// (Sitzung noch im Aufbau, z.B. gleichzeitiger Aufbau beider Seiten) kann sie
+// sich noch aendern - der Code wird erst danach angezeigt. AD_s ist kein
+// Schluessel (nur associated data jeder Nachricht). null = keine Sitzung.
+export function safetySession(chatId) {
+  if (!chatId) return Promise.resolve(null);
+  return withLock(chatId, async () => {
+    const rec = await loadRecord(chatId);
+    if (rec.corrupt || !rec.s || typeof rec.s.ad !== 'string') return null;
+    return { ad: rec.s.ad, active: !!rec.s.active };
+  }).catch(() => null);
+}
+
 // Faehigkeit der Gegenseite (profile_name/handshake caps.ratchet). "Faehig"
 // ist klebrig: ein spaeteres Paket ohne die Angabe nimmt sie nicht zurueck.
-export function notePeerCaps(chatId, capable) {
+export function notePeerCaps(chatId, capable, version = 1) {
   if (!chatId) return Promise.resolve();
   // Loeschstand zum Zeitpunkt des AUFRUFS: auch eine schon angeforderte, aber
   // erst danach laufende Operation speichert nach forget()/forgetAll() nichts.
   const snap = snapshot(chatId);
+  const pqCapable = capable && Number(version) >= RATCHET_PQ_VERSION;
   return withLock(chatId, async () => {
     const rec = await loadRecord(chatId);
     if (rec.corrupt) return;
     if (capable) {
-      if (rec.cap === 1) return;
+      if (rec.cap === 1 && (!pqCapable || rec.rv === RATCHET_PQ_VERSION)) return;
       const work = clone(rec);
       work.cap = 1;
+      // V6: Ratchet v2 der Gegenseite - klebrig wie cap (nie zurueck auf 1).
+      if (pqCapable) work.rv = RATCHET_PQ_VERSION;
       await commit(chatId, work, snap);
-      console.log('[Ratchet] Gegenseite unterstuetzt den Double Ratchet');
+      console.log('[Ratchet] Gegenseite unterstuetzt den Double Ratchet' + (work.rv ? ' (v2, ML-KEM-Nachmischen)' : ''));
     } else {
       if (rec.cap === 1 || rec.cap === 0 || rec.s) return;
       const work = clone(rec);
@@ -381,6 +598,11 @@ export function seal(chatId, plaintext, { connSecret } = {}) {
     // (Grenze fuer den KEM-Vorrat, siehe heldNeededSince). Nur bei der ersten
     // Nachricht einer Kette setzen - ein spaeterer Zeitpunkt waere zu spaet.
     if (env.h.n === 0) work.s.sa = now;
+    // V6: eigene Nachrichten seit dem letzten ML-KEM-Nachmischen zaehlen.
+    if (work.rv === RATCHET_PQ_VERSION) {
+      const pq = pqState(work, now);
+      pq.n = Math.min((pq.n || 0) + 1, 1e6);
+    }
     await commit(chatId, work, snap);
     return env;
   });
@@ -480,6 +702,7 @@ export function resetSession(chatId) {
     try { rec = await loadRecord(chatId); } catch {}
     const work = emptyRecord();
     if (rec && !rec.corrupt && rec.cap === 1) work.cap = 1;
+    if (rec && !rec.corrupt && rec.rv === RATCHET_PQ_VERSION) work.rv = rec.rv;
     await commit(chatId, work, snap);
     console.warn('[Ratchet] Sitzung manuell zurueckgesetzt');
   });

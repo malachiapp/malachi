@@ -38,15 +38,15 @@ const press = async (tree, testID) => {
   await renderer.act(async () => { tree.root.findByProps({ testID }).props.onPress(); });
 };
 
-test('Gratis: alle Themen als Vorschau, 21x PRO, Akzentfarben und Einfaerben-Schalter', async () => {
+test('Gratis: alle Themen als Vorschau, 30x PRO, Akzentfarben und Einfaerben-Schalter', async () => {
   const tree = await renderSection({ pro: false, onChoose: jest.fn(), onOpenPro: jest.fn() });
   const t = textOf(tree);
   expect(t).toContain('DESIGN');
   expect(t).toContain('Standard');
   for (const p of T.PRO_THEMES) expect(t).toContain(p.name);
-  expect(T.PRO_THEMES).toHaveLength(21);
+  expect(T.PRO_THEMES).toHaveLength(30);
   expect(t.match(/"PRO"/g)).toHaveLength(T.PRO_THEMES.length);
-  expect(t).toContain('21 Design-Themen mit Vollversion');
+  expect(t).toContain('30 Design-Themen mit Vollversion');
   expect(t).toContain('Akzentfarbe');
   expect(t).toContain('Kopfleiste und Menü einfärben');
   for (const a of T.FREE_ACCENTS) expect(tree.root.findAllByProps({ testID: 'design-accent-' + a.key }).length).toBeGreaterThan(0);
@@ -83,11 +83,12 @@ test('Picker nach Gruppen: Dunkel (mit Standard vorn), Hell, Business, Artwork -
   await renderer.act(async () => tree.unmount());
 });
 
-test('Picker: Klecks-Muster nur in der Vorschau von "Malachi Artwork", nicht bedienbar', async () => {
+test('Picker: Muster nur in den Vorschauen der Artwork-Designs, nicht bedienbar', async () => {
   const tree = await renderSection({ pro: true, onChoose: jest.fn(), onOpenPro: jest.fn() });
   const layers = tree.root.findAll(n => typeof n.type === 'string' && typeof n.props.testID === 'string' && n.props.testID.startsWith('design-artwork-'));
-  expect(layers.map(n => n.props.testID)).toEqual(['design-artwork-artwork']);
-  expect(layers[0].props.pointerEvents).toBe('none');
+  expect(layers.map(n => n.props.testID)).toEqual(T.PRO_THEMES.filter(p => p.artwork).map(p => 'design-artwork-' + p.id));
+  expect(layers.length).toBe(10);
+  for (const l of layers) expect(l.props.pointerEvents).toBe('none');
   // Antippen der Artwork-Karte waehlt das Thema (Muster faengt nichts ab)
   const onChoose = jest.fn(async () => ({ ok: true }));
   await renderer.act(async () => tree.update(React.createElement(DesignSection, { ProBadge: Badge, pro: true, onChoose, onOpenPro: jest.fn() })));

@@ -960,7 +960,7 @@ async function reprocessPending(groupId) {
 // entschluesselt, Dateischluessel geprueft). Gruppe und Nachrichten-ID stecken
 // in der Zustell-ID; der Absender ist der Kontakt des Kanals - wie bei Texten.
 function mediaPreview(kind) {
-  return kind === 'image' ? '📷 Bild' : '🎤 Sprachnachricht';
+  return kind === 'image' ? t('preview.image') : t('preview.voice');
 }
 async function handleMedia(contactId, msg, { pendingAt = null } = {}) {
   const a = parseAck(msg.msgId);
@@ -1155,7 +1155,7 @@ export async function sendGroupMedia(groupId, { kind, base64, mimeType, duration
   if (dur !== undefined) own.durationMs = dur;
   if (waveText) own.wave = waveText;
   await appendToChat(groupId, [own]);
-  await setPreview(groupId, 'Du: ' + mediaPreview(kind), time, { bump: false });
+  await setPreview(groupId, t('groups.preview.mine', { text: mediaPreview(kind) }), time, { bump: false });
   const payload = kind === 'image' ? { base64, mimeType: mime } : { base64, durationMs: dur || 0, viewOnce: false, ...(waveText ? { wave: waveText } : {}) };
   const results = await fanOut(targets, payload, ackFor('m', groupId, msgId), { groupId }, kind);
   await updateOwnMessage(groupId, msgId, Object.fromEntries(Object.entries(results).map(([mid, ok]) => [mid, ok ? 'queued' : 'failed'])));

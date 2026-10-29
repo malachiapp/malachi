@@ -176,6 +176,11 @@ export function createLevelFeed(limit = 6000) {
     },
     samples() { return samples.slice(); },
     clear() { samples = []; for (const l of [...listeners]) { try { l(samples); } catch {} } },
+    // Aufnahme fortsetzen: Pegel des bisherigen Teils vorab laden (einmal melden).
+    load(list) {
+      samples = (Array.isArray(list) ? list : []).map(Number).filter(Number.isFinite).slice(-limit);
+      for (const l of [...listeners]) { try { l(samples); } catch {} }
+    },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

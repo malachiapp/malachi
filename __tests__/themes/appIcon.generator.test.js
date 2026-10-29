@@ -72,9 +72,9 @@ const rgb = (argb) => '#' + argb.slice(3);
 const geometry = (xml) => xml.replace(/<!--[\s\S]*?-->/, '').replace(/#[0-9A-Fa-f]{8}\b/g, '#COLOR');
 
 describe('Varianten', () => {
-  test('eine Variante je Design (21) + je kostenlose Akzentfarbe (11) + Marken-Standard', () => {
+  test('eine Variante je Design (30) + je kostenlose Akzentfarbe (11) + Marken-Standard', () => {
     expect(V.ICON_VARIANTS).toHaveLength(1 + (T.FREE_ACCENTS.length - 1) + T.PRO_THEMES.length);
-    expect(V.ICON_VARIANTS).toHaveLength(33);
+    expect(V.ICON_VARIANTS).toHaveLength(42);
     expect(new Set(V.ICON_VARIANT_IDS).size).toBe(V.ICON_VARIANT_IDS.length);
     expect(V.ICON_VARIANT_IDS[0]).toBe('klassik');
     expect(V.DEFAULT_ICON_VARIANT).toBe('klassik');

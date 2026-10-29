@@ -21,6 +21,9 @@ const read = (f) => fs.readFileSync(path.join(__dirname, '../..', f), 'utf8');
 const OLD_IDS = ['graphit', 'wald', 'amethyst', 'bernstein', 'bordeaux', 'pergament', 'gletscher'];
 const BRIGHT_IDS = ['kirschbluete', 'lavendel', 'pistazie', 'sonnenschein', 'lagune', 'pfirsich', 'artwork'];
 const BUSINESS_IDS = ['onyx', 'marine', 'schiefer', 'rauchquarz', 'elfenbein', 'champagner', 'platin'];
+// Artwork, zweite Runde (Okt. 2026): je ein eigenes Muster (ChatArtwork.tsx ART)
+const ART2_IDS = ['sternbild', 'synthwave', 'papierschnitt', 'bauhaus', 'tiefsee', 'kintsugi', 'tarnwald', 'tarnstadt', 'leopard'];
+const ART_IDS = ['artwork', ...ART2_IDS];
 
 let warnSpy;
 beforeAll(() => { warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {}); });
@@ -31,12 +34,12 @@ beforeEach(async () => {
 });
 
 describe('Themen-Liste und Gruppen', () => {
-  test('genau 21 Pro-Themen: die bisherigen 7 (ids unveraendert) + 7 hellere + 7 Business', () => {
-    expect(T.PRO_THEMES).toHaveLength(21);
+  test('genau 30 Pro-Themen: die bisherigen 7 (ids unveraendert) + 7 hellere + 7 Business + 9 Artwork', () => {
+    expect(T.PRO_THEMES).toHaveLength(30);
     const ids = T.PRO_THEMES.map(p => p.id);
-    expect(ids).toEqual([...OLD_IDS, ...BRIGHT_IDS, ...BUSINESS_IDS]);
-    expect(new Set(ids).size).toBe(21);
-    expect(new Set(T.PRO_THEMES.map(p => p.name)).size).toBe(21);
+    expect(ids).toEqual([...OLD_IDS, ...BRIGHT_IDS, ...BUSINESS_IDS, ...ART2_IDS]);
+    expect(new Set(ids).size).toBe(30);
+    expect(new Set(T.PRO_THEMES.map(p => p.name)).size).toBe(30);
     expect(T.THEME_IDS).toEqual(['klassik', ...ids]);
     for (const p of T.PRO_THEMES) {
       expect(p.id).toMatch(/^[a-z]+$/);              // stabil, ASCII (wird als themeId gespeichert)
@@ -57,7 +60,7 @@ describe('Themen-Liste und Gruppen', () => {
       ['dunkel', ['graphit', 'wald', 'amethyst', 'bernstein', 'bordeaux']],
       ['hell', ['pergament', 'gletscher', 'kirschbluete', 'lavendel', 'pistazie', 'sonnenschein', 'lagune', 'pfirsich']],
       ['business', BUSINESS_IDS],
-      ['artwork', ['artwork']],
+      ['artwork', ART_IDS],
     ]);
   });
 
@@ -77,7 +80,7 @@ describe('Themen-Liste und Gruppen', () => {
   });
 
   test('Statusleiste passt zur Kopfleiste, Profilbild-Platzhalter lesbar - fuer alle neuen Themen', () => {
-    for (const id of [...BRIGHT_IDS, ...BUSINESS_IDS]) {
+    for (const id of [...BRIGHT_IDS, ...BUSINESS_IDS, ...ART2_IDS]) {
       const t = T.resolveTheme({ themeId: id }, true);
       expect(t.statusBar).toBe(T.statusBarFor(t.headerBg));
       const icon = t.statusBar === 'light-content' ? '#FFFFFF' : '#000000';
@@ -88,7 +91,7 @@ describe('Themen-Liste und Gruppen', () => {
   });
 
   test('gespeicherte Auswahl: alte ids gelten weiter, neue werden verstanden, Unbekanntes faellt auf Standard', () => {
-    for (const id of [...OLD_IDS, ...BRIGHT_IDS, ...BUSINESS_IDS]) {
+    for (const id of [...OLD_IDS, ...BRIGHT_IDS, ...BUSINESS_IDS, ...ART2_IDS]) {
       expect(T.selectionFromSettings(JSON.stringify({ themeId: id })).themeId).toBe(id);
     }
     expect(T.selectionFromSettings({ themeId: 'splatoon' }).themeId).toBe('klassik');
@@ -105,12 +108,12 @@ describe('Themen-Liste und Gruppen', () => {
 describe('Malachi Artwork', () => {
   const art = () => T.resolveTheme({ themeId: 'artwork' }, true);
 
-  test('nur das Artwork-Thema hat ein Muster', () => {
+  test('nur die Artwork-Themen haben ein Muster', () => {
     const withArt = T.PRO_THEMES.filter(p => p.artwork).map(p => p.id);
-    expect(withArt).toEqual(['artwork']);
+    expect(withArt).toEqual(ART_IDS);
     for (const p of T.PRO_THEMES) {
       const t = T.resolveTheme({ themeId: p.id }, true);
-      if (p.id === 'artwork') expect(Array.isArray(t.artworkFills)).toBe(true);
+      if (ART_IDS.includes(p.id)) expect(Array.isArray(t.artworkFills)).toBe(true);
       else expect(t.artworkFills).toBeUndefined();
     }
     expect(T.resolveTheme({}, false).artwork).toBeUndefined();
@@ -162,7 +165,7 @@ describe('Malachi Artwork', () => {
     expect(chatArtworkVisible(T.resolveTheme({ themeId: 'artwork', chatBgPreset: '#FFFFFF' }, true))).toBe(true);
     expect(chatArtworkVisible(T.resolveTheme({ themeId: 'artwork' }, false))).toBe(false);   // ohne Lizenz: Standard
     expect(chatArtworkVisible(T.resolveTheme({}, false))).toBe(false);
-    for (const p of T.PRO_THEMES.filter(x => x.id !== 'artwork')) {
+    for (const p of T.PRO_THEMES.filter(x => !x.artwork)) {
       expect(chatArtworkVisible(T.resolveTheme({ themeId: p.id }, true))).toBe(false);
     }
     expect(chatArtworkVisible(null)).toBe(false);
@@ -196,7 +199,7 @@ describe('Malachi Artwork', () => {
 
   test('Ebene rendert nichts ohne Artwork (andere Themen, Standard, fehlende Farben)', async () => {
     const cases = [
-      ...T.PRO_THEMES.filter(p => p.id !== 'artwork').map(p => T.resolveTheme({ themeId: p.id }, true)),
+      ...T.PRO_THEMES.filter(p => !p.artwork).map(p => T.resolveTheme({ themeId: p.id }, true)),
       T.resolveTheme({}, false),
     ];
     for (const t of cases) {
@@ -218,11 +221,11 @@ describe('Malachi Artwork', () => {
     expect(app).toMatch(/import ChatArtwork, \{ chatArtworkVisible \} from '\.\/ChatArtwork';/);
     const i = app.indexOf('<FlatList ref={ref} data={msgs}');
     const before = app.slice(i - 400, i);
-    expect(before).toMatch(/<View style=\{\{ flex:1 \}\}>\s*\{chatArtworkVisible\(P, \{ secretActive, customBg \}\) && <ChatArtwork kind=\{P\.artwork\} fills=\{P\.artworkFills\} bg=\{P\.chatBg\} \/>\}\s*$/);
+    expect(before).toMatch(/<View style=\{\{ flex:1 \}\}>\s*\{chatArtworkVisible\(P, \{ secretActive, customBg \}\) && <ChatArtwork kind=\{P\.artwork\} fills=\{P\.artworkFills\} glints=\{P\.artworkGlints\} bg=\{P\.chatBg\} \/>\}\s*$/);
     const style = app.slice(i, app.indexOf('\n', app.indexOf('style=', i)));
     expect(style).toMatch(/secretActive \? '#0E0A06' : customBg \|\| chatArtworkVisible\(P, \{ secretActive, customBg \}\) \? 'transparent'/);
     // Wrapper wird direkt nach der Liste geschlossen
-    const end = app.indexOf('{audioPreview && (', i);
+    const end = app.indexOf('{chat?.wiped ? (', i);
     expect(app.slice(end - 40, end)).toMatch(/\/>\s*<\/View>\s*$/);
   });
 });
@@ -286,6 +289,121 @@ describe('Chat-Bildschirm mit Artwork-Design', () => {
     const tree = await renderChat();
     expect(layers(tree)).toHaveLength(1);
     expect(listBg(tree)).toBe('transparent');
+    await renderer.act(async () => tree.unmount());
+  });
+});
+
+describe('Artwork, zweite Runde: neun weitere Muster', () => {
+  const { ART, ARTWORK_KINDS, buildStarsArt, buildSynthArt, buildPaperArt, buildBauhausArt, buildDeepSeaArt, buildKintsugiArt, buildPixelCamoArt, buildLeopardArt } = ChatArtworkModule;
+  const themes = ART2_IDS.map((id) => T.resolveTheme({ themeId: id }, true));
+
+  test('jedes Thema hat sein eigenes Muster; alle Arten bekannt', () => {
+    const kinds = themes.map((t) => t.artwork);
+    expect(new Set(kinds).size).toBe(ART2_IDS.length);
+    for (const k of kinds) { expect(ARTWORK_KINDS).toContain(k); expect(Array.isArray(ART[k])).toBe(true); }
+    expect(ARTWORK_KINDS).toEqual(['splat', ...kinds]);
+  });
+
+  test.each(ART2_IDS)('%s: Muster kontrastarm, Zeitstempel und Schrift darauf lesbar, Blasen deckend', (id) => {
+    const t = T.resolveTheme({ themeId: id }, true);
+    expect(t.artworkInks.length).toBeGreaterThanOrEqual(3);
+    expect(t.artworkFills).toHaveLength(t.artworkInks.length);
+    let visible = 0;
+    for (const c of t.artworkFills) {
+      expect(c).toMatch(/^#[0-9A-F]{6}$/);
+      expect(T.contrastRatio(c, t.chatBg)).toBeLessThanOrEqual(3);
+      if (T.contrastRatio(c, t.chatBg) > 1.15) visible++;
+      expect(T.contrastRatio(t.textMuted, c)).toBeGreaterThanOrEqual(4.5);
+      expect(T.contrastRatio(t.text, c)).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(visible).toBeGreaterThanOrEqual(2);                       // man sieht das Muster
+    for (const k of ['bubbleMine', 'bubbleTheirs', 'surface', 'chatBg']) expect(T.parseColor(t[k]).a).toBe(1);
+    expect(chatArtworkVisible(t)).toBe(true);
+    expect(chatArtworkVisible(t, { customBg: 'file:///bg.jpg' })).toBe(false);
+    expect(chatArtworkVisible(T.resolveTheme({ themeId: id }, false))).toBe(false);   // ohne Lizenz: Standard
+  });
+
+  test('Formen deterministisch, endlich, Tinten-Index im Bereich, Umfang begrenzt', () => {
+    expect(buildStarsArt()).toEqual(ART.stars);
+    expect(buildSynthArt()).toEqual(ART.synth);
+    expect(buildPaperArt()).toEqual(ART.paper);
+    expect(buildBauhausArt()).toEqual(ART.bauhaus);
+    expect(buildDeepSeaArt()).toEqual(ART.deepsea);
+    expect(buildKintsugiArt()).toEqual(ART.kintsugi);
+    expect(buildPixelCamoArt(0xF0E57, 8)).toEqual(ART.pixelwood);
+    expect(buildLeopardArt()).toEqual(ART.leopard);
+    expect(buildStarsArt(1)).not.toEqual(ART.stars);
+    for (const t of themes) {
+      const shapes = ART[t.artwork];
+      expect(shapes.length).toBeGreaterThan(0);
+      expect(shapes.length).toBeLessThanOrEqual(260);
+      for (const sh of shapes) {
+        expect(sh.ink).toBeGreaterThanOrEqual(0);
+        expect(sh.ink).toBeLessThan(t.artworkFills.length);
+        expect(!!sh.d !== !!sh.c).toBe(true);                       // genau eine Geometrie
+        if (sh.d) expect(sh.d).not.toMatch(/NaN|Infinity|undefined/);
+        if (sh.c) for (const v of sh.c) expect(Number.isFinite(v)).toBe(true);
+        if (sh.o !== undefined) { expect(sh.o).toBeGreaterThan(0); expect(sh.o).toBeLessThanOrEqual(1); }
+      }
+    }
+  });
+
+  test('Glanzpunkte: nur winzige Formen, Zeitstempel darauf noch 3:1, sonst die normalen Musterfarben', () => {
+    for (const t of themes) {
+      expect(t.artworkGlints).toHaveLength(t.artworkInks.length);
+      for (const c of t.artworkGlints) {
+        expect(c).toMatch(/^#[0-9A-F]{6}$/);
+        expect(T.contrastRatio(t.textMuted, c)).toBeGreaterThanOrEqual(3);
+      }
+      for (const sh of ART[t.artwork].filter((x) => x.g)) {
+        if (sh.c) expect(sh.c[2]).toBeLessThanOrEqual(3.5);
+        else {
+          const nums = sh.d.match(/-?[\d.]+/g).map(Number);
+          const xs = nums.filter((_, i) => i % 2 === 0), ys = nums.filter((_, i) => i % 2 === 1);
+          expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(20);
+          expect(Math.max(...ys) - Math.min(...ys)).toBeLessThanOrEqual(20);
+        }
+      }
+    }
+  });
+
+  test('Sternbild enthaelt das Malachi-M (vier Linien zwischen fuenf Knoten)', () => {
+    expect(ART.stars.some((s) => s.d === 'M200 501L226 455L252 489L278 455L304 501')).toBe(true);
+  });
+
+  test('Pixel-Tarn: nur achsenparallele Rechtecke auf dem Raster, je Ton ein Pfad, etwa 70 % bedeckt', () => {
+    for (const [kind, cell] of [['pixelwood', 8], ['pixelurban', 7]]) {
+      const shapes = ART[kind];
+      expect(shapes).toHaveLength(3);
+      let area = 0;
+      for (const sh of shapes) {
+        expect(sh.d).toMatch(/^(M\d+ \d+h\d+v\d+h-\d+Z)+$/);
+        for (const m of sh.d.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)/g)) {
+          const [x, y, w, h] = m.slice(1).map(Number);
+          expect(x % cell).toBe(0); expect(y % cell).toBe(0); expect(w % cell).toBe(0); expect(h).toBe(cell);
+          area += w * h;
+        }
+      }
+      const total = Math.ceil(360 / cell) * cell * Math.ceil(760 / cell) * cell;
+      expect(area / total).toBeGreaterThan(0.6);
+      expect(area / total).toBeLessThan(0.8);
+    }
+  });
+
+  test.each(ART2_IDS)('%s: Ebene rendert nicht bedienbar, nur mit den Musterfarben, jede Tinte kommt vor', async (id) => {
+    const t = T.resolveTheme({ themeId: id }, true);
+    let tree;
+    await renderer.act(async () => {
+      tree = renderer.create(React.createElement(ChatArtwork, { kind: t.artwork, fills: t.artworkFills, glints: t.artworkGlints, bg: t.chatBg }));
+    });
+    const layer = tree.root.findAll(n => n.props.testID === 'chat-artwork' && typeof n.type === 'string');
+    expect(layer).toHaveLength(1);
+    expect(layer[0].props.pointerEvents).toBe('none');
+    const { Path, Circle } = require('react-native-svg');
+    const els = [...tree.root.findAllByType(Path), ...tree.root.findAllByType(Circle)];
+    expect(els).toHaveLength(ART[t.artwork].length);
+    const used = new Set(els.map(n => (n.props.fill && n.props.fill !== 'none' ? n.props.fill : n.props.stroke)));
+    for (const c of used) expect([...t.artworkFills, ...t.artworkGlints]).toContain(c);
     await renderer.act(async () => tree.unmount());
   });
 });

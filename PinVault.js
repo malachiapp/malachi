@@ -37,6 +37,25 @@
  *
  * Ohne Tresor (Alt-Installation vor dem ersten Entsperren nach dem Update,
  * fehlendes natives Modul) verhalten sich alle Funktionen exakt wie vorher.
+ *
+ * Chip-Schluessel (Krypto-Review 2026-10-25, V3/K-05): Neue Tresore nutzen
+ * "malachi_pin_v2" mit setUnlockedDeviceRequired (der Chip rechnet nur bei
+ * entsperrtem GERAET - am gesperrten, gerooteten Geraet sind keine
+ * Rateversuche ueber den Chip mehr moeglich). Bestehende Tresore (v1) werden
+ * beim naechsten PIN-Entsperren umgestellt, ohne dass je ein Wert verloren
+ * gehen kann (Datensatz-Feld "key"):
+ *   A  neuer Schluessel, DEK neu gewickelt; der alte Wickel bleibt als
+ *      "prevKey" im Datensatz; Datensatz und Sicherung werden zurueckgelesen
+ *      und geprueft (sonst wird der alte Stand wiederhergestellt).
+ *   B  erst bei einem SPAETEREN Entsperren, das nachweislich mit dem neuen
+ *      Schluessel geklappt hat, faellt prevKey weg und der alte Schluessel wird
+ *      geloescht - ausser der Pruefwert der Notfall-PIN haengt noch an ihm
+ *      ("duressKey"; die Notfall-PIN ist beim Entsperren nicht bekannt). Er
+ *      wird frei, sobald die Notfall-PIN neu gesetzt oder entfernt wird.
+ *   Laesst sich der neue Schluessel spaeter nicht nutzen, oeffnet prevKey den
+ *   Tresor weiterhin und die Umstellung wird zurueckgenommen.
+ * Ein Abbruch an jeder Stelle (App beendet, Speicherfehler) laesst immer einen
+ * Datensatz zurueck, den ein vorhandener Schluessel oeffnet.
  */
 import { NativeModules } from 'react-native';
 import EncryptedStorage from 'react-native-encrypted-storage';
@@ -55,9 +74,21 @@ export const VAULT_PREFIXES = ['chat_', 'gchat_'];
 export const ENC_PREFIX = 'pv1:';
 const SYM_PREFIX = 'pv1:d:';
 const SEALED_PREFIX = 'pv1:s:';
+// Argon2id-Parameter (Krypto-Review V3, bewusst unveraendert): Argon2id haengt
+// nur von PIN und dem lesbaren Salz ab - ein Angreifer rechnet es fuer alle
+// PINs vorab auf eigener Hardware (GPU) aus; seriell am Geraet bleibt nur der
+// Chip-HMAC je Versuch. Hoehere Parameter wuerden also jedes Entsperren
+// spuerbar verlangsamen (schwache Geraete heute ~0,4-0,8 s, geschaetzt), den
+// Angriff aber kaum. Wirksam sind der Chip (jetzt nur bei entsperrtem Geraet)
+// und die Laenge der PIN. Messung am Geraet: Debug-Build, Logcat
+// "MalachiPinKey: Zeit: Argon2id ...".
 export const KDF = { alg: 'argon2id+chip-hmac', memKiB: 32 * 1024, iterations: 3 };
 export const JOURNAL_MAX = 3000;
 const LABEL = 'malachi-pin-vault-v1';
+export const KEY_V1 = 'malachi_pin_v1';
+export const KEY_V2 = 'malachi_pin_v2';
+// Scheitert der neue Chip-Schluessel auf einem Geraet, erst nach dieser Zeit erneut versuchen.
+const KEY_RETRY_MS = 30 * 24 * 60 * 60 * 1000;
 
 const enc = (s) => Uint8Array.from(Buffer.from(String(s), 'utf8'));
 const dec = (u8) => Buffer.from(u8).toString('utf8');
@@ -230,8 +261,34 @@ export function isAvailable() {
   return !!(n && typeof n.createKey === 'function' && typeof n.deriveKey === 'function');
 }
 
-function deriveKek(pin, r) {
-  return native().deriveKey(String(pin), r.salt, r.kdf.memKiB, r.kdf.iterations).then(unb64);
+// Natives Modul mit mehreren Chip-Schluesseln (V3)? Aeltere Attrappen/Builds
+// kennen nur createKey/deriveKey (malachi_pin_v1).
+function hasMultiKey() {
+  const n = native();
+  return !!(n && typeof n.createKeyAlias === 'function' && typeof n.deriveKeys === 'function');
+}
+
+const keyAliasOf = (r) => (r && r.key === KEY_V2 ? KEY_V2 : KEY_V1);
+const duressAliasOf = (r) => (r && (r.duressKey === KEY_V1 || r.duressKey === KEY_V2) ? r.duressKey : keyAliasOf(r));
+const validPrev = (p) => !!p && (p.alias === KEY_V1 || p.alias === KEY_V2) && !!p.wrap?.n && !!p.wrap?.c;
+
+// kek je Chip-Schluessel: Argon2id EINMAL, HMAC mit jedem Schluessel.
+// -> Array aus Uint8Array | null (Schluessel fehlt/nicht nutzbar).
+async function deriveKeks(pin, r, aliases) {
+  if (hasMultiKey()) {
+    const out = await native().deriveKeys(String(pin), r.salt, r.kdf.memKiB, r.kdf.iterations, aliases);
+    if (!Array.isArray(out) || out.length !== aliases.length) throw new Error('Ableitung ungueltig');
+    return out.map((x) => (typeof x === 'string' && x ? unb64(x) : null));
+  }
+  if (aliases.some((a) => a !== KEY_V1)) throw new Error('Chip-Schluessel nicht verfuegbar');
+  const kek = unb64(await native().deriveKey(String(pin), r.salt, r.kdf.memKiB, r.kdf.iterations));
+  return aliases.map((_, i) => (i === 0 ? kek : Uint8Array.from(kek)));
+}
+
+async function deriveKek(pin, r) {
+  const [kek] = await deriveKeks(pin, r, [keyAliasOf(r)]);
+  if (!kek) { const e = new Error('PIN-Schluessel fehlt'); e.code = 'PIN_NO_KEY'; throw e; }
+  return kek;
 }
 
 function duressTag(kek) {
@@ -256,9 +313,18 @@ export async function create(pin, { duressPin = null } = {}) {
   const state = await vaultState();
   if (state === 'present') throw new Error('PIN-Tresor existiert bereits');
   if (state !== 'absent') throw new Error('Speicher nicht lesbar');
-  const security = await native().createKey();
+  let security;
+  let keyFields = {};
+  if (hasMultiKey()) {
+    // V3: neuer Tresor gleich mit dem Schluessel, der nur bei entsperrtem Geraet rechnet.
+    const res = await native().createKeyAlias(KEY_V2, true);
+    security = res?.level;
+    keyFields = { key: KEY_V2, keyFlags: { unlockedRequired: !!res?.unlockedRequired } };
+  } else {
+    security = await native().createKey();
+  }
   const salt = await secureRandomBytes(16);
-  const r = { v: 1, kdf: { ...KDF }, salt: b64(salt), security };
+  const r = { v: 1, kdf: { ...KDF }, salt: b64(salt), security, ...keyFields, len: String(pin).length };
   const kek = await deriveKek(pin, r);
   if (kek.length !== 32) throw new Error('Schluessel ungueltig');
   const dek = await secureRandomBytes(32);
@@ -291,19 +357,144 @@ export async function unlockWithPin(pin) {
   let r;
   try { r = await ready(); } catch { return { ok: false, reason: 'error' }; }
   if (!r) return { ok: false, reason: 'none' };
-  let kek;
+  // Eine Ableitung (Argon2id einmal) fuer alle beteiligten Chip-Schluessel:
+  // Tresor, ggf. Notfall-PIN-Pruefwert und ggf. alter Wickel (Umstellung).
+  const main = keyAliasOf(r);
+  const dAlias = r.duress ? duressAliasOf(r) : null;
+  const prev = validPrev(r.prevKey) ? r.prevKey : null;
+  const aliases = [main];
+  if (dAlias && !aliases.includes(dAlias)) aliases.push(dAlias);
+  if (prev && !aliases.includes(prev.alias)) aliases.push(prev.alias);
+  let keks;
   try {
-    kek = await deriveKek(pin, r);
+    keks = await deriveKeks(pin, r, aliases);
   } catch (e) {
     return { ok: false, reason: e?.code === 'PIN_NO_KEY' ? 'nokey' : 'error' };
   }
+  const kekOf = (a) => keks[aliases.indexOf(a)];
   try {
-    if (r.duress && ctEqual(duressTag(kek), r.duress)) return { ok: false, duress: true };
-    const dek = open(kek, r.wrap, LABEL + '|wrap');
-    if (!dek) return { ok: false, reason: 'wrong' };
-    return unlockWithDek(dek) ? { ok: true } : { ok: false, reason: 'error' };
+    const dk = dAlias ? kekOf(dAlias) : null;
+    if (dk && ctEqual(duressTag(dk), r.duress)) return { ok: false, duress: true };
+    const mk = kekOf(main);
+    const pk = prev ? kekOf(prev.alias) : null;
+    let dek = mk ? open(mk, r.wrap, LABEL + '|wrap') : null;
+    let used = dek ? 'main' : null;
+    if (!dek && pk) {
+      dek = open(pk, prev.wrap, LABEL + '|wrap');
+      if (dek) used = 'prev';
+    }
+    if (!dek) {
+      // Kein nutzbarer Chip-Schluessel: technischer Fehler, kein Fehlversuch.
+      if (!mk && !pk) return { ok: false, reason: 'nokey' };
+      return { ok: false, reason: 'wrong' };
+    }
+    if (!unlockWithDek(dek)) return { ok: false, reason: 'error' };
+    // V3: Chip-Schluessel umstellen bzw. Umstellung abschliessen. Ein Fehler
+    // dabei aendert nichts am Entsperren (der alte Stand bleibt gueltig).
+    try {
+      await advanceKeyMigration(pin, used);
+    } catch (e) {
+      console.warn('[PIN-Tresor] Schluessel-Umstellung nicht abgeschlossen:', e?.message || e);
+    }
+    return { ok: true };
   } finally {
-    kek.fill(0);
+    for (const k of keks) if (k) k.fill(0);
+  }
+}
+
+// ─── Chip-Schluessel-Umstellung (V3) ───────────────────────────────────────
+// Schreibt Datensatz und Sicherung und liest BEIDE zurueck; check(datensatz)
+// muss fuer beide gelten. Sonst Fehler (Aufrufer stellt den alten Stand her).
+async function saveRecordVerified(r, check) {
+  const s = JSON.stringify(r);
+  await EncryptedStorage.setItem(RECORD_KEY, s);
+  await EncryptedStorage.setItem(RECORD_BAK_KEY, s);
+  for (const k of [RECORD_KEY, RECORD_BAK_KEY]) {
+    const back = await EncryptedStorage.getItem(k);
+    let p = null;
+    try { p = back ? JSON.parse(back) : null; } catch { p = null; }
+    if (back !== s || !validRecord(p) || !check(p)) throw new Error('Rueckleseprobe fehlgeschlagen');
+  }
+  rec = r;
+}
+
+const sameBox = (a, b) => !!a && !!b && a.n === b.n && a.c === b.c;
+const sameBytes = (a, b) => !!a && !!b && a.length === b.length && b64(a) === b64(b);
+
+// Alter Schluessel wird nicht mehr gebraucht (kein Wickel, kein Pruefwert)?
+async function dropUnusedOldKey() {
+  if (!hasMultiKey() || !rec || keyAliasOf(rec) !== KEY_V2 || rec.prevKey) return;
+  if (rec.duress && duressAliasOf(rec) === KEY_V1) return;
+  const n = native();
+  const has = typeof n.hasKeyAlias === 'function' ? await n.hasKeyAlias(KEY_V1).catch(() => false) : true;
+  if (has && typeof n.deleteKeyAlias === 'function') await n.deleteKeyAlias(KEY_V1);
+}
+
+async function advanceKeyMigration(pin, used) {
+  if (!hasMultiKey() || !session || !rec) return;
+  const old = rec;
+  const dek = session.dek;
+  if (used === 'prev') {
+    // Neuer Schluessel auf diesem Geraet nicht nutzbar: zurueck auf den alten.
+    const prev = old.prevKey;
+    const { prevKey, keyFlags, key, ...rest } = old;
+    const next = { ...rest, wrap: prev.wrap, keyRetryAt: Date.now() + KEY_RETRY_MS };
+    if (prev.alias === KEY_V2) next.key = KEY_V2;
+    await saveRecordVerified(next, (p) => sameBox(p.wrap, prev.wrap) && !p.prevKey);
+    if (keyAliasOf(next) !== KEY_V2 && duressAliasOf(next) !== KEY_V2) await native().deleteKeyAlias(KEY_V2).catch(() => {});
+    console.warn('[PIN-Tresor] Neuer Chip-Schluessel nicht nutzbar - zurueck auf den bisherigen');
+    return;
+  }
+  if (keyAliasOf(old) === KEY_V2) {
+    // Phase B: dieses Entsperren lief nachweislich ueber den neuen Schluessel.
+    if (old.prevKey) {
+      const { prevKey, ...next } = old;
+      await saveRecordVerified(next, (p) => p.key === KEY_V2 && sameBox(p.wrap, old.wrap) && !p.prevKey);
+      console.log('[PIN-Tresor] Umstellung auf den neuen Chip-Schluessel abgeschlossen');
+    }
+    await dropUnusedOldKey();
+    return;
+  }
+  // Phase A: Tresor haengt noch am alten Schluessel (v1).
+  if (Number.isFinite(old.keyRetryAt) && Date.now() < old.keyRetryAt) return;
+  const created = await native().createKeyAlias(KEY_V2, true);     // ersetzt einen Rest aus einem Abbruch
+  const [k1, k2] = await deriveKeks(pin, old, [KEY_V2, KEY_V2]);
+  try {
+    if (!k1 || !k2 || k1.length !== 32 || !sameBytes(k1, k2)) throw new Error('Chip-Probe fehlgeschlagen');
+    const wrap = await seal(k1, dek, LABEL + '|wrap');
+    const back = open(k1, wrap, LABEL + '|wrap');
+    if (!sameBytes(back, dek)) throw new Error('Wickel-Probe fehlgeschlagen');
+    back.fill(0);
+    const { keyRetryAt, ...base } = old;
+    const next = {
+      ...base,
+      key: KEY_V2,
+      keyFlags: { unlockedRequired: !!created?.unlockedRequired },
+      security: created?.level || old.security,
+      wrap,
+      prevKey: { alias: KEY_V1, wrap: old.wrap },
+    };
+    // Pruefwert der Notfall-PIN bleibt am alten Schluessel, bis sie neu gesetzt wird.
+    if (old.duress) next.duressKey = duressAliasOf(old);
+    const check = (p) => {
+      if (p.key !== KEY_V2 || !validPrev(p.prevKey) || !sameBox(p.prevKey.wrap, old.wrap)) return false;
+      const d = open(k1, p.wrap, LABEL + '|wrap');
+      const ok = sameBytes(d, dek);
+      if (d) d.fill(0);
+      return ok;
+    };
+    try {
+      await saveRecordVerified(next, check);
+    } catch (e) {
+      // Alten Stand wiederherstellen - erst wenn er sicher wieder liegt, den neuen Schluessel weg.
+      await saveRecordVerified(old, (p) => sameBox(p.wrap, old.wrap) && keyAliasOf(p) === KEY_V1);
+      await native().deleteKeyAlias(KEY_V2).catch(() => {});
+      throw e;
+    }
+    console.log('[PIN-Tresor] Neuer Chip-Schluessel angelegt (Umstellung Schritt 1 von 2)');
+  } finally {
+    if (k1) k1.fill(0);
+    if (k2) k2.fill(0);
   }
 }
 
@@ -368,6 +559,13 @@ export async function removeBiometrics() {
 
 export function hasDuressPin() { return !!rec?.duress; }
 
+// Laenge der App-PIN (4 oder 6) laut Tresor-Datensatz; null bei aelteren
+// Datensaetzen ohne Angabe (dann gilt 'pin_length').
+export function pinLength() {
+  const n = Number(rec?.len);
+  return n === 4 || n === 6 ? n : null;
+}
+
 // Notfall-PIN setzen (nur entsperrt). -> 'ok' | 'same' (ist die echte PIN) | 'error'
 export async function setDuressPin(pin) {
   if (!session || !rec) return 'error';
@@ -376,7 +574,11 @@ export async function setDuressPin(pin) {
   try {
     const dek = open(kek, rec.wrap, LABEL + '|wrap');
     if (dek) { dek.fill(0); return 'same'; }
-    await saveRecord({ ...rec, duress: duressTag(kek) });
+    // Pruefwert jetzt am aktuellen Chip-Schluessel (V3) - ein alter, nur noch
+    // dafuer behaltener Schluessel wird damit frei.
+    const { duressKey, ...rest } = rec;
+    await saveRecord({ ...rest, duress: duressTag(kek) });
+    await dropUnusedOldKey().catch(() => {});
     return 'ok';
   } finally {
     kek.fill(0);
@@ -385,8 +587,135 @@ export async function setDuressPin(pin) {
 
 export async function clearDuressPin() {
   if (!rec?.duress) return;
-  const { duress, ...rest } = rec;
+  const { duress, duressKey, ...rest } = rec;
   await saveRecord(rest);
+  await dropUnusedOldKey().catch(() => {});
+}
+
+// Fuer Diagnose/Tests: welcher Chip-Schluessel den Tresor schuetzt.
+export function keyInfo() {
+  if (!rec) return null;
+  return { key: keyAliasOf(rec), pending: !!rec.prevKey, duressKey: rec.duress ? duressAliasOf(rec) : null,
+    unlockedRequired: !!rec.keyFlags?.unlockedRequired };
+}
+
+// Prueft eine PIN gegen den Datensatz genau wie unlockWithPin (V3): Notfall-
+// Pruefwert am Chip-Schluessel, an dem er haengt (duressKey), Tresor-Wickel am
+// aktuellen Schluessel und - waehrend der Umstellung - der alte Wickel
+// (prevKey). Entsperrt nichts. -> { result: 'ok'|'wrong'|'duress'|'nokey', dek? }
+async function checkPinAgainst(pin, r, { wantDek = false } = {}) {
+  const main = keyAliasOf(r);
+  const dAlias = r.duress ? duressAliasOf(r) : null;
+  const prev = validPrev(r.prevKey) ? r.prevKey : null;
+  const aliases = [main];
+  if (dAlias && !aliases.includes(dAlias)) aliases.push(dAlias);
+  if (prev && !aliases.includes(prev.alias)) aliases.push(prev.alias);
+  const keks = await deriveKeks(pin, r, aliases);
+  const kekOf = (a) => keks[aliases.indexOf(a)];
+  try {
+    const dk = dAlias ? kekOf(dAlias) : null;
+    if (dk && ctEqual(duressTag(dk), r.duress)) return { result: 'duress' };
+    const mk = kekOf(main);
+    const pk = prev ? kekOf(prev.alias) : null;
+    let dek = mk ? open(mk, r.wrap, LABEL + '|wrap') : null;
+    if (!dek && pk) dek = open(pk, prev.wrap, LABEL + '|wrap');
+    if (!dek) return { result: !mk && !pk ? 'nokey' : 'wrong' };
+    if (!wantDek) { dek.fill(0); return { result: 'ok' }; }
+    return { result: 'ok', dek };
+  } finally {
+    for (const k of keks) if (k) k.fill(0);
+  }
+}
+
+/**
+ * Prueft die PIN, ohne den Tresor zu oeffnen, zu sperren oder zu loeschen
+ * (Einstellungen: "aktuelle PIN bestaetigen" vor PIN-/Notfall-PIN-Aenderung).
+ * -> 'ok' | 'wrong' | 'duress' (die Notfall-PIN) | 'none' | 'error'
+ * Die Notfall-PIN loest hier nichts aus - was daraus folgt, entscheidet der
+ * Aufrufer (PinChange.js: zaehlt als Fehlversuch).
+ */
+export async function verifyPin(pin) {
+  let r;
+  try { r = await ready(); } catch { return 'error'; }
+  if (!r) return 'none';
+  try {
+    const { result } = await checkPinAgainst(pin, r);
+    return result === 'nokey' ? 'error' : result;
+  } catch {
+    return 'error';
+  }
+}
+
+/**
+ * App-PIN aendern (nur entsperrt, alte PIN noetig). Der Tresorschluessel
+ * (DEK) bleibt derselbe und wird nur neu eingepackt - nichts muss neu
+ * verschluesselt werden, der Fingerabdruck (packt den DEK selbst ein) bleibt
+ * gueltig. Das Salz und die Chip-Schluessel bleiben ebenfalls: der Pruefwert
+ * der Notfall-PIN (an seinem eigenen Chip-Schluessel, duressKey) gilt damit
+ * weiter. Laeuft gerade die Umstellung auf den neuen Chip-Schluessel (V3,
+ * prevKey), wird auch der alte Wickel mit der neuen PIN neu eingepackt - sonst
+ * oeffnete ein Rueckfall auf den alten Schluessel nur noch mit der alten PIN.
+ * Mit dropDuress (andere PIN-Laenge - die Notfall-PIN muss gleich lang sein)
+ * wird der Pruefwert entfernt.
+ * -> 'ok' | 'wrong' (alte PIN falsch) | 'same' | 'duress' (neue PIN = Notfall-PIN) | 'error'
+ */
+export async function changePin(oldPin, newPin, { dropDuress = false } = {}) {
+  if (!session || !rec) return 'error';
+  if (String(oldPin) === String(newPin)) return 'same';
+  const r = rec;
+  let dek = null;
+  const zero = [];
+  try {
+    const old = await checkPinAgainst(oldPin, r, { wantDek: true });
+    if (old.result === 'wrong' || old.result === 'duress') return 'wrong';
+    if (old.result !== 'ok') return 'error';
+    dek = old.dek;
+    const main = keyAliasOf(r);
+    const dAlias = r.duress && !dropDuress ? duressAliasOf(r) : null;
+    const prev = validPrev(r.prevKey) ? r.prevKey : null;
+    const aliases = [main];
+    if (dAlias && !aliases.includes(dAlias)) aliases.push(dAlias);
+    if (prev && !aliases.includes(prev.alias)) aliases.push(prev.alias);
+    const keks = await deriveKeks(newPin, r, aliases);
+    zero.push(...keks);
+    const kekOf = (a) => keks[aliases.indexOf(a)];
+    if (dAlias) {
+      const dk = kekOf(dAlias);
+      if (dk && ctEqual(duressTag(dk), r.duress)) return 'duress';
+    }
+    const mk = kekOf(main);
+    if (!mk || mk.length !== 32) return 'error';
+    const wrap = await seal(mk, dek, LABEL + '|wrap');
+    // Probe vor dem Speichern: die neue PIN muss denselben DEK liefern.
+    const back = open(mk, wrap, LABEL + '|wrap');
+    if (back) zero.push(back);
+    if (!back || !sameBytes(back, dek)) return 'error';
+    // Laenge im selben Datensatz wie die neue PIN: der Sperrbildschirm wertet
+    // eine Eingabe erst bei genau dieser Laenge aus - stuende sie getrennt und
+    // ginge nur einer der beiden Schreibvorgaenge durch, waere man ausgesperrt.
+    const next = { ...r, wrap, len: String(newPin).length };
+    if (prev) {
+      const pk = kekOf(prev.alias);
+      if (pk) {
+        const pwrap = await seal(pk, dek, LABEL + '|wrap');
+        const pback = open(pk, pwrap, LABEL + '|wrap');
+        if (pback) zero.push(pback);
+        if (!pback || !sameBytes(pback, dek)) return 'error';
+        next.prevKey = { ...prev, wrap: pwrap };
+      } else {
+        delete next.prevKey;                     // alter Schluessel nicht nutzbar: Wickel ohnehin wertlos
+      }
+    }
+    if (dropDuress) { delete next.duress; delete next.duressKey; }
+    await saveRecordVerified(next, (p) => sameBox(p.wrap, wrap) && p.len === next.len);
+    if (dropDuress || !next.prevKey) await dropUnusedOldKey().catch(() => {});
+    return 'ok';
+  } catch {
+    return 'error';
+  } finally {
+    if (dek) dek.fill(0);
+    for (const k of zero) if (k) k.fill(0);
+  }
 }
 
 // Sperrt: Tresorschluessel aus dem Arbeitsspeicher.

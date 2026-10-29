@@ -7,10 +7,11 @@ Themenwechsel abgeglichen). Tests: `__tests__/themes/`.
 
 - **Standard** (kostenlos): das bisherige Nachtblau. 12 Akzentfarben, dazu der Schalter
   **„Kopfleiste und Menü einfärben“** (Akzent abgedunkelt in das Nachtblau gemischt).
-- **21 Design-Themen** (Vollversion): vollständige, fest abgestimmte Paletten in vier
+- **30 Design-Themen** (Vollversion): vollständige, fest abgestimmte Paletten in vier
   Gruppen – **Dunkel** (5), **Hell** (8, davon 6 neue freundliche/pastellige),
-  **Business** (7, schlicht-elegant: 4 dunkel, 3 hell) und **Artwork** („Malachi Artwork“,
-  knallige Comic-Tinte mit Klecks-Muster hinter dem Chat). Ohne gültige Lizenz zeigt die
+  **Business** (7, schlicht-elegant: 4 dunkel, 3 hell) und **Artwork** (10, je mit eigenem
+  Muster hinter dem Chat: „Malachi Artwork“ und seit Okt. 2026 Sternbild, Synthwave,
+  Papierschnitt, Bauhaus, Tiefsee, Kintsugi, Digitaltarn Wald, Digitaltarn Stadt, Leopard). Ohne gültige Lizenz zeigt die
   App „Standard“; die Wahl bleibt gespeichert und greift wieder, sobald die Lizenz gültig
   ist. Antippen ohne Vollversion öffnet die Vollversion-Seite („Design-Themen“ steht dort
   in der Funktionsliste).
@@ -144,6 +145,33 @@ Kopfleiste mit Limetten-Symbolen, cremefarbener Hintergrund. Dahinter im Chatver
   ebenfalls zu sehen.
 - Keine eigenen Schriften (keine Font-Dateien im Paket); Blasenform unverändert.
 
+## Artwork, zweite Runde (Okt. 2026)
+
+Neun weitere Designs der Gruppe **Artwork**, jedes mit eigenem Muster aus `ChatArtwork.tsx`
+(`ART`, gleiches Prinzip wie das Klecks-Muster: eine SVG, fest berechnet, nicht bedienbar,
+nur mit dem Design, nie über eigenem Bild oder im Secret Chat):
+
+| Design | Muster (`artwork`) | Idee |
+|---|---|---|
+| Sternbild | `stars` | Nachthimmel, Sternbilder aus Knoten und Linien – eines ist das Malachi-M |
+| Synthwave | `synth` | gestreifte Achtziger-Sonne, Bergkette, perspektivisches Neon-Raster |
+| Papierschnitt | `paper` | Papierwellen oben und unten mit Schattenkante, Konfetti |
+| Bauhaus | `bauhaus` | Kreise, Halb-/Viertelkreise, Quadrate, Dreiecke, Ringe, Streifen in Grundfarben |
+| Tiefsee | `deepsea` | leuchtende Quallen, Partikel mit Schein, Luftblasen, Seegras |
+| Kintsugi | `kintsugi` | verzweigte Goldrisse auf schwarzem Lack, Goldtropfen an den Knoten |
+| Digitaltarn Wald | `pixelwood` | Pixel-Tarnmuster (Rauschen in drei Größen, 4 Töne) in Oliv/Erde |
+| Digitaltarn Stadt | `pixelurban` | dasselbe in Grau und Weiß, feineres Raster |
+| Leopard | `leopard` | elliptische Rosetten aus sichelförmigen Flecken, dunklere Mitte, Tupfen |
+
+- **Lesbarkeit wie bisher**: jede Musterfarbe (`artworkFills`) so kräftig wie möglich, aber
+  Zeitstempel (`textMuted`) darauf ≥ 4,5 : 1, `text` ≥ 4,5 : 1. Nur winzige **Glanzpunkte**
+  (Sterne, Leuchtpartikel; im Muster mit `g` markiert, ≤ 3,5 Einheiten) nutzen die helleren
+  `artworkGlints` mit ≥ 3 : 1 – sie können keine Schrift verdecken.
+- Das Pixel-Tarnmuster fasst gleichfarbige Pixel einer Zeile zu Rechtecken zusammen: je Ton
+  **ein** Pfad, deshalb trotz tausender Pixel billig zu zeichnen.
+- Tests: `__tests__/themes/themes.artwork.test.js` (Kontrast je Musterfarbe, Glanzpunkte,
+  Determinismus, Raster des Tarnmusters, das M im Sternbild, Darstellung).
+
 ## Kostenlose Akzentfarben (Standard-Design)
 
 Schrift auf dem Akzent: Weiß nur, wo es 4,5 : 1 schafft – sonst Nachtblau `#04182F`.
@@ -208,9 +236,9 @@ Launcher-Icon nimmt die Farben des gewählten Designs an. Code: `AppIconVariants
 Zuordnung Design → Icon), `AppIcon.js` (Umschalten), `AppIconModule.kt` (natives Modul
 `MalachiAppIcon`), Generator `tools/gen-theme-icons.js`. Tests: `__tests__/themes/appIcon.*.test.js`.
 
-- **33 Varianten**: das bisherige Marken-Icon (`klassik` = Standard-Design mit Cyan –
+- **42 Varianten**: das bisherige Marken-Icon (`klassik` = Standard-Design mit Cyan –
   Voreinstellung und Rückfall), 11 Standard-Akzente (`klassik_<akzent>`: Marken-Nachtblau,
-  Zeichen im Akzent) und je eines der 21 Design-Themen. „Kopfleiste und Menü einfärben“ ändert
+  Zeichen im Akzent) und je eines der 30 Design-Themen. „Kopfleiste und Menü einfärben“ ändert
   das Icon nicht (sonst doppelt so viele Varianten für einen kaum sichtbaren Unterschied).
 - **Vollversion**: das Icon folgt dem *angezeigten* Design – ohne gültige Lizenz also dem
   Standard-Design (mit der kostenlosen Akzentfarbe), nie einem Pro-Icon.
@@ -284,6 +312,15 @@ Zuordnung Design → Icon), `AppIcon.js` (Umschalten), `AppIconModule.kt` (nativ
 | `elfenbein` | Elfenbein (Pro) | `#FAF7F0` | `#1F3B66` → `#1D304E` | 8,98 | 10,46 |
 | `champagner` | Champagner (Pro) | `#3B2F27` | `#E3C796` → `#9F855D` | 3,08 | 10,23 |
 | `platin` | Platin (Pro) | `#EEF0F3` | `#3A4452` → `#2D353F` | 7,39 | 8,64 |
+| `sternbild` | Sternbild (Pro) | `#070B1D` | `#7C8CFF` → `#A4B0FF` | 5,80 | 11,83 |
+| `synthwave` | Synthwave (Pro) | `#10061C` | `#FF4FAE` → `#FE87CA` | 5,84 | 11,04 |
+| `papierschnitt` | Papierschnitt (Pro) | `#2E6F8E` | `#FFE2C8` → `#BCD1DB` | 3,08 | 5,01 |
+| `bauhaus` | Bauhaus (Pro) | `#1C1C1C` | `#F2C14E` → `#4D76B5` | 3,13 | 13,19 |
+| `tiefsee` | Tiefsee (Pro) | `#020B12` | `#20C7B5` → `#66D8CD` | 8,30 | 13,39 |
+| `kintsugi` | Kintsugi (Pro) | `#0B0B0B` | `#D4AF5A` → `#DFC68D` | 8,35 | 13,89 |
+| `tarnwald` | Digitaltarn Wald (Pro) | `#151912` | `#A9B86E` → `#C2CD99` | 7,07 | 12,48 |
+| `tarnstadt` | Digitaltarn Stadt (Pro) | `#2B3138` | `#E3E7EC` → `#7D8895` | 3,04 | 11,81 |
+| `leopard` | Leopard (Pro) | `#2E1C10` | `#F0B45C` → `#A26B3B` | 3,06 | 12,12 |
 
 Am echten Gerät zu prüfen (kein Build/Emulator in den Tests):
 

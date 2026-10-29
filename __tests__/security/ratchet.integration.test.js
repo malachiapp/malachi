@@ -114,6 +114,7 @@ function loadDevice(name, peerId, role, { oldApp = false } = {}) {
     if (oldApp) jest.dontMock('../../RatchetSession');
   });
   global.__mockDevice = undefined;
+  dev.oldApp = oldApp;
   dev.ready = (async () => {
     if (!(await dev.ES.getItem('contacts'))) {
       await dev.ES.setItem('contacts', JSON.stringify([{ id: peerId, name: peerId, role }]));
@@ -148,17 +149,47 @@ function makeLink() {
   return { a, b, net };
 }
 
+// Eine "alte App-Version" (1.0/1.1) kennt die Felder des Kyber-Handshakes ab
+// 1.2 (ol, kx, x, ck) nicht: sie sendet sie nicht und ignoriert sie beim
+// Empfang. Nachgebildet am Kanal des alten Geraets (Krypto-Review K-09/V5).
+const NEW_KX_FIELDS = ['ol', 'kx', 'x', 'ck'];
+function stripNewKxFields(raw) {
+  try {
+    const m = JSON.parse(raw);
+    if (m?.type === 'system' && (m.subtype === 'kyber_pubkey' || m.subtype === 'kyber_ciphertext')) {
+      for (const f of NEW_KX_FIELDS) delete m[f];
+      return JSON.stringify(m);
+    }
+  } catch {}
+  return raw;
+}
+function asOldApp(ch) {
+  const send = ch.send;
+  ch.send = (d) => send.call(ch, stripNewKxFields(d));
+  let handler = null;
+  Object.defineProperty(ch, 'onmessage', {
+    configurable: true,
+    get: () => handler,
+    set: (fn) => { handler = fn ? (ev) => fn({ ...ev, data: stripNewKxFields(ev.data) }) : fn; },
+  });
+}
+
 // Neue Verbindung MIT echtem Kyber-Ablauf (Alice ist Initiator dieser
 // Verbindung, Bob kapselt) - danach Profil/Faehigkeiten und Warteschlange wie
 // in der App (RTCStore._onKeyExchange, rtc._onReady).
 async function connect(alice, bob) {
   const link = makeLink();
+  if (alice.oldApp) asOldApp(link.a);
+  if (bob.oldApp) asOldApp(link.b);
   const rtcA = new alice.WebRTCManager(() => {}, () => {}, () => {});
   const rtcB = new bob.WebRTCManager(() => {}, () => {}, () => {});
   for (const [dev, rtc, ch, initiator] of [[alice, rtcA, link.a, true], [bob, rtcB, link.b, false]]) {
     rtc.isInitiator = initiator;
     rtc.pc = { iceConnectionState: 'connected', close() {} };
     rtc.dataChannel = ch;
+    // Wie nach der Tor-Anmeldung: Kettenglied = das Geheimnis, mit dem sich
+    // die Verbindung angemeldet hat (Krypto-Review V5, TorTransport.attachSession).
+    rtc._chainSecret = dev.RTCStore.getSharedSecret(dev.peerId);
     dev.RTCStore.setConnection(dev.peerId, rtc);
     rtc._onReady = () => dev.BG.flushQueue(dev.peerId, rtc);
     rtc._setupDataChannel(ch);
@@ -177,11 +208,23 @@ function closeAll(...devs) {
 }
 
 // Innere Schicht der Leitungs-Pakete (Verbindungsschicht mit dem Session-
-// Secret geoeffnet - das kann nur, wer die Verbindung kennt).
+// Secret geoeffnet - das kann nur, wer die Verbindung kennt). Neue Geraete
+// handeln die aeussere Schicht v2 aus (Krypto-Review K-09: Schluessel je
+// Richtung + AAD) - dann je nach Richtung oeffnen.
 function innerOf(dev, raw, session) {
   const msg = JSON.parse(raw);
   if (msg.type !== 'encrypted') return { type: msg.subtype || msg.type, plain: true };
+  if (msg.v === 2) {
+    const p = dev.MC.decryptOuterV2(msg.data, session, 'i2r') || dev.MC.decryptOuterV2(msg.data, session, 'r2i');
+    return JSON.parse(p);
+  }
   return JSON.parse(dev.MC.decryptMsg(msg.data, session));
+}
+// Wie ein Angreifer, der das Verbindungsgeheimnis kennt, ein Paket von Alice
+// (Initiator der Verbindung) an Bob erzeugt - im Format der Verbindung.
+async function sealAsAlice(dev, obj, session, v2 = true) {
+  if (v2) return JSON.stringify({ type: 'encrypted', v: 2, data: await dev.MC.encryptOuterV2(JSON.stringify(obj), session, 'i2r') });
+  return JSON.stringify({ type: 'encrypted', data: await dev.MC.encryptMsg(JSON.stringify(obj), session) });
 }
 
 async function queueOf(dev) {
@@ -365,13 +408,13 @@ describe('Medien mit Dateischluessel', () => {
     link.a.send = (d) => {
       const msg = JSON.parse(d);
       if (!tampered && msg.type === 'encrypted') {
-        const inner = JSON.parse(alice.MC.decryptMsg(msg.data, session));
+        const inner = innerOf(alice, d, session);
         if (inner.type === 'img_chunk' && inner.index === 1) {
           tampered++;
           const ct = Buffer.from(inner.data, 'base64');
           ct[100] ^= 1;
-          alice.MC.encryptMsg(JSON.stringify({ ...inner, data: ct.toString('base64') }), session)
-            .then((data) => origSend.call(link.a, JSON.stringify({ type: 'encrypted', data })));
+          sealAsAlice(alice, { ...inner, data: ct.toString('base64') }, session, msg.v === 2)
+            .then((wire) => origSend.call(link.a, wire));
           return undefined;
         }
       }
@@ -430,9 +473,10 @@ describe('Kompatibilitaet und Downgrade-Schutz', () => {
 
   test('kein Downgrade nach Aktivierung: Nachrichten ohne Ratchet (auch mit gueltiger Verbindungsschicht) werden abgelehnt; Fuellpakete nicht', async () => {
     const { link, session, bobSeen } = await activate(alice, bob);
+    // Gueltige Verbindungsschicht im ausgehandelten Format (v2, K-09) - der
+    // Angreifer kennt das Verbindungsgeheimnis; abwehren muss der Ratchet.
     const inject = async (obj) => {
-      const data = await alice.MC.encryptMsg(JSON.stringify(obj), session);
-      await link.b.onmessage({ data: JSON.stringify({ type: 'encrypted', data }) });
+      await link.b.onmessage({ data: await sealAsAlice(alice, obj, session, true) });
     };
     await inject({ type: 'text', text: 'altes Format', time: Date.now(), msgId: 'dg1' });
     await inject({ type: 'system', subtype: 'clear_chat', ts: Date.now(), ackId: 'dg2' });
@@ -469,7 +513,13 @@ describe('Post-Quanten-Schritt ueber echte Verbindungswechsel', () => {
     const first = await activate(alice, bob);
     first.rtcA.close(); first.rtcB.close();
     const second = await connect(alice, bob);
-    const kid = require('../../DoubleRatchet').kemId(second.session);
+    // Verbindungsschluessel v2 (Krypto-Review V5): der KEM-Beitrag ist ein
+    // eigener, vom aeusseren Schluessel unabhaengiger Teilschluessel.
+    expect(second.rtcA.kxVersion).toBe(2);
+    expect(second.rtcA.kemSecret).toBe(second.rtcB.kemSecret);
+    expect(second.rtcA.kemSecret).not.toBe(second.session);
+    const kid = require('../../DoubleRatchet').kemId(second.rtcA.kemSecret);
+    expect(kid).not.toBe(require('../../DoubleRatchet').kemId(second.session));
     // Bob hat gekapselt -> Vorrat "held"; Alice hat entkapselt -> "own".
     await waitFor(async () => (await record(bob)).held.some((e) => e.kid === kid) || (await record(alice)).s.sendKids?.includes(kid), 3000, 'KEM eingetragen');
     // Ein paar Sprecherwechsel ueber die Warteschlange.
@@ -496,7 +546,7 @@ describe('Krypto-Review V4: KEM-Vorrat ueber eine lange Funkstille', () => {
       first.rtcA.close(); first.rtcB.close();
       // Zweite Verbindung: Alice entkapselt ihr Geheimnis (own), Bob haelt es.
       const second = await connect(alice, bob);
-      const kid = require('../../DoubleRatchet').kemId(second.session);
+      const kid = require('../../DoubleRatchet').kemId(second.rtcA.kemSecret);
       // Alice sendet, Bobs Bestaetigung bringt einen neuen Schluessel -> Alice
       // macht einen DH-Schritt und mischt kid ein, sendet danach aber nichts.
       await sendText(alice, 'vor der Pause', 'p1');

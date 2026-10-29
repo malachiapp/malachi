@@ -1,0 +1,34 @@
+Malachi 1.3 – Schutz gegen künftige Quantencomputer schon beim Verbindungsaufbau, dauerhafter Sicherheitscode, PIN ändern.
+
+Wichtig beim Update:
+- Alle Chats, Kontakte, Gruppen und Medien bleiben erhalten.
+- Die neuen Schutzfunktionen greifen, sobald beide Seiten 1.3 haben. Kontakte mit einer älteren Version erreichst du weiterhin wie bisher.
+- Bei den nächsten zwei Entsperrungen mit deiner PIN zieht der PIN-Tresor auf einen neuen Schlüssel im Sicherheitschip um. Du musst dafür nichts tun.
+
+Datenschutz und Sicherheit:
+- Neuer Sicherheitscode mit 30 Ziffern: Er gehört zu eurer verschlüsselten Sitzung und bleibt gleich, auch wenn die Verbindung wechselt (Tor oder direkt). Vergleicht ihn einmal persönlich oder bei einem Anruf und bestätigt ihn. Ändert er sich später, warnt Malachi. Kontakte mit älterer Version sehen weiter den bisherigen 16-stelligen Code.
+- Der Schutz gegen künftige Quantencomputer (ML-KEM-768 zusätzlich zu X25519) steckt jetzt auch im Verbindungsschlüssel. Die Chat-Verschlüsselung mischt außerdem regelmäßig neues Schlüsselmaterial nach (alle 24 Stunden oder 100 Nachrichten), damit sich dieser Schutz laufend erneuert.
+- Anrufe sind weiterhin Ende-zu-Ende verschlüsselt, aber noch nicht gegen künftige Quantencomputer geschützt.
+- PIN-Tresor: Der Schlüssel im Sicherheitschip rechnet nur noch, solange das Handy entsperrt ist (ab Android 9).
+- Äußere Verschlüsselungsschicht und Anmeldung über Tor verbessert: eigener Schlüssel je Richtung, eindeutigere Prüfwerte.
+- Krypto-Bibliothek BouncyCastle auf 1.86 aktualisiert; alle Krypto-Bibliotheken sind auf exakte Versionen festgelegt.
+- Nachrichten mit Timer: Die Chatliste zeigt nur noch „Einmal lesbare Nachricht“ bzw. „Nachricht mit Timer“ statt des Inhalts. Abgelaufene Nachrichten verschwinden nach jedem Entsperren aus allen Chats.
+
+Neu:
+- App-PIN ändern (Einstellungen › Sicherheit), nur mit der aktuellen PIN. Fehlversuche zählen wie am Sperrbildschirm.
+- Duress-PIN festlegen, ändern oder entfernen geht nur noch mit der App-PIN (Vollversion).
+- Siegel: Passphrase ändern mit der alten Passphrase. Eine vergessene Passphrase lässt sich nicht wiederherstellen.
+- Sprachnachrichten: Anhalten zeigt eine Vorschau im Eingabefeld, danach kannst du weiter aufnehmen – im Chat, in Gruppen und im Siegel-Modus. Alles bleibt im Arbeitsspeicher.
+- Der Timer eines Chats wird mit dem Gegenüber abgeglichen; die jüngere Einstellung gilt. Standort-Nachrichten beachten den Timer.
+- Neun neue Designs (Vollversion): Sternbild, Synthwave, Papierschnitt, Bauhaus, Tiefsee, Kintsugi, Digitaltarn Wald, Digitaltarn Stadt und Leopard.
+- Gruppenchats zeigen dein eigenes Hintergrundbild bzw. die gewählte Hintergrundfarbe.
+- Die Zurück-Taste schließt überall zuerst das zuletzt Geöffnete (Auswahl, Suche, Aufnahme, Dialoge).
+
+Behoben:
+- Nach einem Wechsel zwischen WLAN und Mobilfunk scheiterten neue Tor-Verbindungen, bis Tor neu startete.
+- Wer einen Chat während einer Aufnahme verließ, ließ das Mikrofon an.
+- Eigene Sprachnachrichten und Bilder erschienen nicht in der Chatliste; in Gruppen stand diese Vorschau immer auf Deutsch.
+- Die Filter „Alle / Chats / Gruppen“ in der Chatliste waren nicht übersetzt.
+- Der PIN-Dialog wurde teilweise von der Zifferntastatur verdeckt.
+
+Sicherheitsupdates gibt es, solange Malachi angeboten wird, mindestens bis zum 31.12.2031.

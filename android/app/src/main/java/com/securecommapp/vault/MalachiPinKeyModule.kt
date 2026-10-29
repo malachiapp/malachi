@@ -17,7 +17,9 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.UiThreadUtil
+import com.securecommapp.BuildConfig
 import java.security.KeyStore
 import java.util.concurrent.Executors
 import javax.crypto.Cipher
@@ -46,8 +48,20 @@ import org.bouncycastle.crypto.params.Argon2Parameters
  *    jede Nutzung einzeln) und ungueltig, sobald ein neuer Fingerabdruck
  *    hinzukommt. Er verschluesselt nur eine Kopie des Tresorschluessels.
  *  - Weder PIN noch Ableitungen noch der Tresorschluessel werden geloggt.
+ *  - Krypto-Review 2026-10-25 (V3/K-05): zweiter PIN-Schluessel
+ *    "malachi_pin_v2" mit setUnlockedDeviceRequired(true) (ab Android 9) - der
+ *    Chip rechnet damit nur, solange das GERAET entsperrt ist; ein Angreifer mit
+ *    Root am gesperrten Geraet kann keine Rateversuche mehr anstossen. Neue
+ *    Tresore nutzen ihn, bestehende stellt PinVault.js beim naechsten PIN-
+ *    Entsperren um (neu wickeln, zuruecklesen, pruefen, erst bei einem spaeteren
+ *    Entsperren den alten Schluessel loeschen). deriveKeys rechnet Argon2id nur
+ *    EINMAL und den HMAC mit jedem genannten Schluessel (Notfall-PIN-Pruefwert
+ *    kann waehrend der Umstellung noch am alten haengen).
+ *  - Nur in Debug-Builds: Dauer von Argon2id und Chip-HMAC im Logcat
+ *    ("MalachiPinKey: Zeit ...") - zum Messen am Geraet, nie in Release.
  *
  * JS: NativeModules.MalachiPinKey.{createKey, hasKey, deriveKey, destroyKey,
+ *     createKeyAlias, deriveKeys, hasKeyAlias, deleteKeyAlias,
  *     bioAvailable, bioEnroll, bioUnwrap, bioRemove}
  */
 class MalachiPinKeyModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ctx) {
@@ -55,6 +69,10 @@ class MalachiPinKeyModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMo
     companion object {
         private const val TAG = "MalachiPinKey"
         const val ALIAS = "malachi_pin_v1"
+        const val ALIAS_V2 = "malachi_pin_v2"
+        // Nur diese Schluessel darf JS anlegen/benutzen/loeschen (nie z.B. die
+        // des Siegel-Tresors oder der Lizenz).
+        private val PIN_ALIASES = setOf(ALIAS, ALIAS_V2)
         const val BIO_ALIAS = "malachi_pin_bio_v1"
         private const val KEYSTORE = "AndroidKeyStore"
         private const val MIN_MEM_KIB = 8 * 1024
@@ -77,7 +95,7 @@ class MalachiPinKeyModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMo
                 val level = synchronized(LOCK) {
                     val ks = keyStore()
                     if (ks.containsAlias(ALIAS)) ks.deleteEntry(ALIAS)
-                    generateHmac()
+                    generateHmac(ALIAS, false)
                     securityLevel(ALIAS)
                 }
                 promise.resolve(level)
@@ -120,6 +138,104 @@ class MalachiPinKeyModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMo
         }
     }
 
+    // ─── Mehrere PIN-Schluessel (V3) ───────────────────────────────────────
+
+    /**
+     * Erzeugt den PIN-Schluessel alias neu (ein vorhandener wird ersetzt).
+     * unlockedRequired: setUnlockedDeviceRequired(true) ab Android 9; scheitert
+     * das auf einem Geraet, wird ohne das Merkmal erzeugt (und gemeldet).
+     * -> { level, unlockedRequired }
+     */
+    @ReactMethod
+    fun createKeyAlias(alias: String, unlockedRequired: Boolean, promise: Promise) {
+        if (alias !in PIN_ALIASES) { promise.reject("PIN_ALIAS", "Unbekannter Schluessel"); return }
+        executor.execute {
+            try {
+                val res = synchronized(LOCK) {
+                    val ks = keyStore()
+                    if (ks.containsAlias(alias)) ks.deleteEntry(alias)
+                    val applied = generateHmac(alias, unlockedRequired)
+                    Arguments.createMap().apply {
+                        putString("level", securityLevel(alias))
+                        putBoolean("unlockedRequired", applied)
+                    }
+                }
+                promise.resolve(res)
+            } catch (e: Throwable) {
+                Log.w(TAG, "PIN-Schluessel nicht erzeugbar: ${e.javaClass.simpleName}")
+                promise.reject("PIN_KEY", "PIN-Schluessel nicht erzeugbar", e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun hasKeyAlias(alias: String, promise: Promise) {
+        if (alias !in PIN_ALIASES) { promise.resolve(false); return }
+        executor.execute {
+            try { promise.resolve(keyStore().containsAlias(alias)) } catch (e: Throwable) { promise.resolve(false) }
+        }
+    }
+
+    @ReactMethod
+    fun deleteKeyAlias(alias: String, promise: Promise) {
+        if (alias !in PIN_ALIASES) { promise.reject("PIN_ALIAS", "Unbekannter Schluessel"); return }
+        executor.execute {
+            try {
+                synchronized(LOCK) { keyStore().let { if (it.containsAlias(alias)) it.deleteEntry(alias) } }
+                promise.resolve(true)
+            } catch (e: Throwable) {
+                promise.reject("PIN_KEY", "PIN-Schluessel nicht loeschbar", e)
+            }
+        }
+    }
+
+    /**
+     * Argon2id EINMAL, danach HMAC mit jedem genannten Schluessel.
+     * -> Array (gleiche Reihenfolge) aus Base64 oder null (Schluessel fehlt bzw.
+     * nicht nutzbar - z.B. Geraet gesperrt bei setUnlockedDeviceRequired).
+     */
+    @ReactMethod
+    fun deriveKeys(pin: String, saltB64: String, memKiB: Int, iterations: Int, aliases: ReadableArray, promise: Promise) {
+        executor.execute {
+            var pw: ByteArray? = null
+            try {
+                if (memKiB < MIN_MEM_KIB || memKiB > MAX_MEM_KIB || iterations < 1 || iterations > MAX_ITERATIONS) throw IllegalArgumentException("Parameter")
+                if (aliases.size() < 1 || aliases.size() > 4) throw IllegalArgumentException("Schluessel")
+                val names = (0 until aliases.size()).map { aliases.getString(it) ?: "" }
+                if (names.any { it !in PIN_ALIASES }) throw IllegalArgumentException("Schluessel")
+                val salt = Base64.decode(saltB64, Base64.NO_WRAP)
+                if (salt.size < 16) throw IllegalArgumentException("Salz")
+                val t0 = System.nanoTime()
+                pw = argon2id(pin, salt, memKiB, iterations)
+                val t1 = System.nanoTime()
+                val out = Arguments.createArray()
+                for (name in names) {
+                    val key = try { synchronized(LOCK) { keyStore().getKey(name, null) as? SecretKey } } catch (e: Throwable) { null }
+                    if (key == null) { out.pushNull(); continue }
+                    try {
+                        val mac = Mac.getInstance("HmacSHA256")
+                        mac.init(key)
+                        val r = mac.doFinal(pw)
+                        out.pushString(Base64.encodeToString(r, Base64.NO_WRAP))
+                        r.fill(0)
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "PIN-Schluessel nicht nutzbar: ${e.javaClass.simpleName}")
+                        out.pushNull()
+                    }
+                }
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "Zeit: Argon2id ${(t1 - t0) / 1_000_000} ms, Chip-HMAC x${names.size} ${(System.nanoTime() - t1) / 1_000_000} ms")
+                }
+                promise.resolve(out)
+            } catch (e: Throwable) {
+                Log.w(TAG, "PIN-Schluessel nicht ableitbar: ${e.javaClass.simpleName}")
+                promise.reject("PIN_DERIVE", "PIN-Schluessel nicht ableitbar", e)
+            } finally {
+                pw?.fill(0)
+            }
+        }
+    }
+
     /** Vernichtet PIN- und Fingerabdruck-Schluessel (Loeschen, Notfall-PIN). */
     @ReactMethod
     fun destroyKey(promise: Promise) {
@@ -128,6 +244,7 @@ class MalachiPinKeyModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMo
                 synchronized(LOCK) {
                     val ks = keyStore()
                     if (ks.containsAlias(ALIAS)) ks.deleteEntry(ALIAS)
+                    if (ks.containsAlias(ALIAS_V2)) ks.deleteEntry(ALIAS_V2)
                     if (ks.containsAlias(BIO_ALIAS)) ks.deleteEntry(BIO_ALIAS)
                 }
                 promise.resolve(true)
@@ -277,28 +394,39 @@ class MalachiPinKeyModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMo
     private fun hasStrongBox(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
         reactApplicationContext.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
 
-    private fun generateHmac() {
-        fun spec(strongBox: Boolean): KeyGenParameterSpec {
-            val b = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN)
+    /**
+     * HMAC-Schluessel im Keystore (StrongBox, sonst TEE). unlockedRequired:
+     * setUnlockedDeviceRequired(true) ab Android 9 - wird es auf einem Geraet
+     * nicht angenommen, wird ohne erzeugt. -> ob das Merkmal gesetzt ist.
+     */
+    private fun generateHmac(alias: String, unlockedRequired: Boolean): Boolean {
+        val canUnlocked = unlockedRequired && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+        fun spec(strongBox: Boolean, unlocked: Boolean): KeyGenParameterSpec {
+            val b = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
             if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) b.setIsStrongBoxBacked(true)
+            if (unlocked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) b.setUnlockedDeviceRequired(true)
             return b.build()
         }
-        if (hasStrongBox()) {
-            try {
-                KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, KEYSTORE).apply {
-                    init(spec(strongBox = true))
-                    generateKey()
-                }
-                return
-            } catch (e: Throwable) {
-                Log.i(TAG, "StrongBox nicht nutzbar (${e.javaClass.simpleName}) - TEE")
-                try { keyStore().let { if (it.containsAlias(ALIAS)) it.deleteEntry(ALIAS) } } catch (_: Throwable) {}
+        fun tryGenerate(strongBox: Boolean, unlocked: Boolean): Boolean = try {
+            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, KEYSTORE).apply {
+                init(spec(strongBox, unlocked))
+                generateKey()
             }
+            true
+        } catch (e: Throwable) {
+            Log.i(TAG, "Schluessel nicht erzeugbar (StrongBox=$strongBox, entsperrt=$unlocked, ${e.javaClass.simpleName})")
+            try { keyStore().let { if (it.containsAlias(alias)) it.deleteEntry(alias) } } catch (_: Throwable) {}
+            false
         }
-        KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, KEYSTORE).apply {
-            init(spec(strongBox = false))
-            generateKey()
+        val order = buildList {
+            if (hasStrongBox()) { if (canUnlocked) add(true to true); add(true to false) }
+            if (canUnlocked) add(false to true)
+            add(false to false)
         }
+        for ((strongBox, unlocked) in order) {
+            if (tryGenerate(strongBox, unlocked)) return unlocked
+        }
+        throw IllegalStateException("Kein PIN-Schluessel erzeugbar")
     }
 
     private fun generateBioKey() {

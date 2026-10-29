@@ -19,7 +19,7 @@
 import React from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, Alert, KeyboardAvoidingView,
-  Dimensions, Image, Modal, PermissionsAndroid, I18nManager,
+  Dimensions, Image, Modal, PermissionsAndroid, I18nManager, StyleSheet,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
 import RNFS from 'react-native-fs';
@@ -30,8 +30,11 @@ import {
   isReadOnlyChannel, incomingIntroCount,
 } from './GroupMessaging';
 import { getLicenseState, subscribeLicense } from './LicenseManager';
-import { levelsFor, encodeWave, createLevelFeed, effectiveWaveStyle, subscribeWaveStyle } from './VoiceWave';
-import VoiceWaveView, { LiveRecordingWave } from './VoiceWaveView';
+import { levelsFor, effectiveWaveStyle, subscribeWaveStyle } from './VoiceWave';
+import VoiceWaveView from './VoiceWaveView';
+// Aufnehmen, Anhalten/Vorschau, Weiter aufnehmen, Senden - wie im 1:1-Chat.
+import { useVoiceDraft, VoiceRecordingBar, VoiceDraftBar } from './VoiceDraft';
+import { useBackHandler } from './BackStack';
 import { mediaData } from './MediaVault';
 import { GroupAvatar, DEFAULT_PALETTE, gs } from './GroupScreens';
 import { ensureContrast } from './Themes';
@@ -138,20 +141,17 @@ function GroupVaultImage({ scope, item, style, onOpen }) {
   );
 }
 
-export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail, fontSize, palette = DEFAULT_PALETTE, accent = DEFAULT_PALETTE.green }) {
+export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail, fontSize, palette = DEFAULT_PALETTE, accent = DEFAULT_PALETTE.green, customBg = null }) {
   const groupId = group?.groupId || null;
   const mediaScope = groupId ? groupMediaScope(groupId) : null;   // Audit G1 (MediaVault.js)
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
   const [, tick] = React.useReducer(x => x + 1, 0);
   const [viewer, setViewer] = React.useState(null);        // data:-URI des vergroesserten Bildes
-  const [recSecs, setRecSecs] = React.useState(null);      // null = keine Aufnahme
   const [playingId, setPlayingId] = React.useState(null);
   const [playPos, setPlayPos] = React.useState({ position: 0, duration: 0 });
-  // Sprachnachrichten wie im 1:1-Chat (VoiceWave.js): Pegel beim Aufnehmen,
-  // Wellenform in der Blase, Stil aus den Einstellungen.
-  const levelFeed = React.useRef(null);
-  if (!levelFeed.current) levelFeed.current = createLevelFeed();
+  // Sprachnachrichten wie im 1:1-Chat (VoiceWave.js): Wellenform in der
+  // Blase, Stil aus den Einstellungen.
   const [waveStyle, setWaveStyle] = React.useState(() => effectiveWaveStyle(getLicenseState().pro === true));
   React.useEffect(() => {
     const update = () => setWaveStyle(effectiveWaveStyle(getLicenseState().pro === true));
@@ -160,9 +160,6 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
     return () => { offStyle(); try { offLicense?.(); } catch {} };
   }, []);
   const listRef = React.useRef(null);
-  const recPath = React.useRef(null);
-  const recStart = React.useRef(0);
-  const recTimer = React.useRef(null);
   const playPath = React.useRef(null);
   // Gruppenanruf: eigener Zustand bzw. laufender Anruf dieser Gruppe.
   const [callSnap, setCallSnap] = React.useState(getGroupCallSnapshot());
@@ -226,23 +223,39 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
     voice().stop().catch(() => {});
     releaseAudio('group');
   };
-  const cancelRecording = () => {
-    clearInterval(recTimer.current);
-    recTimer.current = null;
-    const active = recPath.current;
-    recPath.current = null;
-    setRecSecs(null);
-    levelFeed.current.clear();
-    if (!active) return;
-    voice().cancelRecording().catch(() => {});
-    releaseAudio('group');
-  };
-  const stopGroupAudio = () => { stopPlayback(); cancelRecording(); };
-  React.useEffect(() => () => { stopPlayback(); cancelRecording(); }, []);   // beim Verlassen: nichts liegen lassen
+  // Aufnahme (VoiceDraft.tsx): nur im Arbeitsspeicher; Anhalten zeigt die
+  // Vorschau, dort weiter aufnehmen oder senden. Braucht eine andere Stelle
+  // (Siegel, 1:1-Chat) Mikrofon oder Spieler, wird die Aufnahme zur Vorschau.
+  const stopGroupAudio = async () => { stopPlayback(); await rec.yieldAudio(); };
+  const rec = useVoiceDraft({
+    owner: 'group',
+    claim: () => claimAudio('group', stopGroupAudio),
+    maxMs: MAX_RECORD_MS,
+    tempHelpers: GROUP_TEMP,
+    beforeUse: () => stopPlayback(),
+    ensurePermission: async () => {
+      const granted = await withAutoLockSuspended(() => PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        { title: t('common.microphone'), message: t('groupChatUi.malachiBenoetigtMikrofonZugriffFuer'), buttonPositive: 'OK' },
+      ));
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert(t('common.microphone'), t('groupChatUi.ohneMikrofonZugriffKeineSprachnachricht'));
+        return false;
+      }
+      return true;
+    },
+    onError: () => Alert.alert(t('common.voiceMessage'), t('groupChatUi.dieAufnahmeKonnteNichtGestartet')),
+  });
+  React.useEffect(() => () => { stopPlayback(); }, []);   // beim Verlassen: nichts liegen lassen (Aufnahme: VoiceDraft)
+  // Zurueck-Taste (BackStack.js): Aufnahme -> Vorschau, Vorschau -> verwerfen,
+  // erst danach zurueck zur Liste.
+  useBackHandler(rec.recording, () => { rec.pause(); });
+  useBackHandler(!!rec.draft && !rec.recording, () => { rec.discard(); });
 
   const togglePlay = async (item, startMs = 0) => {
     if (playingId === item.id) { stopPlayback(); return; }
     stopPlayback();
+    await rec.yieldAudio();      // laufende Aufnahme -> Vorschau, Vorschau-Wiedergabe aus
     try {
       await claimAudio('group', stopGroupAudio);
       const data = await mediaData(mediaScope, item);   // Audit G1: RAM oder Ablage
@@ -274,56 +287,15 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
     setPlayPos((p) => ({ ...p, position: f * total }));
   };
 
-  const startRecording = async () => {
-    if (readOnly || recPath.current) return;
-    try {
-      const granted = await withAutoLockSuspended(() => PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-        { title: t('common.microphone'), message: t('groupChatUi.malachiBenoetigtMikrofonZugriffFuer'), buttonPositive: 'OK' },
-      ));
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        Alert.alert(t('common.microphone'), t('groupChatUi.ohneMikrofonZugriffKeineSprachnachricht'));
-        return;
-      }
-      stopPlayback();
-      await claimAudio('group', stopGroupAudio);
-      recPath.current = 'rec_' + Date.now();
-      levelFeed.current.clear();
-      await voice().startRecording((db) => levelFeed.current?.push(db), GROUP_TEMP);
-      recStart.current = Date.now();
-      setRecSecs(0);
-      recTimer.current = setInterval(() => {
-        const ms = Date.now() - recStart.current;
-        setRecSecs(Math.floor(ms / 1000));
-        if (ms >= MAX_RECORD_MS) sendRecording();
-      }, 500);
-    } catch {
-      cancelRecording();
-      Alert.alert(t('common.voiceMessage'), t('groupChatUi.dieAufnahmeKonnteNichtGestartet'));
-    }
-  };
+  const startRecording = () => { if (!readOnly) rec.start(); };
 
+  // Senden - waehrend der Aufnahme direkt, sonst die Vorschau (samt
+  // weiter aufgenommener Abschnitte).
   const sendRecording = async () => {
-    if (!recPath.current) return;
-    clearInterval(recTimer.current);
-    recTimer.current = null;
-    recPath.current = null;
-    setRecSecs(null);
-    const elapsed = Date.now() - recStart.current;
-    const wave = encodeWave(levelFeed.current.samples()) || undefined;
-    levelFeed.current.clear();
-    let base64 = null;
-    let durationMs = elapsed;
-    try {
-      const rec = await voice().stopRecording();
-      base64 = rec.base64 || null;
-      if (rec.durationMs) durationMs = rec.durationMs;
-    } catch {} finally {
-      releaseAudio('group');
-    }
-    if (!base64 || durationMs < 600) return;  // versehentlich angetippt
-    const r = await sendGroupMedia(groupId, { kind: 'audio', base64, durationMs, wave }).catch(() => ({ error: 'send' }));
-    reportSendError(r);
+    const r = await rec.take();
+    if (!r || !r.base64 || r.durationMs < 600) return;  // versehentlich angetippt
+    const res = await sendGroupMedia(groupId, { kind: 'audio', base64: r.base64, durationMs: r.durationMs, wave: r.wave }).catch(() => ({ error: 'send' }));
+    reportSendError(res);
     setTimeout(() => listRef.current?.scrollToEnd({ animated:true }), 100);
   };
 
@@ -455,6 +427,8 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
 
   const hasText = !!text.trim();
   const round = { width:40, height:40, borderRadius:20, alignItems:'center', justifyContent:'center' };
+  const voiceColors = { surfaceAlt: palette.surfaceAlt, border: palette.border, text: palette.text, textSub: palette.textSub || palette.textMuted,
+    danger: C.danger, dangerFill: C.dangerFill, onDanger: C.onDanger, accent: C.accent, onAccent: C.onAccent };
 
   return (
     <KeyboardAvoidingView style={{ flex:1 }} behavior="height">
@@ -512,11 +486,14 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
           </TouchableOpacity>
         ) : null}
 
-        {/* Design "Malachi Artwork": dasselbe Klecks-Muster wie im 1:1-Chat */}
+        {/* Chat-Hintergrund wie im 1:1-Chat (Fehler bis 29.10.2026: eigenes
+            Hintergrundbild und gewaehlte Hintergrundfarbe fehlten in Gruppen):
+            eigenes Bild > Artwork-Muster des Designs > gewaehlte Farbe > Design */}
         <View style={{ flex:1 }}>
-        {chatArtworkVisible(palette) && <ChatArtwork kind={palette.artwork} fills={palette.artworkFills} bg={palette.chatBg} />}
+        {!!customBg && <Image testID="group-custom-bg" source={{ uri: customBg }} style={StyleSheet.absoluteFill} resizeMode="cover" />}
+        {chatArtworkVisible(palette, { customBg }) && <ChatArtwork kind={palette.artwork} fills={palette.artworkFills} glints={palette.artworkGlints} bg={palette.chatBg} />}
         <FlatList ref={listRef} data={msgs} keyExtractor={(i) => (i.from || '') + '|' + i.id}
-          style={{ backgroundColor: chatArtworkVisible(palette) ? 'transparent' : (palette.chatBg || palette.bg) }}
+          style={{ backgroundColor: customBg || chatArtworkVisible(palette, { customBg }) ? 'transparent' : (palette.chatBgPreset || palette.chatBg || palette.bg) }}
           contentContainerStyle={{ padding:14 }}
           onContentSizeChange={() => listRef.current?.scrollToEnd()}
           ListEmptyComponent={
@@ -567,25 +544,19 @@ export default function GroupChatScreen({ group, contacts, onBack, onOpenDetail,
             <Icon name="radio" size={14} color={palette.textMuted} />
             <Text style={{ fontSize:12, color:palette.textMuted }}>{t('channel.readOnlyBar')}</Text>
           </View>
-        ) : readOnly ? null : recSecs !== null ? (
-          <View style={{ flexDirection:'row', padding:10, gap:10, alignItems:'center',
-            backgroundColor:palette.surface, borderTopWidth:0.5, borderTopColor:palette.border }}>
-            <TouchableOpacity onPress={cancelRecording} accessibilityLabel={t('siegel.discardRecording')}
-              style={[round, { backgroundColor:palette.surfaceAlt }]}>
-              <Icon name="trash-2" size={18} color={palette.text} />
-            </TouchableOpacity>
-            <Text style={{ fontSize:15, color:palette.text, fontVariant:['tabular-nums'] }}
-              accessibilityLabel={t('groupChatUi.aufnahme', { value: fmtDur(recSecs * 1000) })}>
-              <Text style={{ color:C.danger }}>● </Text>{fmtDur(recSecs * 1000)}
-            </Text>
-            <View style={{ flex:1, alignItems:'flex-end', overflow:'hidden' }}>
-              <LiveRecordingWave testID="group-live-wave" feed={levelFeed.current} variant={waveStyle}
-                width={Math.max(60, Math.round(W - 20 - 2 * 40 - 3 * 10 - 70))} height={24} color={C.danger} />
-            </View>
-            <TouchableOpacity onPress={sendRecording} accessibilityLabel={t('siegelUi.sprachnachrichtSenden')}
-              style={[round, { backgroundColor:C.accent }]}>
-              <Icon name="send" size={18} color={C.onAccent} />
-            </TouchableOpacity>
+        ) : readOnly ? null : rec.recording ? (
+          <View style={{ padding:10, backgroundColor:palette.surface, borderTopWidth:0.5, borderTopColor:palette.border }}>
+            <VoiceRecordingBar colors={voiceColors} secs={rec.recSecs} feed={rec.feed} waveStyle={waveStyle} testPrefix="group"
+              onDiscard={rec.cancel} onPause={rec.pause} onSend={sendRecording}
+              labels={{ discard: t('siegel.discardRecording'), send: t('siegelUi.sprachnachrichtSenden'),
+                time: (v) => t('groupChatUi.aufnahme', { value: v }) }} />
+          </View>
+        ) : rec.draft ? (
+          <View style={{ padding:10, backgroundColor:palette.surface, borderTopWidth:0.5, borderTopColor:palette.border }}>
+            <VoiceDraftBar colors={voiceColors} draft={rec.draft} playing={rec.playing} position={rec.position} duration={rec.duration}
+              waveStyle={waveStyle} canResume={rec.canResume} testPrefix="group"
+              onDiscard={rec.discard} onPlay={rec.togglePreview} onSeek={rec.seekPreview} onResume={rec.resume} onSend={sendRecording}
+              labels={{ discard: t('siegel.discardRecording'), send: t('siegelUi.sprachnachrichtSenden') }} />
           </View>
         ) : (
           <View style={{ flexDirection:'row', padding:10, gap:8, alignItems:'center',

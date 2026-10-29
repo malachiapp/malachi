@@ -36,6 +36,7 @@ import { hmac } from '@noble/hashes/hmac';
 import { secureRandomToken } from './MessageCrypto';
 import { WebRTCManager } from './WebRTCManager';
 import RTCStore from './RTCStore';
+import * as ConnCaps from './ConnCaps';
 import { TOR_BUILTIN_BRIDGES } from './TorBridges';
 import { connectionModeForDecision, MODE_TOR_ONLY } from './ConnectionMode';
 import { t } from './i18n';
@@ -387,11 +388,36 @@ if (emitter) {
 
 // ── Gegenseitige Anmeldung ─────────────────────────────────────────────────
 const utf8 = (s) => Buffer.from(String(s), 'utf8');
-function authMac(secretB64, role, parts) {
+function authMacV1(secretB64, role, parts) {
   const key = hkdf(sha256, Buffer.from(secretB64, 'base64'), undefined, utf8('malachi-tor-auth-v1'), 32);
   return Buffer.from(hmac(sha256, key, utf8([role, ...parts].join('|')))).toString('base64');
 }
-export function _authMacForTests(secretB64, role, parts) { return authMac(secretB64, role, parts); }
+// Krypto-Review 2026-10-25, K-11: v1 verkettet die Felder mit '|' - die
+// Kodierung ist nicht eindeutig (Nonce-Zeichensatz ungeprueft, id frei). v2:
+// jedes Feld mit 4-Byte-Laengenpraefix (wie PhonePairing.lp), eigenes Label in
+// HKDF und MAC, Nonces nur noch als Hex. Ausgehandelt ueber "av: 2" in der
+// Challenge; aeltere Gegenseiten (ohne av) bleiben bei v1. Hat ein Kontakt
+// einmal v2 benutzt, wird v1 fuer ihn abgelehnt (ConnCaps.js).
+export const TOR_AUTH_V2 = 2;
+const AUTH_V2_LABEL = 'malachi-tor-auth-v2';
+function lpBytes(s) {
+  const b = utf8(s);
+  const out = Buffer.alloc(4 + b.length);
+  out.writeUInt32BE(b.length, 0);
+  b.copy(out, 4);
+  return out;
+}
+function authMacV2(secretB64, role, parts) {
+  const key = hkdf(sha256, Buffer.from(secretB64, 'base64'), undefined, utf8(AUTH_V2_LABEL), 32);
+  const msg = Buffer.concat([lpBytes(AUTH_V2_LABEL), lpBytes(role), ...parts.map(lpBytes)]);
+  return Buffer.from(hmac(sha256, key, msg)).toString('base64');
+}
+function authMac(secretB64, role, parts, version = 1) {
+  return version === TOR_AUTH_V2 ? authMacV2(secretB64, role, parts) : authMacV1(secretB64, role, parts);
+}
+export function _authMacForTests(secretB64, role, parts, version = 1) { return authMac(secretB64, role, parts, version); }
+const isHexNonce = (n) => typeof n === 'string' && /^[0-9a-f]{32,64}$/.test(n);
+const authVersionOf = (msg) => (msg?.av === TOR_AUTH_V2 ? TOR_AUTH_V2 : 1);
 function safeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
   let d = 0;
@@ -454,13 +480,15 @@ async function handleIncoming(connId) {
       try { msg = JSON.parse(line); } catch { return fail('kein JSON'); }
       if (msg?.t === 'malachi-tor' && msg.step === 'pair') {
         // Erstkopplung ueber Tor (siehe registerPairingInvite).
-        if (typeof msg.token !== 'string' || !/^[0-9A-F]{8}$/.test(msg.token) || !isNonce(msg.nonce) || typeof msg.mac !== 'string') {
+        const av = authVersionOf(msg);
+        if (typeof msg.token !== 'string' || !/^[0-9A-F]{8}$/.test(msg.token) || !isNonce(msg.nonce) || typeof msg.mac !== 'string'
+            || (av === TOR_AUTH_V2 && !isHexNonce(msg.nonce))) {
           return fail('ungueltige Kopplungsanfrage');
         }
         const invite = pairingInvites.get(msg.token);
         if (!invite || Date.now() > invite.expires) return fail('keine offene Einladung');
         const myOnionP = state.onion;
-        if (!safeEqual(authMac(invite.pskB64, 'pair-client', [myOnionP, nonceS, msg.nonce, msg.token]), msg.mac)) {
+        if (!safeEqual(authMac(invite.pskB64, 'pair-client', [myOnionP, nonceS, msg.nonce, msg.token], av), msg.mac)) {
           return fail('Kopplung: Einladungsgeheimnis falsch');
         }
         if (finished) return;
@@ -477,23 +505,28 @@ async function handleIncoming(connId) {
         pairingInvites.delete(msg.token);
         const restore = () => restorePairingInvite(msg.token, invite);
         try {
-          await Tor.send(connId, JSON.stringify({ t: 'malachi-tor', step: 'pair-ok', mac: authMac(invite.pskB64, 'pair-server', [myOnionP, nonceS, msg.nonce, msg.token]) }));
+          await Tor.send(connId, JSON.stringify({ t: 'malachi-tor', step: 'pair-ok', ...(av === TOR_AUTH_V2 ? { av } : {}),
+            mac: authMac(invite.pskB64, 'pair-server', [myOnionP, nonceS, msg.nonce, msg.token], av) }));
         } catch { try { Tor.close(connId); } catch {} restore(); return; }
         console.log('[Tor] ✅ Kopplung ueber Tor angenommen');
-        attachPairingSession(connId, invite.contactId, false, (rtc) => { invite.used = true; invite.onPaired?.(rtc); }, restore);
+        attachPairingSession(connId, invite.contactId, false, (rtc) => { invite.used = true; invite.onPaired?.(rtc); }, restore, invite.pskB64);
         return;
       }
       if (!msg || msg.t !== 'malachi-tor' || msg.step !== 'auth' || typeof msg.id !== 'string'
           || msg.id.length > 128 || !isNonce(msg.nonce) || typeof msg.mac !== 'string') return fail('ungueltige Anmeldung');
+      const av = authVersionOf(msg);
+      if (av === TOR_AUTH_V2 && !isHexNonce(msg.nonce)) return fail('ungueltige Anmeldung');
       // Mehrere MACs erlaubt (aktueller + vorheriger Schluessel des Clients,
       // siehe connectViaTor) - hoechstens 3, sonst ungueltig.
       const macs = Array.isArray(msg.macs) ? msg.macs.filter(m => typeof m === 'string').slice(0, 3) : [msg.mac];
       if (!macs.includes(msg.mac)) macs.unshift(msg.mac);
       const contact = await findContact(msg.id);
       if (!contact) return fail('unbekannter Kontakt');
+      // K-11: Kontakt hat sich schon mit v2 angemeldet -> v1 ablehnen.
+      if (av < TOR_AUTH_V2 && ((await ConnCaps.getConnCaps(msg.id)).tor || 0) >= TOR_AUTH_V2) return fail('Anmeldung v1 nach v2 (Rueckstufung)');
       const myOnion = state.onion;
       const cands = await secretCandidates(msg.id);
-      const secret = cands.find(s => { const exp = authMac(s, 'client', [myOnion, nonceS, msg.nonce, msg.id]); return macs.some(m => safeEqual(exp, m)); });
+      const secret = cands.find(s => { const exp = authMac(s, 'client', [myOnion, nonceS, msg.nonce, msg.id], av); return macs.some(m => safeEqual(exp, m)); });
       if (!secret) return fail('Anmeldung ungueltig');
       if (finished) return;
       finished = true;
@@ -502,15 +535,20 @@ async function handleIncoming(connId) {
       pendingIncoming.delete(connId);
       trustTorConnection(connId);
       try {
-        await Tor.send(connId, JSON.stringify({ t: 'malachi-tor', step: 'ok', mac: authMac(secret, 'server', [myOnion, nonceS, msg.nonce, msg.id]) }));
+        await Tor.send(connId, JSON.stringify({ t: 'malachi-tor', step: 'ok', ...(av === TOR_AUTH_V2 ? { av } : {}),
+          mac: authMac(secret, 'server', [myOnion, nonceS, msg.nonce, msg.id], av) }));
       } catch { try { Tor.close(connId); } catch {} return; }
+      if (av === TOR_AUTH_V2) ConnCaps.noteConnCap(msg.id, 'tor', TOR_AUTH_V2).catch(() => {});
       console.log('[Tor] ✅ Eingehende Verbindung angemeldet:', contact.name);
       // fresh: die Gegenseite hatte beim Anmelden selbst keine Verbindung zu
       // uns - eine hier noch bestehende ist dann tot (siehe attachSession).
-      attachSession(connId, contact, false, { peerFresh: msg.fresh === true });
+      // chainSecret: mit diesem Geheimnis hat sich die Verbindung angemeldet -
+      // Kettenglied fuer den Verbindungsschluessel v2 (V5).
+      attachSession(connId, contact, false, { peerFresh: msg.fresh === true, chainSecret: secret });
     },
   });
-  Tor.send(connId, JSON.stringify({ t: 'malachi-tor', v: 1, step: 'challenge', nonce: nonceS })).catch(() => fail('senden'));
+  // av: Anmeldung v2 (K-11) - aeltere Gegenseiten ignorieren das Feld.
+  Tor.send(connId, JSON.stringify({ t: 'malachi-tor', v: 1, av: TOR_AUTH_V2, step: 'challenge', nonce: nonceS })).catch(() => fail('senden'));
 }
 
 // Clientseite: zum Kontakt ueber dessen Onion-Adresse verbinden.
@@ -567,8 +605,11 @@ export async function connectViaTor(contact, callbacks = {}) {
     try { callbacks.onFail?.('nicht erreichbar'); } catch {}
     return null;
   }
+  // K-11: hat sich der Kontakt schon mit v2 angemeldet, nur noch v2.
+  const knownAuthV2 = ((await ConnCaps.getConnCaps(contact.id)).tor || 0) >= TOR_AUTH_V2;
   return new Promise((resolve) => {
     let nonceS = null;
+    let av = 1;
     let authSent = false;
     let finished = false;
     const done = (rtc, why) => {
@@ -597,11 +638,15 @@ export async function connectViaTor(contact, callbacks = {}) {
         if (msg?.t !== 'malachi-tor') return done(null, 'fremdes Protokoll');
         if (msg.step === 'challenge' && nonceS === null) {
           if (!isNonce(msg.nonce)) return done(null, 'ungueltige Nonce');
+          av = authVersionOf(msg);
+          if (av === TOR_AUTH_V2 && !isHexNonce(msg.nonce)) return done(null, 'ungueltige Nonce');
+          if (av < TOR_AUTH_V2 && knownAuthV2) return done(null, 'Anmeldung v1 nach v2 (Rueckstufung)');
           nonceS = msg.nonce;
           Tor.send(connId, JSON.stringify({
             t: 'malachi-tor', step: 'auth', id: contact.id, nonce: nonceC,
-            mac: authMac(secrets[0], 'client', [contact.torOnion, nonceS, nonceC, contact.id]),
-            macs: secrets.map(sec => authMac(sec, 'client', [contact.torOnion, nonceS, nonceC, contact.id])),
+            ...(av === TOR_AUTH_V2 ? { av } : {}),
+            mac: authMac(secrets[0], 'client', [contact.torOnion, nonceS, nonceC, contact.id], av),
+            macs: secrets.map(sec => authMac(sec, 'client', [contact.torOnion, nonceS, nonceC, contact.id], av)),
             // Keine nutzbare Verbindung zu diesem Kontakt auf unserer Seite -
             // eine bei der Gegenseite noch eingetragene ist tot (Netzwechsel).
             // Nur ein Hinweis fuer die Auswahl doppelter Kanaele, keine
@@ -612,11 +657,13 @@ export async function connectViaTor(contact, callbacks = {}) {
           return;
         }
         if (msg.step === 'ok' && nonceS !== null) {
-          const okServer = secrets.some(sec => safeEqual(authMac(sec, 'server', [contact.torOnion, nonceS, nonceC, contact.id]), msg.mac));
-          if (!okServer) return done(null, 'Gegenseite nicht authentisch');
+          if (authVersionOf(msg) !== av) return done(null, 'Gegenseite antwortet in anderer Version');
+          const matched = secrets.find(sec => safeEqual(authMac(sec, 'server', [contact.torOnion, nonceS, nonceC, contact.id], av), msg.mac));
+          if (!matched) return done(null, 'Gegenseite nicht authentisch');
           pending.delete(connId);
+          if (av === TOR_AUTH_V2) ConnCaps.noteConnCap(contact.id, 'tor', TOR_AUTH_V2).catch(() => {});
           console.log('[Tor] ✅ Beim Kontakt angemeldet:', contact.name);
-          done(attachSession(connId, contact, true, callbacks), null);
+          done(attachSession(connId, contact, true, { ...callbacks, chainSecret: matched }), null);
           return;
         }
         return done(null, 'unerwarteter Schritt');
@@ -648,7 +695,7 @@ function directStillAlive(existing, contactId) {
   return RTCStore.isConnected(contactId) || Date.now() < (existing._iceRestartUntil || 0);
 }
 
-function attachSession(connId, contact, isInitiator, { onConnected, onDisc, peerFresh = false } = {}) {
+function attachSession(connId, contact, isInitiator, { onConnected, onDisc, peerFresh = false, chainSecret = null } = {}) {
   const channel = new TorChannel(connId);
   channels.set(connId, channel);
   let connectedOnce = false;
@@ -743,6 +790,7 @@ function attachSession(connId, contact, isInitiator, { onConnected, onDisc, peer
     },
   );
   rtc.chatId = contact.id;
+  rtc._chainSecret = typeof chainSecret === 'string' && chainSecret ? chainSecret : null;
   channel._rtc = rtc;
   rtc._torClientOnion = isInitiator ? (state.onion || '') : (contact.torOnion || '');
   rtc._peerFresh = !isInitiator && !!peerFresh;
@@ -946,6 +994,7 @@ export async function pairViaTor({ onion, token, pskB64, contactId, onPaired }) 
   }
   return new Promise((resolve) => {
     let nonceS = null;
+    let av = 1;
     let finished = false;
     const done = (rtc, why) => {
       if (finished) return;
@@ -967,20 +1016,24 @@ export async function pairViaTor({ onion, token, pskB64, contactId, onPaired }) 
         if (msg?.t !== 'malachi-tor') return done(null, 'fremdes Protokoll');
         if (msg.step === 'challenge' && nonceS === null) {
           if (!isNonce(msg.nonce)) return done(null, 'ungueltige Nonce');
+          av = authVersionOf(msg);
+          if (av === TOR_AUTH_V2 && !isHexNonce(msg.nonce)) return done(null, 'ungueltige Nonce');
           nonceS = msg.nonce;
           Tor.send(connId, JSON.stringify({
             t: 'malachi-tor', step: 'pair', token, nonce: nonceC,
-            mac: authMac(pskB64, 'pair-client', [onion, nonceS, nonceC, token]),
+            ...(av === TOR_AUTH_V2 ? { av } : {}),
+            mac: authMac(pskB64, 'pair-client', [onion, nonceS, nonceC, token], av),
           })).catch(() => done(null, 'senden'));
           return;
         }
         if (msg.step === 'pair-ok' && nonceS !== null) {
-          if (!safeEqual(authMac(pskB64, 'pair-server', [onion, nonceS, nonceC, token]), msg.mac)) {
+          if (authVersionOf(msg) !== av) return done(null, 'Einladender antwortet in anderer Version');
+          if (!safeEqual(authMac(pskB64, 'pair-server', [onion, nonceS, nonceC, token], av), msg.mac)) {
             return done(null, 'Einladender nicht authentisch');
           }
           pending.delete(connId);
           console.log('[Tor] ✅ Kopplung ueber Tor angemeldet');
-          done(attachPairingSession(connId, contactId, true, onPaired), null);
+          done(attachPairingSession(connId, contactId, true, onPaired, undefined, pskB64), null);
           return;
         }
         return done(null, 'unerwarteter Schritt');
@@ -996,14 +1049,17 @@ export async function pairViaTor({ onion, token, pskB64, contactId, onPaired }) 
 // legte einen zweiten an (Live-Test: doppelte Kontakteintraege). Nachrichten,
 // die die Gegenseite direkt nach ihrem eigenen Schluesseltausch schickt (Name,
 // Onion-Adresse), werden bis zur Uebergabe gepuffert und danach zugestellt.
-function attachPairingSession(connId, contactId, isInitiator, onPaired, onFailBeforePaired) {
-  return attachPairingChannel(new TorChannel(connId), contactId, isInitiator, onPaired, onFailBeforePaired);
+// chainSecret: PSK der Einladung - Kettenglied des Verbindungsschluessels v2 (V5).
+function attachPairingSession(connId, contactId, isInitiator, onPaired, onFailBeforePaired, chainSecret = null) {
+  return attachPairingChannel(new TorChannel(connId), contactId, isInitiator, onPaired, onFailBeforePaired, chainSecret);
 }
 
 // Wie attachPairingSession, aber mit einem fertigen Kanal - die Telefonnummer-
 // Kopplung (PhonePairing.js) uebergibt hier ihren Tunnel-Kanal. Darin laeuft
-// unveraendert die normale Kopplung (Kyber-Schluesseltausch usw.).
-export function attachPairingChannel(channel, contactId, isInitiator, onPaired, onFailBeforePaired) {
+// unveraendert die normale Kopplung (Kyber-Schluesseltausch usw.); ohne
+// Kettenglied (der Tunnel ist selbst schon hybrid und per Code-Vergleich
+// geprueft).
+export function attachPairingChannel(channel, contactId, isInitiator, onPaired, onFailBeforePaired, chainSecret = null) {
   channels.set(channel.connId, channel);
   let paired = false;
   const early = [];
@@ -1022,6 +1078,7 @@ export function attachPairingChannel(channel, contactId, isInitiator, onPaired, 
   };
   rtc._onKeyExchange = handOver;
   rtc.chatId = contactId;
+  rtc._chainSecret = typeof chainSecret === 'string' && chainSecret ? chainSecret : null;
   channel._rtc = rtc;
   rtc._torClientOnion = isInitiator ? (state.onion || '') : '';
   rtc._torEstablishedAt = Date.now();
@@ -1464,3 +1521,4 @@ export function _setTorStateForTests(patch) {
   setState(patch);
 }
 export function _handleIncomingForTests(connId) { return handleIncoming(connId); }
+export function _channelRtcForTests(connId) { return channels.get(connId)?._rtc || null; }

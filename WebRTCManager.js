@@ -11,10 +11,12 @@ import {
 } from 'react-native-webrtc';
 // (TURN-Zugangsdaten werden seit der Umstellung auf reines P2P nicht mehr abgerufen.)
 import { generateKyberKeypair, kyberEncapsulate, kyberDecapsulate } from './HybridCrypto';
-import { encryptMsg, decryptMsg } from './MessageCrypto';
+import { encryptMsg, decryptMsg, encryptOuterV2, decryptOuterV2, outerDirection, OUTER_V2, secureRandomBytes } from './MessageCrypto';
 import RTCStore from './RTCStore';
 import * as ConnectionStats from './ConnectionStats';
 import * as RatchetSession from './RatchetSession';
+import * as ConnCaps from './ConnCaps';
+import { KX_V2, newX25519, x25519Shared, deriveConnKeysV2, chainIdOf, isX25519Pub, isChainId } from './ConnKeyV2';
 import { Buffer } from 'buffer';
 // Fix 2 (SECURITY_CHAOS_TESTING.md §9): vorher an beiden Kyber-Handlern per
 // `import('react-native-encrypted-storage')` lazy/dynamisch nachgeladen -
@@ -126,6 +128,9 @@ export function padToBlock(obj, blockSize = PAD_BLOCK_SIZE) {
 const RATCHET_PAD_BLOCK_SIZE = 1024;
 const RATCHET_INNER_PAD_BLOCK = 64;
 const MEDIA_CHUNK_TYPES = new Set(['img_chunk', 'audio_chunk', 'file_chunk']);
+// V6: ML-KEM-Nachmischen im Ratchet (RatchetSession.js) - nur durch den Ratchet,
+// nie an Chat/Puffer.
+const PQ_SUBTYPES = new Set(['pq_offer', 'pq_ct']);
 const TRANSPORT_ONLY_TYPES = new Set(['dummy', 'call_audio', ...MEDIA_CHUNK_TYPES]);
 
 // Darf eine Nachricht ohne Ratchet ankommen, obwohl fuer den Kontakt der
@@ -154,16 +159,35 @@ export async function sealForConnection(rtc, obj) {
     if (TRANSPORT_ONLY_TYPES.has(obj.type)) {
       ratchetMode = await RatchetSession.hasSession(chatId).catch(() => false);
     } else {
-      const env = await RatchetSession.seal(chatId, padToBlock(obj, RATCHET_INNER_PAD_BLOCK), { connSecret: secret });
+      // Startwert einer hier entstehenden Sitzung: bei Verbindungen v2 (V5) der
+      // eigene abgeleitete KEM-Teilschluessel, nie der aeussere Schluessel.
+      const env = await RatchetSession.seal(chatId, padToBlock(obj, RATCHET_INNER_PAD_BLOCK), { connSecret: rtc.kemSecret || secret });
       if (env) {
         inner = env;
         ratchetMode = true;
+        // V6: regelmaessiges ML-KEM-Nachmischen anstossen (nicht durch die
+        // eigenen pq-Nachrichten, nicht blockierend).
+        if (!PQ_SUBTYPES.has(obj.subtype) && typeof rtc._maybePqRefresh === 'function') rtc._maybePqRefresh();
       }
     }
   }
   const body = MEDIA_CHUNK_TYPES.has(obj.type)
     ? JSON.stringify(inner)
     : padToBlock(inner, ratchetMode ? RATCHET_PAD_BLOCK_SIZE : PAD_BLOCK_SIZE);
+  return sealOuter(rtc, body);
+}
+
+// Aeussere Schicht der Verbindung (K-09): v2 (Schluessel je Richtung + AAD)
+// nur, wenn beide Seiten es im Kyber-Handshake ausgehandelt haben - sonst wie
+// bisher. Liefert die Leitungs-Nachricht oder wirft.
+async function sealOuter(rtc, body) {
+  const secret = rtc?.sharedSecret;
+  if (!secret) throw new Error('Kein Verbindungsgeheimnis');
+  if (rtc.outerVersion === OUTER_V2) {
+    const data = await encryptOuterV2(body, secret, outerDirection(rtc.isInitiator, true));
+    if (!data) throw new Error('Verschluesselung fehlgeschlagen');
+    return JSON.stringify({ type: 'encrypted', v: OUTER_V2, data });
+  }
   const data = await encryptMsg(body, secret);
   if (!data) throw new Error('Verschluesselung fehlgeschlagen');
   return JSON.stringify({ type: 'encrypted', data });
@@ -346,6 +370,18 @@ export class WebRTCManager {
     this.isInitiator     = false;
     this.pendingMsgs     = [];
     this.keyExchangeDone = false;
+    // Aeussere Schicht dieser Verbindung (K-09): 1 = bisher, 2 = je Richtung
+    // eigene Schluessel + AAD. Ausgehandelt im Kyber-Handshake (Feld "ol").
+    this.outerVersion    = 1;
+    // Verbindungsschluessel (V5): 1 = rohes ML-KEM-Geheimnis wie bisher,
+    // 2 = X25519 + ML-KEM, Transkript- und Kettenbindung (ConnKeyV2.js).
+    // sharedSecret ist dann der abgeleitete aeussere Schluessel, kemSecret der
+    // davon unabhaengige KEM-Beitrag fuer den Ratchet. _chainSecret: Kettenglied
+    // (Anmelde-Geheimnis bzw. PSK), gesetzt vom Erzeuger der Verbindung.
+    this.kxVersion       = 1;
+    this.kemSecret       = null;
+    this._chainSecret    = null;
+    this._outerFailures  = 0;
     this.chatId          = null;
     this._onKeyExchange  = null;
     this._onReady        = null;
@@ -749,7 +785,10 @@ export class WebRTCManager {
   // (Kennzeichen innen statt nur im ungeschuetzten Aussenumschlag).
   async mediaSealer({ avatar = false } = {}) {
     if (!this.chatId || !this.sharedSecret) return null;
-    if (!(await RatchetSession.hasSession(this.chatId))) return null;
+    // Aeussere Schicht v2 (K-09): auch ohne Ratchet-Sitzung (z.B. das Profilbild
+    // direkt nach der Kopplung) mit Dateischluessel ueber sealForConnection -
+    // das alte Medienverfahren kennt die Schicht v2 nicht.
+    if (this.outerVersion !== OUTER_V2 && !(await RatchetSession.hasSession(this.chatId))) return null;
     const send = async (obj) => {
       const wire = await sealForConnection(this, avatar ? { ...obj, isAvatarChunk: true } : obj);
       if (!wire) throw new Error('Verschluesselung fehlgeschlagen');
@@ -840,6 +879,10 @@ export class WebRTCManager {
     this.keyExchangeDone = false;
     this.myKyberKeys     = null;
     this.safetyCode      = null;
+    this.kemSecret       = null;
+    this._codeSecret     = null;
+    this._chainSecret    = null;
+    if (this._xKeys) { try { this._xKeys.sk.fill(0); } catch {} this._xKeys = null; }
     // Konkurrenz-Review-Fund: `close()` nullte bisher `this.onMessage` nicht.
     // rtc.onMessage ist der Callback, den RTCStore.setConnection() genau
     // EINMAL pro Verbindung setzt (Closure ueber chatId/this.listeners/
@@ -1113,10 +1156,29 @@ export class WebRTCManager {
       if (this.isInitiator) {
         try {
           this.myKyberKeys = await generateKyberKeypair();
+          // ol: Faehigkeit "aeussere Schicht v2" (K-09) - aeltere Gegenseiten
+          // ignorieren das Feld und antworten ohne; dann bleibt es bei v1.
+          this._olOffered = true;
+          // kx: Verbindungsschluessel v2 (V5) - eigener X25519-Anteil und die
+          // Kennung des Kettenglieds (Anmelde-Geheimnis/PSK), falls bekannt.
+          let kxFields = {};
+          try {
+            this._xKeys = await newX25519(secureRandomBytes);
+            const ck = this._chainSecret ? chainIdOf(this._chainSecret) : null;
+            kxFields = { kx: KX_V2, x: this._xKeys.pk, ...(ck ? { ck } : {}) };
+            this._kxOffered = true;
+          } catch (e) {
+            console.warn('[Crypto] Verbindungsschluessel v2 nicht anbietbar:', e?.message || e);
+            this._xKeys = null;
+            this._kxOffered = false;
+          }
+          if (this._closed) return;
           channel.send(JSON.stringify({
             type: 'system',
             subtype: 'kyber_pubkey',
             publicKey: this.myKyberKeys.publicKey,
+            ol: OUTER_V2,
+            ...kxFields,
           }));
           console.log('[Crypto] ✅ Kyber Public Key gesendet');
           setTimeout(() => {
@@ -1192,6 +1254,45 @@ export class WebRTCManager {
             return;
           }
           this._kxStarted = true;
+          // Aeussere Schicht v2 (K-09): angeboten? Kennt der Kontakt sie schon
+          // (klebrig, ConnCaps.js), wird eine Verbindung ohne sie abgelehnt -
+          // sonst koennte, wer den Transport bricht, auf v1 zurueckstufen.
+          const peerOl = Number(msg.ol) >= OUTER_V2 ? OUTER_V2 : 1;
+          const known = this.chatId ? await ConnCaps.getConnCaps(this.chatId) : {};
+          if (peerOl < OUTER_V2 && (known.ol || 0) >= OUTER_V2) {
+            console.warn('[Crypto] Verbindung ohne aeussere Schicht v2, obwohl der Kontakt sie schon nutzt - abgelehnt (Rueckstufung)');
+            this._rejectHandshake();
+            return;
+          }
+          // Verbindungsschluessel v2 (V5): ebenso klebrig. Mit v2 muss das
+          // Kettenglied bekannt sein; ein bekannter v2-Kontakt ohne Kette waere
+          // eine Rueckstufung.
+          const peerKx = msg.kx === KX_V2 ? KX_V2 : 1;
+          if (peerKx < KX_V2 && (known.kx || 0) >= KX_V2) {
+            console.warn('[Crypto] Verbindung ohne Verbindungsschluessel v2, obwohl der Kontakt ihn schon nutzt - abgelehnt (Rueckstufung)');
+            this._rejectHandshake();
+            return;
+          }
+          let chain = null;
+          if (peerKx === KX_V2) {
+            if (!isX25519Pub(msg.x) || (msg.ck !== undefined && !isChainId(msg.ck))) {
+              console.warn('[Crypto] Ungueltiges Angebot fuer Verbindungsschluessel v2 - abgelehnt');
+              this._rejectHandshake();
+              return;
+            }
+            if (msg.ck) {
+              chain = this._findChain(msg.ck);
+              if (!chain) {
+                console.warn('[Crypto] Kettenglied des Angebots unbekannt - Verbindung abgelehnt');
+                this._rejectHandshake();
+                return;
+              }
+            } else if ((known.kx || 0) >= KX_V2) {
+              console.warn('[Crypto] Angebot ohne Kettenglied von einem v2-Kontakt - abgelehnt (Rueckstufung)');
+              this._rejectHandshake();
+              return;
+            }
+          }
           console.log('[Crypto] Kyber Public Key empfangen → encapsulate');
           const result = await kyberEncapsulate(msg.publicKey);
           // Hidden-Bug-Hunt-Fund (siehe Konstruktor-Kommentar): close() kann
@@ -1205,6 +1306,29 @@ export class WebRTCManager {
             console.warn('[Crypto] Verbindung waehrend Kyber-Encapsulate geschlossen - Ergebnis verworfen statt Secret wiederherzustellen');
             return;
           }
+          // V5: X25519-Anteil und Teilschluessel ableiten (X-Wing-artig,
+          // Transkript + Kette). Das rohe ML-KEM-Geheimnis wird danach nirgends
+          // mehr benutzt oder gespeichert.
+          let kxKeys = null;
+          let myX = null;
+          if (peerKx === KX_V2) {
+            try {
+              myX = await newX25519(secureRandomBytes);
+              const ssX = x25519Shared(myX.sk, msg.x);
+              kxKeys = deriveConnKeysV2({ ssM: result.sharedSecret, ssX, ek: msg.publicKey, ct: result.cipherText,
+                xI: msg.x, xR: myX.pk, chain, ol: peerOl });
+              ssX.fill(0);
+            } catch (e) {
+              console.warn('[Crypto] Verbindungsschluessel v2 nicht ableitbar - Verbindung abgelehnt:', e?.message || e);
+              this._rejectHandshake();
+              return;
+            } finally {
+              myX?.sk?.fill(0);
+            }
+            if (this._closed) return;
+          }
+          const connSecret = kxKeys ? kxKeys.outer : result.sharedSecret;
+          const kemSecret = kxKeys ? kxKeys.kem : result.sharedSecret;
           // Double Ratchet, Post-Quanten-Schritt (RatchetSession.js): die
           // Gegenseite mischt dieses ML-KEM-Geheimnis in ihren naechsten
           // DH-Schritt - wir muessen es dann nachrechnen koennen. Eingetragen
@@ -1214,17 +1338,24 @@ export class WebRTCManager {
           // deshalb in derselben Sperre erst danach geoeffnet. Bewusst nicht
           // abgewartet - Speicherfehler bleiben wie beim Secret selbst
           // nicht-fatal (der Eintrag bleibt dann im Arbeitsspeicher und geht
-          // mit dem naechsten Ratchet-Speichervorgang mit).
+          // mit dem naechsten Ratchet-Speichervorgang mit). Bei v2 ist das der
+          // abgeleitete KEM-Teilschluessel, nicht der aeussere Schluessel.
           if (this.chatId) {
-            RatchetSession.noteConnectionKem(this.chatId, result.sharedSecret, 'encap')
+            RatchetSession.noteConnectionKem(this.chatId, kemSecret, 'encap')
               .catch(e => console.warn('[Crypto] KEM-Geheimnis nicht fuer den Ratchet vorgemerkt:', e?.message || e));
           }
-          this.sharedSecret    = result.sharedSecret;
+          this.outerVersion    = peerOl;
+          this.kxVersion       = peerKx;
+          this.kemSecret       = kemSecret;
+          this._codeSecret     = kxKeys ? kxKeys.code : null;
+          this.sharedSecret    = connSecret;
           this.keyExchangeDone = true;
           channel.send(JSON.stringify({
             type: 'system',
             subtype: 'kyber_ciphertext',
             cipherText: result.cipherText,
+            ...(peerOl === OUTER_V2 ? { ol: OUTER_V2 } : {}),
+            ...(kxKeys ? { kx: KX_V2, x: myX.pk } : {}),
           }));
           // SharedSecret im RTCStore speichern + persistent. Chaos-Test-Fund
           // (SECURITY_CHAOS_TESTING.md §9, Fix 2): dieser Schreibvorgang war
@@ -1278,7 +1409,9 @@ export class WebRTCManager {
           await this._flushPending();
           this._startCoverTraffic();
           this._startLivenessWatch();
-          this.safetyCode = await this._computeSafetyCode(this.sharedSecret);
+          // Alter Verbindungscode (nur fuer Gegenseiten ohne caps.sn): bei v2 aus
+          // einem eigenen Teilschluessel, nie aus einem benutzten Schluessel.
+          this.safetyCode = await this._computeSafetyCode(this._codeSecret || this.sharedSecret);
           console.log('[WebRTC] Safety Code berechnet');
           console.log('[WebRTC] Key Exchange abgeschlossen');
           if (this._onKeyExchange) await this._onKeyExchange();
@@ -1295,6 +1428,28 @@ export class WebRTCManager {
             return;
           }
           this._kxStarted = true;
+          // Aeussere Schicht v2 (K-09): nur, wenn wir sie angeboten und die
+          // Gegenseite sie bestaetigt hat; Rueckstufung bei bekanntem Kontakt
+          // ablehnen (siehe kyber_pubkey).
+          const answeredOl = Number(msg.ol) >= OUTER_V2 && this._olOffered ? OUTER_V2 : 1;
+          const known = this.chatId ? await ConnCaps.getConnCaps(this.chatId) : {};
+          if (answeredOl < OUTER_V2 && (known.ol || 0) >= OUTER_V2) {
+            console.warn('[Crypto] Antwort ohne aeussere Schicht v2, obwohl der Kontakt sie schon nutzt - abgelehnt (Rueckstufung)');
+            this._rejectHandshake();
+            return;
+          }
+          // V5: Verbindungsschluessel v2 nur, wenn angeboten und bestaetigt.
+          const answeredKx = msg.kx === KX_V2 && this._kxOffered && this._xKeys ? KX_V2 : 1;
+          if (answeredKx < KX_V2 && (known.kx || 0) >= KX_V2) {
+            console.warn('[Crypto] Antwort ohne Verbindungsschluessel v2, obwohl der Kontakt ihn schon nutzt - abgelehnt (Rueckstufung)');
+            this._rejectHandshake();
+            return;
+          }
+          if (answeredKx === KX_V2 && !isX25519Pub(msg.x)) {
+            console.warn('[Crypto] Ungueltige Antwort fuer Verbindungsschluessel v2 - abgelehnt');
+            this._rejectHandshake();
+            return;
+          }
           console.log('[Crypto] Kyber Ciphertext empfangen → decapsulate');
           const decapsulated = await kyberDecapsulate(msg.cipherText, this.myKyberKeys.secretKey);
           // Siehe Kommentar im kyber_pubkey-Handler oben - identische
@@ -1303,16 +1458,37 @@ export class WebRTCManager {
             console.warn('[Crypto] Verbindung waehrend Kyber-Decapsulate geschlossen - Ergebnis verworfen statt Secret wiederherzustellen');
             return;
           }
+          let kxKeys = null;
+          if (answeredKx === KX_V2) {
+            try {
+              const ssX = x25519Shared(this._xKeys.sk, msg.x);
+              kxKeys = deriveConnKeysV2({ ssM: decapsulated, ssX, ek: this.myKyberKeys.publicKey, ct: msg.cipherText,
+                xI: this._xKeys.pk, xR: msg.x, chain: this._chainSecret || null, ol: answeredOl });
+              ssX.fill(0);
+            } catch (e) {
+              console.warn('[Crypto] Verbindungsschluessel v2 nicht ableitbar - Verbindung abgelehnt:', e?.message || e);
+              this._rejectHandshake();
+              return;
+            }
+          }
+          if (this._xKeys) { this._xKeys.sk.fill(0); this._xKeys = null; }
+          const connSecret = kxKeys ? kxKeys.outer : decapsulated;
+          const kemSecret = kxKeys ? kxKeys.kem : decapsulated;
           // Double Ratchet, Post-Quanten-Schritt: dieses ML-KEM-Geheimnis
           // fliesst in unseren naechsten eigenen DH-Schritt (die Gegenseite hat
           // es beim Kapseln eingetragen). Die Ratchet-Sperre ordnet den
           // Eintrag vor jede spaeter ankommende Nachricht; ein Fehler kostet
-          // nur den KEM-Beitrag dieser einen Verbindung.
+          // nur den KEM-Beitrag dieser einen Verbindung. Bei v2 der
+          // abgeleitete KEM-Teilschluessel.
           if (this.chatId) {
-            RatchetSession.noteConnectionKem(this.chatId, decapsulated, 'decap')
+            RatchetSession.noteConnectionKem(this.chatId, kemSecret, 'decap')
               .catch(e => console.warn('[Crypto] KEM-Geheimnis nicht fuer den Ratchet vorgemerkt:', e?.message || e));
           }
-          this.sharedSecret    = decapsulated;
+          this.outerVersion    = answeredOl;
+          this.kxVersion       = answeredKx;
+          this.kemSecret       = kemSecret;
+          this._codeSecret     = kxKeys ? kxKeys.code : null;
+          this.sharedSecret    = connSecret;
           this.keyExchangeDone = true;
           // SharedSecret im RTCStore speichern + persistent - siehe
           // ausfuehrlicher Kommentar im kyber_pubkey-Handler oben (Fix 2):
@@ -1342,7 +1518,9 @@ export class WebRTCManager {
           await this._flushPending();
           this._startCoverTraffic();
           this._startLivenessWatch();
-          this.safetyCode = await this._computeSafetyCode(this.sharedSecret);
+          // Alter Verbindungscode (nur fuer Gegenseiten ohne caps.sn): bei v2 aus
+          // einem eigenen Teilschluessel, nie aus einem benutzten Schluessel.
+          this.safetyCode = await this._computeSafetyCode(this._codeSecret || this.sharedSecret);
           console.log('[WebRTC] Safety Code berechnet');
           if (this._onKeyExchange) await this._onKeyExchange();
           return;
@@ -1353,8 +1531,27 @@ export class WebRTCManager {
             console.warn('[Crypto] Encrypted msg aber kein Shared Secret');
             return;
           }
-          const plaintext = decryptMsg(msg.data, this.sharedSecret);
+          const plaintext = this._openOuter(msg);
+          if (!plaintext && this.kxVersion === KX_V2 && !this._outerOk && ++this._outerFailures >= 3) {
+            // Implizite Schluesselbestaetigung (V5): passen die abgeleiteten
+            // Schluessel nicht zusammen (manipuliertes Transkript, falsche
+            // Kette), ist die Verbindung nutzlos - sofort neu aufbauen.
+            console.warn('[Crypto] Verbindungsschluessel v2 nicht bestaetigt (3 Pakete nicht lesbar) - Verbindung wird neu aufgebaut');
+            this._rejectHandshake();
+            return;
+          }
           if (plaintext) {
+            this._outerOk = true;
+            // Erste erfolgreich geoeffnete v2-Nachricht der Gegenseite: ab
+            // jetzt gilt v2 fuer diesen Kontakt als bekannt (Downgrade-Schutz).
+            if (this.outerVersion === OUTER_V2 && !this._olConfirmed && this.chatId) {
+              this._olConfirmed = true;
+              ConnCaps.noteConnCap(this.chatId, 'ol', OUTER_V2).catch(() => {});
+            }
+            if (this.kxVersion === KX_V2 && !this._kxConfirmed && this.chatId) {
+              this._kxConfirmed = true;
+              ConnCaps.noteConnCap(this.chatId, 'kx', KX_V2).catch(() => {});
+            }
             // Erste erfolgreich entschluesselte Nachricht der Gegenseite unter
             // dem NEUEN Secret = beide Seiten haben den Schluesselwechsel
             // abgeschlossen, das vorherige Secret wird nicht mehr gebraucht
@@ -1368,6 +1565,14 @@ export class WebRTCManager {
             // Ratchet bei aktivem Ratchet ablehnen (Downgrade-Schutz).
             const original = await this._openRatchetLayer(outer);
             if (!original) return;
+            // V6: ML-KEM-Nachmischen - nur angenommen, wenn es durch den Ratchet
+            // kam (sonst koennte, wer die Verbindungsschicht kennt, Material
+            // unterschieben); nie an Chat oder Puffer.
+            if (original.type === 'system' && PQ_SUBTYPES.has(original.subtype)) {
+              if (outer.type === 'ratchet') this._handlePq(original);
+              else console.warn('[Ratchet] ML-KEM-Nachmischen ohne Ratchet verworfen');
+              return;
+            }
             // Audit C3: Profilbild-Kennzeichen gilt nur INNEN (verschluesselt).
             // Nur aussen gekennzeichnete Teile (aeltere Testversionen) weder
             // als Profilbild noch als Chat-Bild verwenden.
@@ -1485,6 +1690,68 @@ export class WebRTCManager {
     };
   }
 
+  // Aeussere Schicht einer Leitungs-Nachricht oeffnen (K-09). Die Version ist
+  // pro Verbindung fest ausgehandelt - eine Nachricht im jeweils anderen
+  // Format wird verworfen (kein Rueckfall innerhalb einer Verbindung).
+  _openOuter(msg) {
+    if (!msg || typeof msg.data !== 'string' || !this.sharedSecret) return null;
+    if (this.outerVersion === OUTER_V2) {
+      if (msg.v !== OUTER_V2) {
+        console.warn('[Crypto] Nachricht ohne aeussere Schicht v2 auf einer v2-Verbindung verworfen');
+        return null;
+      }
+      return decryptOuterV2(msg.data, this.sharedSecret, outerDirection(this.isInitiator, false));
+    }
+    if (msg.v !== undefined) {
+      console.warn('[Crypto] Nachricht im Format v' + msg.v + ' auf einer v1-Verbindung verworfen');
+      return null;
+    }
+    return decryptMsg(msg.data, this.sharedSecret);
+  }
+
+  // V6: ML-KEM-Nachmischen anbieten, wenn faellig (24 h / 100 Nachrichten,
+  // Gegenseite mit Ratchet v2). Hoechstens ein Vorgang gleichzeitig.
+  _maybePqRefresh() {
+    if (this._pqBusy || this._closed || !this.chatId || !this.keyExchangeDone) return;
+    this._pqBusy = true;
+    (async () => {
+      try {
+        if (!(await RatchetSession.pqRefreshDue(this.chatId))) return;
+        const offer = await RatchetSession.preparePqOffer(this.chatId);
+        if (!offer || this._closed) return;
+        console.log('[Ratchet] Biete frischen ML-KEM-Schluessel zum Nachmischen an');
+        this.sendMessage(JSON.stringify({ type: 'system', subtype: 'pq_offer', id: offer.id, pk: offer.pk }));
+      } catch (e) {
+        console.warn('[Ratchet] ML-KEM-Nachmischen nicht angeboten:', e?.message || e);
+      } finally {
+        this._pqBusy = false;
+      }
+    })();
+  }
+
+  async _handlePq(msg) {
+    if (!this.chatId) return;
+    try {
+      if (msg.subtype === 'pq_offer') {
+        const ans = await RatchetSession.acceptPqOffer(this.chatId, msg);
+        if (ans && !this._closed) this.sendMessage(JSON.stringify({ type: 'system', subtype: 'pq_ct', id: ans.id, ct: ans.ct, kid: ans.kid }));
+      } else if (msg.subtype === 'pq_ct') {
+        if (await RatchetSession.completePqOffer(this.chatId, msg)) {
+          console.log('[Ratchet] ✅ Frisches ML-KEM-Geheimnis fuer den naechsten DH-Schritt bereit');
+        }
+      }
+    } catch (e) {
+      console.warn('[Ratchet] ML-KEM-Nachmischen fehlgeschlagen:', e?.message || e);
+    }
+  }
+
+  // Schluesseltausch abgelehnt (z.B. Rueckstufung): Verbindung verwerfen, der
+  // normale Wiederaufbau versucht es erneut.
+  _rejectHandshake() {
+    this._fireDisc();
+    this.close();
+  }
+
   // Innere Schicht einer entschluesselten Leitungs-Nachricht (siehe
   // sealForConnection): Ratchet-Umschlaege oeffnen; alles andere nur
   // durchlassen, solange fuer den Kontakt kein Ratchet aktiv ist (oder es ein
@@ -1522,14 +1789,41 @@ export class WebRTCManager {
   }
 
   // Bekannte Verbindungsgeheimnisse dieses Kontakts - Rueckfall, falls eine
-  // KEM-Kennung im Ratchet-Header nicht (mehr) im Vorrat steht.
+  // KEM-Kennung im Ratchet-Header nicht (mehr) im Vorrat steht. Bei
+  // Verbindungen v2 (V5) ist der KEM-Beitrag ein eigener Teilschluessel.
   _kemCandidates() {
     const out = [];
+    if (this.kemSecret) out.push(this.kemSecret);
     if (this.sharedSecret) out.push(this.sharedSecret);
     const active = this.chatId ? RTCStore.connections.get(this.chatId) : null;
+    if (active?.kemSecret) out.push(active.kemSecret);
     if (active?.sharedSecret) out.push(active.sharedSecret);
     if (this.chatId) out.push(...RTCStore.getSecretCandidates(this.chatId));
     return [...new Set(out)];
+  }
+
+  // Kettenglied zu einer Kennung aus dem Angebot (V5): das vom Erzeuger
+  // gesetzte (Anmelde-Geheimnis/PSK), die gespeicherten Geheimnisse des
+  // Kontakts und das der gerade aktiven Verbindung (Direkt-Upgrade wird ueber
+  // sie ausgehandelt). null = unbekannt.
+  _findChain(ck) {
+    const cands = [];
+    if (this._chainSecret) cands.push(this._chainSecret);
+    if (this.chatId) {
+      cands.push(...RTCStore.getSecretCandidates(this.chatId));
+      const active = RTCStore.connections.get(this.chatId);
+      if (active && active !== this && active.sharedSecret) cands.push(active.sharedSecret);
+    }
+    for (const s of new Set(cands)) {
+      let id = null;
+      try { id = chainIdOf(s); } catch { continue; }
+      if (id.length === ck.length) {
+        let d = 0;
+        for (let i = 0; i < id.length; i++) d |= id.charCodeAt(i) ^ ck.charCodeAt(i);
+        if (d === 0) return s;
+      }
+    }
+    return null;
   }
 
   // Audit 2026-09-28 - siehe ausfuehrliche Begruendung bei

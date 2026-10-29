@@ -431,11 +431,38 @@ export async function applyChatOps(value, ops, key) {
       changed = true;
       // Audit G1: Datei des geloeschten Mediums gleich mit entfernen.
       for (const m of hit) if (typeof m.mref === 'string') await removeMedia(contactId, m.mref);
+    } else if (op?.op === 'expire' && Number.isFinite(op.now)) {
+      const gone = list.filter((m) => isExpiredEntry(m, op.now));
+      if (!gone.length) continue;
+      list = list.filter((m) => !isExpiredEntry(m, op.now));
+      changed = true;
+      for (const m of gone) if (typeof m.mref === 'string') await removeMedia(contactId, m.mref);
     }
   }
   return changed ? JSON.stringify(list) : value;
 }
 PinVault.registerMerger('chat_', applyChatOps);
+
+// Gleiche Regel wie beim Laden/Speichern in ChatScreen (App.tsx).
+function isExpiredEntry(m, now) {
+  if (!m || !m.expireAt) return false;
+  return m.expireAt === 'read' || !(m.expireAt > now);
+}
+
+// Abgelaufene Timer-Nachrichten verschwanden bisher erst beim naechsten
+// Oeffnen des Chats aus dem gespeicherten Verlauf - wer den Chat danach nie
+// mehr oeffnete, behielt sie (im Tresor, mit der PIN lesbar) auf dem Geraet.
+// Laeuft nach jedem Entsperren (App.tsx, afterVaultUnlock) ueber alle Chats.
+export async function sweepExpiredChats(now = Date.now()) {
+  let contacts = [];
+  try { contacts = JSON.parse((await AsyncStorage.getItem('contacts')) || '[]'); } catch {}
+  if (!Array.isArray(contacts)) return;
+  for (const c of contacts) {
+    if (!c?.id) continue;
+    await withChatLock(c.id, () => PinVault.update('chat_' + c.id, { op: 'expire', now }))
+      .catch((e) => console.warn('[Timer] Verlauf nicht bereinigt:', e?.code || e?.message || e));
+  }
+}
 
 export async function onQueueReceipt(contactId, msgId) {
   let removed = null;
@@ -835,7 +862,7 @@ export function wipeContactLocally(contactId, onContactsChanged = noop) {
   EncryptedStorage.removeItem('secret_' + contactId).catch(() => {});
   EncryptedStorage.removeItem('shared_secret_' + contactId).catch(() => {});
   EncryptedStorage.removeItem('shared_secret_prev_' + contactId).catch(() => {});
-  for (const prefix of ['secret_ended_', 'safety_code_seen_', 'avatar_hash_', 'system_ts_hwm_']) {   // Audit P14
+  for (const prefix of ['secret_ended_', 'safety_code_seen_', 'avatar_hash_', 'system_ts_hwm_', 'timer_ts_', 'safety_v2_', 'conn_caps_']) {   // Audit P14
     EncryptedStorage.removeItem(prefix + contactId).catch(() => {});
   }
   wipeQueueForContact(contactId); // "M3"
@@ -947,7 +974,7 @@ export async function queueOffline(contactId, type, payload, secret, msgId, meta
 export function removeContactLocally(contactId) {
   uiContactsListener(c => c.filter(x => x.id !== contactId));
   updateContacts(cs => cs.filter(x => x.id !== contactId)).catch(() => {});
-  for (const prefix of ['chat_', 'vj_chat_', 'timer_', 'secret_', 'secret_ended_', 'shared_secret_', 'shared_secret_prev_', 'system_ts_hwm_', 'avatar_hash_', 'safety_code_seen_']) {
+  for (const prefix of ['chat_', 'vj_chat_', 'timer_', 'timer_ts_', 'secret_', 'secret_ended_', 'shared_secret_', 'shared_secret_prev_', 'system_ts_hwm_', 'avatar_hash_', 'safety_code_seen_', 'safety_v2_', 'conn_caps_']) {
     EncryptedStorage.removeItem(prefix + contactId).catch(() => {});
   }
   removeMediaScope(contactId).catch(() => {});   // Audit G1: Verlaufs-Medien
@@ -972,7 +999,7 @@ export function removeContactLocally(contactId) {
 const PENDING_DELETE_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 export async function requestContactDeletion(contactId) {
   uiContactsListener(c => c.filter(x => x.id !== contactId));
-  for (const prefix of ['chat_', 'vj_chat_', 'timer_', 'secret_', 'secret_ended_']) {
+  for (const prefix of ['chat_', 'vj_chat_', 'timer_', 'timer_ts_', 'secret_', 'secret_ended_']) {
     EncryptedStorage.removeItem(prefix + contactId).catch(() => {});
   }
   removeMediaScope(contactId).catch(() => {});   // Audit G1
@@ -1033,11 +1060,57 @@ export async function applyControlSignal(contactId, msg) {
       await EncryptedStorage.removeItem('secret_' + contactId).catch(() => {});
       await EncryptedStorage.setItem('secret_ended_' + contactId, 'true').catch(() => {});
       return true;
+    case 'timer':
+      if (!TIMER_MODES.has(msg.mode)) return false;
+      await adoptPeerTimer(contactId, msg);
+      return true;
     default:
       return false;
   }
 }
 RTCStore.controlSignalHandler = applyControlSignal;
+
+// ─── Nachrichten-Timer eines Chats (gilt fuer beide Seiten) ─────────────────
+// Fund 28.10.2026: Der Timer-Dialog schickte bis 1.2.0 ein secret_start ohne
+// mins, das die Gegenseite verwarf - sie uebernahm den Timer nie, ihre
+// Antworten blieben dauerhaft gespeichert. Jetzt eigenes Signal
+// {subtype:'timer', mode, ts} ueber die Warteschlange. Aendern beide Seiten
+// den Timer, bevor sie sich wieder erreichen, gewinnt der juengere ts
+// (timer_ts_<id>) - sonst behielte jede Seite den Timer der anderen.
+export const TIMER_MODES = new Set(['off', 'read', '1h', '24h', '7d']);
+const timerChains = new Map();
+function withTimerLock(contactId, fn) {
+  const prev = timerChains.get(contactId) || Promise.resolve();
+  const run = prev.then(fn);
+  timerChains.set(contactId, run.catch(() => {}));
+  return run;
+}
+async function lastTimerTs(contactId) {
+  return Number(await EncryptedStorage.getItem('timer_ts_' + contactId).catch(() => null)) || 0;
+}
+
+// Eigene Aenderung speichern. Liefert den ts fuer das Signal - immer juenger
+// als jede bisher uebernommene Aenderung, auch wenn die eigene Uhr nachgeht.
+export function setOwnTimer(contactId, mode) {
+  return withTimerLock(contactId, async () => {
+    const ts = Math.max(Date.now(), (await lastTimerTs(contactId)) + 1);
+    await EncryptedStorage.setItem('timer_' + contactId, mode);
+    await EncryptedStorage.setItem('timer_ts_' + contactId, String(ts));
+    return ts;
+  });
+}
+
+// Timer der Gegenseite uebernehmen. Liefert den Modus oder null (ungueltig
+// bzw. nicht juenger als die zuletzt gesetzte Aenderung).
+export function adoptPeerTimer(contactId, msg) {
+  if (!TIMER_MODES.has(msg?.mode) || !Number.isFinite(msg.ts)) return Promise.resolve(null);
+  return withTimerLock(contactId, async () => {
+    if (msg.ts <= await lastTimerTs(contactId)) return null;
+    await EncryptedStorage.setItem('timer_' + contactId, msg.mode);
+    await EncryptedStorage.setItem('timer_ts_' + contactId, String(msg.ts));
+    return msg.mode;
+  });
+}
 
 // Onion-Adresse eines Kontakts (kam ueber den verschluesselten, angemeldeten
 // Kanal, siehe RTCStore) beim Kontakt speichern.

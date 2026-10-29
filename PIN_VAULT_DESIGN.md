@@ -70,6 +70,49 @@ Diese Daten bleiben wie bisher geräteverschlüsselt. Wer sie lesen kann, sieht,
 **mit wem** man Kontakt hat, aber keine Inhalte – außer noch nicht
 zugestellten eigenen Nachrichten.
 
+### Chip-Schlüssel „nur bei entsperrtem Gerät“ (Krypto-Review 2026-10-25, V3)
+
+- Neue Tresore nutzen den HMAC-Schlüssel `malachi_pin_v2`, angelegt mit
+  `setUnlockedDeviceRequired(true)` (ab Android 9; StrongBox, sonst TEE). Der
+  Chip rechnet damit nur, solange das **Gerät** entsperrt ist: Wer ein gesperrtes
+  Gerät (auch gerootet) in die Hände bekommt, kann über den Chip keine
+  PIN-Versuche anstoßen. Nimmt ein Gerät das Merkmal nicht an, wird ohne
+  erzeugt (Datensatz `keyFlags.unlockedRequired = false`).
+- Bestehende Tresore (`malachi_pin_v1`) werden beim nächsten Entsperren **mit
+  PIN** umgestellt – ohne Nutzeraktion und ohne dass je ein Wert verloren gehen
+  kann:
+  1. neuen Schlüssel anlegen, DEK neu wickeln (gleiches Salz), Chip zweimal
+     rechnen lassen und vergleichen, Wickel probeweise öffnen;
+  2. Datensatz **und** Sicherung schreiben, beide zurücklesen und prüfen; der
+     alte Wickel bleibt als `prevKey` im Datensatz; schlägt die Probe fehl, wird
+     der alte Stand wiederhergestellt;
+  3. erst bei einem **späteren** Entsperren, das nachweislich über den neuen
+     Schlüssel lief, fällt `prevKey` weg (wieder zurückgelesen) und danach der
+     alte Chip-Schlüssel.
+  Lässt sich der neue Schlüssel zwischen 1 und 3 nicht nutzen, öffnet `prevKey`
+  den Tresor und die Umstellung wird zurückgenommen (erneuter Versuch nach 30
+  Tagen). Ein Abbruch an jeder Stelle hinterlässt einen Datensatz, den ein
+  vorhandener Schlüssel öffnet (Tests: `pinVault.keyUpgrade.test.js`, Absturz
+  nach 0/1/2 Schreibvorgängen in beiden Schritten, Rückleseprobe, kaputter
+  Schlüssel).
+- **Notfall-PIN:** Ihr Prüfwert hängt am Chip-Schlüssel, die Notfall-PIN ist
+  beim Entsperren aber nicht bekannt. Deshalb bleibt der alte Schlüssel nach der
+  Umstellung nur noch dafür erhalten (`duressKey`), bis die Notfall-PIN neu
+  gesetzt oder entfernt wird. Eine Eingabe prüft weiterhin beides mit **einer**
+  Argon2id-Rechnung (`deriveKeys`: Argon2id einmal, HMAC je Schlüssel).
+- Fingerabdruck: unverändert (eigener Keystore-Schlüssel, wickelt den DEK).
+  Die Umstellung braucht die PIN; wer nur den Fingerabdruck nutzt, wird beim
+  nächsten PIN-Entsperren umgestellt.
+- **Argon2id-Parameter bleiben** (32 MiB, t = 3): Argon2id hängt nur von PIN
+  und lesbarem Salz ab und lässt sich vorab auf fremder Hardware rechnen; höhere
+  Werte würden jedes Entsperren verlangsamen, den Angriff aber kaum. Wirksam
+  sind der Chip und die PIN-Länge. Messung am Gerät: Debug-Build, Logcat
+  `MalachiPinKey: Zeit: Argon2id … ms, Chip-HMAC … ms` (nur Debug).
+- **PIN-Länge:** 4 und 6 Stellen bleiben gleichwertige Wahl; bestehende PINs
+  funktionieren unverändert. In der Ersteinrichtung erklärt ein kleines „i“ auf
+  Antippen kurz den Unterschied – kein Dialog, keine Empfehlung.
+- **Passwort statt PIN:** siehe Abschnitt 6.
+
 ## 3. Empfangen bei gesperrter App
 
 - Gesperrt geschriebene Werte und Änderungen werden **versiegelt**
@@ -139,6 +182,20 @@ alten PIN, Neustart, Notfall-PIN, Chip-Ausfall und Neuinstallation.
   einen Tag (StrongBox). Mit Pro wird nach 5 Fehlversuchen gelöscht, aber das
   schützt nur die Oberfläche. Eine längere PIN oder ein Passwort verlängert
   das entsprechend; welche Länge passt, entscheidet jede und jeder selbst.
+  Seit V3 rechnet der Chip nur bei entsperrtem Gerät – der Angriff braucht
+  also zusätzlich ein entsperrtes Gerät.
+- **Passwort statt PIN (optional, zusätzlich zu 4/6 Stellen):** in V3 bewusst
+  zurückgestellt. Kryptografisch ist nichts zu tun (der Tresor nimmt jede
+  Zeichenkette, Argon2id + Chip). Den Weg zum nachträglichen Ändern gibt es
+  seit 1.3.0 („App-PIN ändern“, `PinChange.js` / `PinVault.changePin`:
+  alte PIN prüfen, DEK neu wickeln – auch den alten Wickel während der
+  Umstellung –, Rücklese-Probe, PIN-Länge im selben Datensatz). Für ein
+  Passwort fehlen weiterhin eine Texteingabe im Sperrbildschirm samt
+  Fehlversuchszähler und Fingerabdruck, eine neue Regel für die Notfall-PIN
+  (bisher „genau so lang wie die PIN“, damit niemand am Bildschirm erkennt,
+  welche eingegeben wird), und ein Downgrade auf 1.1 würde mit Passwort
+  aussperren (dessen Sperrbildschirm kennt nur Ziffern). Das soll als eigener,
+  am Gerät geprüfter Schritt kommen.
 - **Laufender Prozess:** Solange die App entsperrt ist, liegt der DEK im
   Arbeitsspeicher. Wer dann den Prozessspeicher liest (Root, Exploit), kommt
   heran.

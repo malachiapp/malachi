@@ -9,12 +9,15 @@
  *   "Standard" (klassik)  - kostenlos, das bisherige Nachtblau. Akzentfarbe frei
  *                           waehlbar (FREE_ACCENTS), Kopfleiste und Menue auf
  *                           Wunsch mit dem Akzent eingefaerbt (abgedunkelt).
- *   21 Design-Themen      - Vollversion (PRO_THEMES), je eine eigene Palette,
+ *   30 Design-Themen      - Vollversion (PRO_THEMES), je eine eigene Palette,
  *                           Akzent und Kopfleiste fest abgestimmt. In vier
  *                           Gruppen (THEME_CATEGORIES): Dunkel, Hell,
  *                           Business (schlicht, hell und dunkel) und Artwork
  *                           ("Malachi Artwork": knallige Comic-Tinte mit
- *                           Klecks-Muster hinter dem Chat, ChatArtwork.tsx).
+ *                           Klecks-Muster hinter dem Chat, ChatArtwork.tsx;
+ *                           seit Okt. 2026 neun weitere Muster: Sternbild,
+ *                           Synthwave, Papierschnitt, Bauhaus, Tiefsee,
+ *                           Kintsugi, Digitaltarn Wald/Stadt, Leopard).
  *
  * Kontrast (WCAG 2.1 AA): jede Kombination aus CONTRAST_RULES - Text 4.5:1,
  * grosse Schrift/Symbole/bedeutungstragende Raender 3:1 - gilt fuer jedes
@@ -540,6 +543,130 @@ export const PRO_THEMES = [
     danger: '#B42318', success: '#1E7A4C', warning: '#8A5300', online: '#1E7A4C',
     overlay: 'rgba(21,24,29,0.45)',
   },
+  // ── Artwork, zweite Runde (Okt. 2026, Nutzerwunsch "alle Designs"): je ein
+  // eigenes Muster hinter dem Chat (ChatArtwork.tsx ART). Wie bei "Malachi
+  // Artwork" wird jede Tinte nur so weit in chatBg gemischt, dass Zeitstempel
+  // auf dem Hintergrund lesbar bleiben (artworkFills, buildTheme).
+  {
+    id: 'sternbild', name: 'Sternbild', desc: 'Nachthimmel, Sterne verbunden wie im Malachi-Zeichen', dark: true, category: 'artwork',
+    bg: '#0A0F26', surface: '#131A38', surfaceAlt: '#0F1631', border: '#25305E',
+    text: '#EEF2FF', textSub: '#CBD3F4', textMuted: '#BDC6EE',
+    accent: '#7C8CFF',
+    headerBg: '#070B1D', headerBorder: '#141B3A', menuBg: '#18204A', chatBg: '#0B1129',
+    bubbleMine: '#3F4FCB', bubbleMineText: '#F4F6FF', bubbleTheirs: '#161F45', bubbleTheirsBorder: '#25305E',
+    danger: '#FF9A9A', success: '#7EE2B8', warning: '#F5C76B', online: '#7EE2B8',
+    overlay: 'rgba(5,8,22,0.6)',
+    artwork: 'stars',
+    artworkInks: ['#36E0FF', '#7C8CFF', '#F5D58A', '#C9D6FF'],
+  },
+  {
+    id: 'synthwave', name: 'Synthwave', desc: 'Neon-Raster und Achtziger-Sonne', dark: true, category: 'artwork',
+    bg: '#170A28', surface: '#22103A', surfaceAlt: '#1C0D31', border: '#3C1E60',
+    text: '#FDEFFF', textSub: '#E8D0F3', textMuted: '#D6BEE6',
+    accent: '#FF4FAE',
+    headerBg: '#10061C', headerBorder: '#22103A', menuBg: '#2A1446', chatBg: '#140824',
+    bubbleMine: '#B0136E', bubbleMineText: '#FFF2FA', bubbleTheirs: '#26123F', bubbleTheirsBorder: '#3C1E60',
+    danger: '#FF9C9C', success: '#6EF0C8', warning: '#FFD36E', online: '#6EF0C8',
+    overlay: 'rgba(12,4,22,0.6)',
+    artwork: 'synth',
+    artworkInks: ['#FF2E93', '#2DE2E6', '#FF9F1C', '#9D4EDD'],
+  },
+  {
+    id: 'papierschnitt', name: 'Papierschnitt', desc: 'Pastellfarbene Papierlagen auf Creme', dark: false, category: 'artwork',
+    bg: '#FFF6EC', surface: '#FFFFFF', surfaceAlt: '#FBEEE1', border: '#EFD9C5', borderStrong: '#9C8572',
+    text: '#2A2230', textSub: '#4A4052', textMuted: '#5A5062',
+    accent: '#2E6F8E', onAccent: '#FFFFFF',
+    headerBg: '#2E6F8E', headerBorder: '#2E6F8E', headerText: '#FFFFFF', headerSub: '#E6F2F8', headerMuted: '#E6F2F8',
+    headerIcon: '#FFE2C8', headerVerified: '#FFE2C8', headerOnline: '#D7F5E2',
+    headerSuccess: '#D7F5E2', headerWarning: '#FFE7B0', headerDanger: '#FFD0D0',
+    menuBg: '#FFFFFF', chatBg: '#FFF5EA',
+    bubbleMine: '#2E6F8E', bubbleMineText: '#FFFFFF', bubbleTheirs: '#FFFFFF', bubbleTheirsBorder: '#F0DCCB',
+    danger: '#B42318', success: '#1E7A4C', warning: '#8A5300', online: '#1E7A4C',
+    overlay: 'rgba(42,34,48,0.45)',
+    artwork: 'paper',
+    artworkInks: ['#FFB38A', '#F7A1C4', '#9ED8F0', '#B8DDB0', '#FFE08A', '#E9CDB5'],
+  },
+  {
+    id: 'bauhaus', name: 'Bauhaus', desc: 'Kreise, Bögen und Flächen in Grundfarben', dark: false, category: 'artwork',
+    bg: '#F4EFE6', surface: '#FFFFFF', surfaceAlt: '#EEE7DA', border: '#DDD3C2', borderStrong: '#857C6E',
+    text: '#1A1A1A', textSub: '#36332E', textMuted: '#3C3934',
+    accent: '#1B4FA0', onAccent: '#FFFFFF',
+    headerBg: '#1C1C1C', headerBorder: '#1C1C1C', headerText: '#FFFFFF', headerSub: '#E6E1D8', headerMuted: '#D2CCC2',
+    headerIcon: '#F2C14E', headerVerified: '#F2C14E', headerOnline: '#8FD49A',
+    headerSuccess: '#8FD49A', headerWarning: '#F2C14E', headerDanger: '#FF8A80',
+    menuBg: '#FFFFFF', chatBg: '#F4EFE6',
+    bubbleMine: '#1B4FA0', bubbleMineText: '#FFFFFF', bubbleTheirs: '#FFFFFF', bubbleTheirsBorder: '#DDD3C2',
+    danger: '#B3261E', success: '#27702B', warning: '#8A5300', online: '#27702B',
+    overlay: 'rgba(28,28,28,0.5)',
+    artwork: 'bauhaus',
+    artworkInks: ['#D7263D', '#F2C14E', '#1B4FA0', '#1C1C1C'],
+  },
+  {
+    id: 'tiefsee', name: 'Tiefsee', desc: 'Leuchtende Quallen in tiefem Blau', dark: true, category: 'artwork',
+    bg: '#03111A', surface: '#0A1E2A', surfaceAlt: '#071924', border: '#14384A',
+    text: '#E8F8FA', textSub: '#C0E1E5', textMuted: '#AED7DD',
+    accent: '#20C7B5',
+    headerBg: '#020B12', headerBorder: '#0A1E2A', menuBg: '#0E2735', chatBg: '#04121C',
+    bubbleMine: '#0E6E66', bubbleMineText: '#F0FFFD', bubbleTheirs: '#0B2633', bubbleTheirsBorder: '#14384A',
+    danger: '#FF9696', success: '#62E6B6', warning: '#F2C46E', online: '#62E6B6',
+    overlay: 'rgba(1,8,12,0.6)',
+    artwork: 'deepsea',
+    artworkInks: ['#18E0C8', '#3AA0FF', '#8B7CFF', '#FF6FB5'],
+  },
+  {
+    id: 'kintsugi', name: 'Kintsugi', desc: 'Goldene Risse auf schwarzem Lack', dark: true, category: 'artwork',
+    bg: '#121212', surface: '#1C1C1C', surfaceAlt: '#171717', border: '#303030',
+    text: '#F4F1EB', textSub: '#DCD7CE', textMuted: '#CEC8BD',
+    accent: '#D4AF5A',
+    headerBg: '#0B0B0B', headerBorder: '#1C1C1C', menuBg: '#222222', chatBg: '#131313',
+    bubbleMine: '#C9A24B', bubbleMineText: '#1A1406', bubbleTheirs: '#222222', bubbleTheirsBorder: '#303030',
+    danger: '#FF8F85', success: '#93D3A2', warning: '#E8C46E', online: '#93D3A2',
+    overlay: 'rgba(8,7,6,0.6)',
+    artwork: 'kintsugi',
+    artworkInks: ['#D4AF5A', '#F0D58C', '#C98A4B'],
+  },
+  {
+    id: 'tarnwald', name: 'Digitaltarn Wald', desc: 'Pixel-Tarnmuster in Oliv und Erdtönen', dark: true, category: 'artwork',
+    bg: '#1C2116', surface: '#262C1E', surfaceAlt: '#21271A', border: '#3A4330',
+    text: '#F0F3E8', textSub: '#D3D9C3', textMuted: '#C4CBAE',
+    accent: '#A9B86E',
+    headerBg: '#151912', headerBorder: '#262C1E', menuBg: '#2C3323', chatBg: '#1F2518',
+    bubbleMine: '#4E5E2E', bubbleMineText: '#F4F6EC', bubbleTheirs: '#2A3121', bubbleTheirsBorder: '#3A4330',
+    danger: '#FF9A8A', success: '#9CDB8A', warning: '#E6C46A', online: '#9CDB8A',
+    overlay: 'rgba(10,12,8,0.6)',
+    artwork: 'pixelwood',
+    artworkInks: ['#46532F', '#5E5A3A', '#2B331F'],
+  },
+  {
+    id: 'tarnstadt', name: 'Digitaltarn Stadt', desc: 'Pixel-Tarnmuster in Grau und Weiß', dark: false, category: 'artwork',
+    bg: '#ECEDEF', surface: '#FFFFFF', surfaceAlt: '#E3E5E8', border: '#CDD0D5', borderStrong: '#7A7F87',
+    text: '#1E2125', textSub: '#363A40', textMuted: '#454950',
+    accent: '#3A4B5E', onAccent: '#FFFFFF',
+    headerBg: '#2B3138', headerBorder: '#2B3138', headerText: '#FFFFFF', headerSub: '#DCE0E5', headerMuted: '#C9CED5',
+    headerIcon: '#E3E7EC', headerVerified: '#E3E7EC', headerOnline: '#9EE0B0',
+    headerSuccess: '#9EE0B0', headerWarning: '#F1CC7A', headerDanger: '#FF9A9A',
+    menuBg: '#FFFFFF', chatBg: '#E8E9EC',
+    bubbleMine: '#3D4E62', bubbleMineText: '#FFFFFF', bubbleTheirs: '#FFFFFF', bubbleTheirsBorder: '#CDD0D5',
+    danger: '#B3261E', success: '#1E7A4C', warning: '#7A4D00', online: '#1E7A4C',
+    overlay: 'rgba(30,33,37,0.5)',
+    artwork: 'pixelurban',
+    artworkInks: ['#FFFFFF', '#B9BDC3', '#8E939A'],
+  },
+  {
+    id: 'leopard', name: 'Leopard', desc: 'Rosetten-Fell in Gold und Braun', dark: false, category: 'artwork',
+    bg: '#F6E6C6', surface: '#FFF8EA', surfaceAlt: '#F1DDB6', border: '#E2C48E', borderStrong: '#8C6A3C',
+    text: '#22140A', textSub: '#3A2512', textMuted: '#38250F',
+    accent: '#8E4A10', onAccent: '#FFFFFF',
+    headerBg: '#2E1C10', headerBorder: '#2E1C10', headerText: '#FFF3DE', headerSub: '#F1DDBC', headerMuted: '#E6CFA6',
+    headerIcon: '#F0B45C', headerVerified: '#F0B45C', headerOnline: '#A6DFA0',
+    headerSuccess: '#A6DFA0', headerWarning: '#F5C76B', headerDanger: '#FF9C8A',
+    menuBg: '#FFF8EA', chatBg: '#F2D6A2',
+    bubbleMine: '#5A3418', bubbleMineText: '#FFF3DE', bubbleTheirs: '#FFF8EA', bubbleTheirsBorder: '#E2C48E',
+    danger: '#A1241A', success: '#2E6B2E', warning: '#7A4600', online: '#2E6B2E',
+    overlay: 'rgba(36,22,10,0.5)',
+    artwork: 'leopard',
+    artworkInks: ['#2B1A10', '#B5762E', '#E8B86A'],
+  },
 ];
 
 /**
@@ -650,6 +777,16 @@ export function buildTheme(base) {
       for (let s = ARTWORK_INK_SHARE; s > 0.05; s -= 0.02) {
         const f = mix(t.chatBg, c, s);
         if (contrastRatio(t.textMuted, f) >= 4.5) return f;
+      }
+      return mix(t.chatBg, c, 0.05);
+    }));
+    // Glanzpunkte (Sterne, Leuchtpartikel - nur sehr kleine Formen, ChatArtwork
+    // Kennzeichen g): duerfen heller sein, weil sie keine Schrift verdecken
+    // koennen - Zeitstempel darauf noch 3:1 (wie grosse Schrift/Symbole).
+    d('artworkGlints', () => t.artworkInks.map((c) => {
+      for (let s = 1; s > 0.05; s -= 0.02) {
+        const f = mix(t.chatBg, c, s);
+        if (contrastRatio(t.textMuted, f) >= 3) return f;
       }
       return mix(t.chatBg, c, 0.05);
     }));

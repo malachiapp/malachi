@@ -64,7 +64,9 @@ key    = "ED25519-V3:" + Base64(clamp(SHA-512(seed)))   (64-Byte-Form, die tor e
   treffen sich zwei Geräte, deren Startzeit bzw. Uhr bis zu ~1 Stunde
   auseinanderliegt (Start kurz vor/nach dem Stundenwechsel). Pro Stunde ein
   neues Salz: Vorberechnungen gelten nur eine Stunde.
-- **Argon2id statt scrypt:** Die App hat mit BouncyCastle 1.80 bereits eine
+- **Argon2id statt scrypt:** Die App hat mit BouncyCastle (damals 1.80, seit
+  der Krypto-Haertung 1.86 - Ausgabe per Testvektor als identisch belegt,
+  `BouncyCastleVectorsTest.kt`, Parameter dieser Kopplung) bereits eine
   native Argon2id-Implementierung (genutzt vom Siegel-Tresor). In JS wäre
   Argon2id auf Hermes (Interpreter) unbrauchbar langsam (Minuten), scrypt aus
   `@noble/hashes` mit sinnvollen Parametern (N=2^15, r=8) ebenfalls viele

@@ -256,6 +256,10 @@ async function startOffer(contactId) {
   if (attempts.has(contactId) || !activeTorReady(contactId)) return;
   lastOfferStarted.set(contactId, Date.now());
   const att = newAttempt(contactId, id, 'offerer');
+  // Kettenglied des Verbindungsschluessels v2 (Krypto-Review V5): das
+  // Geheimnis der Verbindung, ueber die dieses Angebot reist. Die Gegenseite
+  // findet es ueber die Kennung im Kyber-Handshake.
+  att.rtc._chainSecret = RTCStore.connections.get(contactId)?.sharedSecret || null;
   console.log('[Direkt] Starte Aushandlung einer Direktverbindung (ueber Tor)');
   try {
     const offerJSON = await att.rtc.createOffer({ negotiationId: id });

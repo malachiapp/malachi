@@ -27,6 +27,7 @@ import { isCallSpeakerSupported, onCallAudioRoute, AUDIO_ROUTE_SPEAKER } from '.
 import { deriveContactId as deriveSharedContactId } from './PairingIds';
 import { sanitizeWave, encodeWave, levelsFor, parseWave, createLevelFeed, effectiveWaveStyle, subscribeWaveStyle, loadWaveStyle, waveStyleSetting, setWaveStyle, resetWaveStyleAfterWipe, fallbackLevels } from './VoiceWave';
 import VoiceWaveView, { LiveRecordingWave } from './VoiceWaveView';
+import { VoiceDraftBar } from './VoiceDraft';
 import { RTCView } from 'react-native-webrtc';
 // @react-native-community/audio-toolkit ersetzt (per Live-Test entdeckt:
 // nach dem RN-0.86-Upgrade landete dessen natives Modul nachweislich nie im
@@ -39,7 +40,7 @@ import { RTCView } from 'react-native-webrtc';
 // alten Architektur basieren).
 // Seit 2026-10-25 nur noch als Rueckfallweg in SecureAudio.js: Aufnahme und
 // Wiedergabe laufen nativ im Arbeitsspeicher, ohne Klartext-Datei im Cache.
-import { getVoicePlayer } from './SecureAudio';
+import { getVoicePlayer, appendAdtsBase64, canAppendRecording } from './SecureAudio';
 const voicePlayer = getVoicePlayer();
 import EncryptedStorage from 'react-native-encrypted-storage';
 import RNFS from 'react-native-fs';
@@ -95,7 +96,8 @@ export async function updateGroups(mutator) {
 import { NativeModules, Linking, Share, AppState, PermissionsAndroid, Platform, I18nManager } from 'react-native';
 const { MalachiService, MalachiNotification } = NativeModules;
 import ReactNativeBiometrics from 'react-native-biometrics';
-import RTCStore, { isEphemeral } from './RTCStore';
+import RTCStore, { isEphemeral, timerPreview } from './RTCStore';
+import { SafetyNumberDialog, useSafetyInfo, hasSafetyDisplay } from './SafetyNumberDialog';
 import { persistChatHistory, mediaData, removeMedia, removeScope as removeMediaScope, wipeAllMedia } from './MediaVault';
 import { loadOwnAvatar, subscribeOwnAvatar, setOwnAvatarFromPicker, removeOwnAvatar, resetOwnAvatarAfterWipe, pendingLegacyAvatarPath } from './OwnAvatar';
 import {
@@ -124,7 +126,7 @@ import {
   loadPreviousSecret,
   queueOffline, requestContactDeletion, removeContactLocally, setUiContactsListener,
   sendViaOutbox, dropEphemeralFromQueue, dropQueuedContent, dropFromQueue, mergeSendStatus,
-  startColdStartReconnect,
+  startColdStartReconnect, sweepExpiredChats, setOwnTimer, adoptPeerTimer,
 } from './BackgroundSync';
 import {
   configureLicenseManager, refreshLicense, resumePendingPurchase, subscribeLicense, getLicenseState,
@@ -138,6 +140,10 @@ import {
   LICENSE_STORAGE_KEY, PURCHASE_STORAGE_KEY,
 } from './LicenseManager';
 import { wipe as siegelWipe } from './SiegelVault';
+// Zurueck-Taste: zuerst das zuletzt Geoeffnete schliessen, Dialoge mit
+// "Abbrechen" per Zurueck schliessbar (BackStack.js).
+import { useBackHandler, handleBack as handleBackStack, installAlertBack } from './BackStack';
+import SecurityPinModal from './SecurityPinModal';
 import SiegelScreen from './SiegelScreen';
 import { extractMessage as extractSiegelMessage, siegelKind } from './SiegelCrypto';
 import { cleanupSiegelTemp, isSiegelFileName } from './SiegelFiles';
@@ -198,6 +204,8 @@ const FORWARD_ARROW = I18nManager.isRTL ? '←' : '→';
 // Leserichtung rechts-nach-links wuerde Android sie ohnehin umdrehen. Die
 // LRM-Marken (U+200E) davor und dahinter halten das Zeichen links-nach-rechts,
 // damit es genau einmal - hier - gedreht wird.
+installAlertBack();
+
 const CHEVRON = I18nManager.isRTL ? '\u200E‹\u200E' : '›';
 
 // Farbpalette = Tokens des aktuellen Design-Themas (Themes.js). Lebendes
@@ -1048,6 +1056,9 @@ function AppInner() {
   // wegzunavigieren, damit kein Anruf im Hintergrund weiterlaeuft).
   React.useEffect(() => {
     const onHardwareBack = () => {
+      // Erst das, was auf dem aktuellen Bildschirm offen ist (Auswahl, Suche,
+      // Aufnahme, Ansicht in der Ansicht) - dann erst der Bildschirmwechsel.
+      if (screen !== 'lock' && screen !== 'setup' && handleBackStack()) return true;
       if (screen === 'chat') {
         if (chatBackInterceptRef.current) { chatBackInterceptRef.current(); return true; }
         nav('home'); return true;
@@ -1288,7 +1299,7 @@ function AppInner() {
                    initialSelected={createPreselect} onPairNew={() => { pendingGroupAddRef.current = { create: true }; nav('connect'); }} />,
     groupDetail: <GroupDetailScreen group={activeGroup} contacts={contacts} palette={P} accent={AC} pickImage={launchImageLibrary} onBack={() => nav(activeGroup ? 'groupChat' : 'home')} onLeft={() => nav('home')}
                    onPairNew={() => { if (activeGroup) { pendingGroupAddRef.current = { groupId: activeGroup.groupId }; nav('connect'); } }} />,
-    groupChat: <GroupChatScreen group={activeGroup} contacts={contacts} palette={P} accent={AC} fontSize={fontSize} onBack={() => nav('home')} onOpenDetail={() => nav('groupDetail')} />,
+    groupChat: <GroupChatScreen group={activeGroup} contacts={contacts} palette={P} accent={AC} fontSize={fontSize} customBg={customBgUri} onBack={() => nav('home')} onOpenDetail={() => nav('groupDetail')} />,
     groupCall: <GroupCallScreen contacts={contacts} palette={P} accent={AC} />,
 chat:     <ChatScreen     chat={chat} rtc={globalRTC} fontSize={fontSize} customBg={customBgUri} onBack={() => nav('home')} backInterceptRef={chatBackInterceptRef} onCall={(video) => startOutgoingCall(chat, video)} onRename={(updated) => {
       // ZUSAMMENFUEHREN statt ersetzen (Live-Test 2026-10-18: "Kevs Profilbild
@@ -1369,7 +1380,8 @@ chat:     <ChatScreen     chat={chat} rtc={globalRTC} fontSize={fontSize} custom
     onAvatarChange={(uri) => setAvatar(uri)}
     username={username}
     onUsernameChange={(n) => { setUsername(n); AsyncStorage.setItem('username', n); }}
-    onWipeAll={() => performWipe().then(() => { resetUiAfterWipe(); nav('setup'); })} />,
+    onWipeAll={() => performWipe().then(() => { resetUiAfterWipe(); nav('setup'); })}
+    onLockNow={() => { resumeTargetRef.current = null; lockNow(); }} />,
   };
 
   return (
@@ -1630,30 +1642,35 @@ const VAULT_PIN = '\u0000vault';
 // Vorschautexte, Schluessel der Empfangs-Ablage). Jeder Verlauf wird nach dem
 // Verschluesseln zurueckgelesen und verglichen (PinVault.migrateKeys); bei
 // einer Abweichung bleibt er im Klartext und es wird beim naechsten
-// Entsperren erneut versucht - nie ein Datenverlust.
+// Entsperren erneut versucht - nie ein Datenverlust. Danach abgelaufene
+// Timer-Nachrichten aus allen Verlaeufen entfernen (sweepExpiredChats).
 let vaultMigration = null;
 export function afterVaultUnlock() {
   if (!PinVault.isUnlocked()) return Promise.resolve();
   RTCStore.ensureInboxRestored();
   if (vaultMigration) return vaultMigration;
-  vaultMigration = (async () => {
-    if ((await EncryptedStorage.getItem('pin_vault_migrated').catch(() => null)) === '1') return;
-    const list = (raw) => { try { const v = JSON.parse(raw || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
-    const contacts = list(await EncryptedStorage.getItem('contacts').catch(() => null));
-    const groups = list(await EncryptedStorage.getItem('groups').catch(() => null));
-    const keys = ['chat_default',
-      ...contacts.filter(c => c?.id).map(c => 'chat_' + c.id),
-      ...groups.filter(g => g?.groupId).map(g => 'gchat_' + g.groupId)];
-    const res = await PinVault.migrateKeys(keys);
-    // Vorschautexte werden beim Schreiben versiegelt (BackgroundSync).
-    await updateContacts(cs => cs);
-    await updateGroups(gs => gs);
-    await RTCStore.sealInboxIndex();
-    if (!res.failed) await EncryptedStorage.setItem('pin_vault_migrated', '1');
-    console.log('[PIN-Tresor] Altbestand verschluesselt:', res.migrated, 'Fehler:', res.failed);
-  })().catch((e) => console.warn('[PIN-Tresor] Umstellung:', e?.message || e))
+  vaultMigration = migrateVaultOnce()
+    .catch((e) => console.warn('[PIN-Tresor] Umstellung:', e?.message || e))
+    .then(() => sweepExpiredChats())
+    .catch((e) => console.warn('[Timer] Bereinigung:', e?.message || e))
     .finally(() => { vaultMigration = null; });
   return vaultMigration;
+}
+async function migrateVaultOnce() {
+  if ((await EncryptedStorage.getItem('pin_vault_migrated').catch(() => null)) === '1') return;
+  const list = (raw) => { try { const v = JSON.parse(raw || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+  const contacts = list(await EncryptedStorage.getItem('contacts').catch(() => null));
+  const groups = list(await EncryptedStorage.getItem('groups').catch(() => null));
+  const keys = ['chat_default',
+    ...contacts.filter(c => c?.id).map(c => 'chat_' + c.id),
+    ...groups.filter(g => g?.groupId).map(g => 'gchat_' + g.groupId)];
+  const res = await PinVault.migrateKeys(keys);
+  // Vorschautexte werden beim Schreiben versiegelt (BackgroundSync).
+  await updateContacts(cs => cs);
+  await updateGroups(gs => gs);
+  await RTCStore.sealInboxIndex();
+  if (!res.failed) await EncryptedStorage.setItem('pin_vault_migrated', '1');
+  console.log('[PIN-Tresor] Altbestand verschluesselt:', res.migrated, 'Fehler:', res.failed);
 }
 
 export function LockScreen({ onUnlock, onWipe }) {
@@ -1672,6 +1689,7 @@ export function LockScreen({ onUnlock, onWipe }) {
   const bioEnrollRef = useRef(false);
   const [confirmPin, setConfirm] = useState('');
   const [step,       setStep]    = useState('enter'); // enter | setup | confirm
+  const [lenInfo,    setLenInfo] = useState(false);   // kleines "i" bei 4/6 Stellen
   // Vollversion: nur fuer die Texte der Sperrfristen ("noch X Versuche"
   // kuendigt eine Loeschung an, die es ohne Pro nicht gibt). Ob nach dem 5.
   // Fehlversuch geloescht wird, entscheidet tap() mit einer frischen Pruefung.
@@ -1695,6 +1713,10 @@ export function LockScreen({ onUnlock, onWipe }) {
       if (vs === 'present' || vs === 'unknown') {
         // 'unknown' (Speicher gerade nicht lesbar): NIE die Einrichtung
         // anbieten - die naechste Eingabe versucht es erneut.
+        // Laenge aus dem Tresor-Datensatz, falls vorhanden (seit "PIN
+        // aendern": steht im selben Datensatz wie die PIN - nie auseinander).
+        const vl = PinVault.pinLength();
+        if (vl) setPinLen(vl);
         setSaved(VAULT_PIN);
         return;
       }
@@ -1703,7 +1725,7 @@ export function LockScreen({ onUnlock, onWipe }) {
       let p = null;
       try { p = await EncryptedStorage.getItem('app_pin'); } catch {}
       if (!p) setStep('setup');
-      else setSaved(p);
+      else { setSaved(p); setPinLen(p.length); }
       try {
         const dp = await EncryptedStorage.getItem('duress_pin');
         if (dp) setDuressPin(dp);
@@ -1988,18 +2010,31 @@ export function LockScreen({ onUnlock, onWipe }) {
          t('lock.enterPin')}
       </Text>
 
-      {/* PIN Länge wählen (nur im Setup) */}
+      {/* PIN Länge wählen (nur im Setup). Das kleine "i" erklaert nur kurz
+          den Unterschied - keine Empfehlung, kein Druck: 4 und 6 Stellen sind
+          gleichwertige Wahlmoeglichkeiten (Vorgabe des Entwicklers). */}
       {step === 'setup' && (
-        <View style={{ flexDirection:'row', gap:8, marginBottom:20 }}>
-          {[4,6].map(l => (
-            <TouchableOpacity key={l} onPress={() => changePinLen(l)}
-              style={{ paddingHorizontal:20, paddingVertical:8, borderRadius:20,
-                backgroundColor: pinLen===l ? L.accent : L.surface,
-                borderWidth:1, borderColor: pinLen===l ? L.accent : L.border }}>
-              <Text style={{ fontSize:13, fontWeight:'500',
-                color: pinLen===l ? L.onAccent : L.textSub }}>{t('lock.digits', { n: l })}</Text>
+        <View style={{ alignItems:'center', marginBottom:20 }}>
+          <View style={{ flexDirection:'row', gap:8, alignItems:'center' }}>
+            {[4,6].map(l => (
+              <TouchableOpacity key={l} onPress={() => changePinLen(l)}
+                style={{ paddingHorizontal:20, paddingVertical:8, borderRadius:20,
+                  backgroundColor: pinLen===l ? L.accent : L.surface,
+                  borderWidth:1, borderColor: pinLen===l ? L.accent : L.border }}>
+                <Text style={{ fontSize:13, fontWeight:'500',
+                  color: pinLen===l ? L.onAccent : L.textSub }}>{t('lock.digits', { n: l })}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity testID="pin-length-info" accessibilityRole="button" accessibilityLabel={t('lock.lengthInfoLabel')}
+              onPress={() => setLenInfo(v => !v)} hitSlop={{ top:10, bottom:10, left:10, right:10 }} style={{ padding:4 }}>
+              <Icon name="info" size={16} color={L.textMuted} />
             </TouchableOpacity>
-          ))}
+          </View>
+          {lenInfo ? (
+            <Text testID="pin-length-info-text" style={{ fontSize:12, color:L.textMuted, textAlign:'center', lineHeight:17, marginTop:10, maxWidth:280 }}>
+              {t('lock.lengthInfo')}
+            </Text>
+          ) : null}
         </View>
       )}
 
@@ -2008,7 +2043,7 @@ export function LockScreen({ onUnlock, onWipe }) {
           gefuellt - wer auf den Bildschirm sah, BEVOR getippt wurde, konnte
           abzaehlen, wie viele Ziffern der PIN hat. Genauso haette man beim
           Mitsehen erkannt, ob gerade der normale oder der (gleich lange,
-          siehe saveDuressPin) Duress-PIN eingegeben wird, sobald die Laengen
+          siehe PinChange.setDuress) Duress-PIN eingegeben wird, sobald die Laengen
           auseinanderliefen.
 
           Jetzt waechst die Reihe mit der Eingabe: ein Punkt pro bereits
@@ -2212,6 +2247,9 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
   })();
 
   const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
+  // Zurueck-Taste: Auswahlmodus bzw. Suche schliessen statt die App zu verlassen.
+  useBackHandler(selectMode, exitSelect);
+  useBackHandler(searchOpen && !selectMode, () => { setSearch(''); setSearchOpen(false); });
   const toggleSelected = (id) => {
     setSelected(s => {
       const next = new Set(s);
@@ -2297,7 +2335,7 @@ export function HomeScreen({ contacts, groups = [], onChat, onConnect, onSetting
                 </View>
               </View>
               <View style={{ flexDirection:'row', gap:8, marginTop:12 }}>
-                {[['all', 'Alle', chatsUnread + groupsUnread], ['chats', 'Chats', chatsUnread], ['groups', 'Gruppen', groupsUnread]].map(([k, label, n]) => {
+                {[['all', t('home.tabAll'), chatsUnread + groupsUnread], ['chats', t('home.tabChats'), chatsUnread], ['groups', t('common.groups'), groupsUnread]].map(([k, label, n]) => {
                   const on = filter === k;
                   return (
                     <TouchableOpacity key={k} onPress={() => setFilter(k)} hitSlop={{ top:6, bottom:6, left:4, right:4 }}
@@ -2689,13 +2727,19 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   // fuer die naechste Sprachnachricht automatisch weiter - wie bei WhatsApp).
   const [playProgress, setPlayProgress] = useState({ position: 0, duration: 0 });
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [safetyCode, setSafetyCode] = useState(null);
   const [safetyVisible, setSafetyVisible] = useState(false);
-  const [safetyChanged, setSafetyChanged] = useState(false);
+  // Stabiler Sicherheitscode (SafetyNumber.js, Krypto-Review V1): haengt an
+  // der Ratchet-Sitzung, nicht an der Verbindung. Fuer Gegenseiten 1.0/1.1 der
+  // alte Verbindungscode (rtc.safetyCode) mit Hinweis.
+  const [safety, refreshSafety] = useSafetyInfo(chat?.id, () => RTCStore.getConnection(chat?.id)?.safetyCode || null);
+  const showSafety = hasSafetyDisplay(safety);
   const playerRef = useRef(null);
   // Audio-Fokus (AppFocus.js): startet Siegel eine Wiedergabe oder Aufnahme,
   // wird die des Chats hier sauber beendet (es gibt nur EINEN nativen Spieler).
   const stopChatAudio = async () => {
+    // Nimmt Siegel auf/spielt ab, waehrend hier noch aufgenommen wird: die
+    // Aufnahme wird zur Vorschau (nichts geht verloren, Mikrofon frei).
+    if (recorderRef.current) await stopRecording();
     await voicePlayer.stop();
     playerRef.current = null;
     previewPlayerRef.current = null;
@@ -2703,39 +2747,10 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     setPlayProgress({ position: 0, duration: 0 });
     setPreviewPlaying(false);
   };
-  // Safety Code laden wenn verfügbar. Der Code aendert sich legitim bei jedem
-  // Reconnect (jede Sitzung macht einen frischen Kyber-Austausch, Forward
-  // Secrecy) - das war bisher fuer den Nutzer unsichtbar: der Code wurde nur
-  // einmalig geladen (Interval stoppte nach dem ersten Fund) und nirgends
-  // markiert, WENN er sich gegenueber dem zuletzt gesehenen Wert geaendert
-  // hat. Ohne dieses Signal ist der Sicherheitscode-Vergleich faktisch
-  // wirkungslos, weil ein Nutzer nie erfaehrt, dass sich etwas geaendert hat
-  // und eine erneute Pruefung sinnvoll waere (Sicherheitsaudit). Jetzt: bei
-  // jeder Aenderung gegenueber dem zuletzt VOM NUTZER GESEHENEN (nicht nur
-  // berechneten) Code wird ein kleiner Hinweis-Punkt am Schild-Symbol
-  // angezeigt, bis der Nutzer den Dialog erneut oeffnet.
-  React.useEffect(() => {
-    if (!chat?.id) return;
-    let cancelled = false;
-    const checkSafety = setInterval(async () => {
-      const rtcConn = RTCStore.getConnection(chat.id);
-      if (rtcConn?.safetyCode && rtcConn.safetyCode !== safetyCode) {
-        const seenKey = 'safety_code_seen_' + chat.id;
-        const lastSeen = await AsyncStorage.getItem(seenKey).catch(() => null);
-        if (cancelled) return;
-        setSafetyCode(rtcConn.safetyCode);
-        if (lastSeen && lastSeen !== rtcConn.safetyCode) {
-          setSafetyChanged(true);
-        } else if (!lastSeen) {
-          // Erste Sitzung ueberhaupt mit diesem Kontakt - noch nichts zum
-          // Vergleichen da, direkt als "gesehen" merken statt einen Alarm
-          // fuer den Normalfall "erstes Pairing" auszuloesen.
-          await AsyncStorage.setItem(seenKey, rtcConn.safetyCode).catch(() => {});
-        }
-      }
-    }, 2000);
-    return () => { cancelled = true; clearInterval(checkSafety); };
-  }, [chat?.id, safetyCode]);
+  // (Frueher: Hinweis bei JEDER neuen Verbindung, weil der Code am
+  // Verbindungsgeheimnis hing - Gewoehnung an Warnungen, Befund K-01. Der
+  // Hinweis "geaendert" kommt jetzt nur bei einem echten Sitzungswechsel,
+  // siehe SafetyNumber.getSafetyInfo.)
   const recordTimerRef = useRef(null);
   const recordStartRef = useRef(null);
   const previewPlayerRef = useRef(null);
@@ -3128,7 +3143,9 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
         // gegen den Fall, dass diese Seite secretActive noch nicht gesetzt
         // hat (z.B. secret_start selbst noch unterwegs), die Nachricht aber
         // bereits als secret markiert eintrifft.
-        if (!secretActiveRef.current && !parsedMsg.secret) onLastMessage?.(chat.id, parsedMsg.isLocation ? t('preview.location') : parsedMsg.text);
+        // Timer-Nachricht: neutraler Hinweis statt Inhalt - die Vorschau
+        // ueberdauert die Nachricht (siehe timerPreview in RTCStore.js).
+        if (!secretActiveRef.current && !parsedMsg.secret) onLastMessage?.(chat.id, timerPreview(incomingMode) || (parsedMsg.isLocation ? t('preview.location') : parsedMsg.text));
         // Empfangsbestaetigung: sendet RTCStore zentral (auch bei
         // geschlossenem Chat), Wiederholungen verwirft RTCStore vorher.
       } else if (msg.type === 'receipt' && msg.msgId) {
@@ -3276,12 +3293,15 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
         if (msg.secret || secretActiveRef.current) entry.secret = true;   // Audit P1: nur RAM
         setMsgs(m => ((m || []).some(x => x.id === entry.id) ? (m || []) : [...(m || []), entry]));
         if (!entry.secret) onLastMessage?.(chat?.id, preview);
-      } else if (msg.type === 'system' && msg.subtype === 'timer' && msg.mode) {
-        // Timer-Einstellung vom Gegenüber übernehmen
-        console.log('[Timer] Gegenüber hat Timer gesetzt:', msg.mode);
-        setExpire(msg.mode);
-        expireModeRef.current = msg.mode;
-        AsyncStorage.setItem('timer_' + chat.id, msg.mode);
+      } else if (msg.type === 'system' && msg.subtype === 'timer') {
+        // Timer-Einstellung vom Gegenüber übernehmen (bei geschlossenem Chat:
+        // BackgroundSync.applyControlSignal). Juengere Aenderung gewinnt.
+        adoptPeerTimer(chat.id, msg).then((mode) => {
+          if (!mode) return;
+          console.log('[Timer] Gegenüber hat Timer gesetzt:', mode);
+          setExpire(mode);
+          expireModeRef.current = mode;
+        }).catch(() => {});
       } else if (msg.type === 'system' && msg.subtype === 'hello' && msg.myId) {
         // myId des Kontakts speichern für Auto-Reconnect
         // Ueber updateContacts serialisiert (Konkurrenz-Review §5).
@@ -3390,8 +3410,14 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   }, [msgs]);
 
   const recorderRef = useRef(null);
+  // Aufnahme fortsetzen (Nutzerwunsch 29.10.2026): der bisherige Teil der
+  // Vorschau, an den der naechste Abschnitt angehaengt wird - nur im
+  // Arbeitsspeicher wie die Aufnahme selbst (SecureAudio.appendAdtsBase64).
+  const appendBaseRef = useRef(null);
+  // Laenger als die native Obergrenze (30 min) wird eine Sprachnachricht nicht.
+  const MAX_VOICE_MS = 29 * 60 * 1000;
 
-  const startRecording = async () => {
+  const startRecording = async (base = null) => {
     try {
       await claimAudio('chat', stopChatAudio);
       // Permission anfragen
@@ -3405,20 +3431,41 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
         return;
       }
       // Pegel alle 100 ms (Wellenform). Aufnahme nur im Arbeitsspeicher
-      // (SecureAudio.js) - es entsteht keine Audiodatei mehr.
-      levelFeedRef.current.clear();
+      // (SecureAudio.js) - es entsteht keine Audiodatei mehr. Beim Fortsetzen
+      // laeuft die Wellenform mit dem bisherigen Teil weiter.
+      if (base?.levels) levelFeedRef.current.load(base.levels);
+      else levelFeedRef.current.clear();
       await voicePlayer.startRecording((db) => levelFeedRef.current?.push(db));
+      appendBaseRef.current = base;
       recorderRef.current = true;
       setRecording(true);
-      setRecordSecs(0);
+      const baseMs = base?.durationMs || 0;
+      setRecordSecs(Math.floor(baseMs / 1000));
       recordStartRef.current = Date.now();
       recordTimerRef.current = setInterval(() => {
-        setRecordSecs(s => s + 1);
-      }, 1000);
+        const total = baseMs + Date.now() - recordStartRef.current;
+        setRecordSecs(Math.floor(total / 1000));
+        if (total >= MAX_VOICE_MS) stopRecording();
+      }, 500);
       console.log('[Audio] Aufnahme gestartet');
+      return true;
     } catch(e) {
       console.error('[Audio] Start Fehler:', e);
+      return false;
     }
+  };
+
+  // Vorschau -> weiter aufnehmen: der neue Abschnitt wird beim Stoppen an
+  // den bisherigen angehaengt (Vorschau mit allem, Senden schickt alles).
+  const resumeRecording = async () => {
+    const base = audioPreview;
+    if (!base || recording || !canAppendRecording(base.base64) || base.durationMs >= MAX_VOICE_MS) return;
+    if (previewPlayerRef.current) { voicePlayer.stop(); previewPlayerRef.current = null; }
+    setPreviewPlaying(false);
+    setPreviewProgress({ position: 0, duration: 0 });
+    setAudioPreview(null);
+    const ok = await startRecording(base);
+    if (!ok) setAudioPreview(base);   // Mikrofon nicht verfuegbar: Vorschau bleibt
   };
 
   // Extrahiert aus dem frueheren stopRecording() - jetzt von beiden
@@ -3427,6 +3474,8 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     clearInterval(recordTimerRef.current);
     const elapsed = Date.now() - recordStartRef.current;
     recorderRef.current = null;
+    const base = appendBaseRef.current;
+    appendBaseRef.current = null;
     let rec;
     try {
       rec = await voicePlayer.stopRecording();
@@ -3434,19 +3483,30 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
       setRecording(false);
       setRecordSecs(0);
     }
-    const durationMs = rec.durationMs || elapsed;
-    const wave = encodeWave(levelFeedRef.current.samples()) || undefined;
+    let base64 = rec.base64;
+    let durationMs = rec.durationMs || elapsed;
+    // Fortgesetzt: bisherigen Teil + neuen Abschnitt verbinden. Ist der neue
+    // Abschnitt leer (sofort wieder gestoppt), bleibt der bisherige.
+    if (base) {
+      const joined = base64 ? appendAdtsBase64(base.base64, base64) : null;
+      if (joined) { base64 = joined; durationMs = base.durationMs + durationMs; }
+      else { base64 = base.base64; durationMs = base.durationMs; }
+    }
+    const levels = levelFeedRef.current.samples();
+    const wave = encodeWave(levels) || undefined;
     levelFeedRef.current.clear();
     console.log('[Audio] Aufnahme gestoppt');
-    return { base64: rec.base64, durationMs, wave };
+    return { base64, durationMs, wave, levels };
   };
 
   const stopRecording = async () => {
     try {
-      const { base64, durationMs, wave } = await stopRecorderRaw();
+      const { base64, durationMs, wave, levels } = await stopRecorderRaw();
+      if (!base64) return;
       // Preview anzeigen statt direkt senden. id: Saat der Ersatz-
-      // Wellenform und Kennung der laufenden Vorschau-Wiedergabe.
-      setAudioPreview({ base64, durationMs, wave, id: 'rec_' + Date.now() });
+      // Wellenform und Kennung der laufenden Vorschau-Wiedergabe; levels:
+      // Pegel fuer ein spaeteres Fortsetzen.
+      setAudioPreview({ base64, durationMs, wave, levels, id: 'rec_' + Date.now() });
     } catch(e) {
       console.error('[Audio] Stop Fehler:', e);
       setRecording(false);
@@ -3466,7 +3526,11 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
       // Zu kurze/versehentliche Aufnahmen (z.B. Wackler beim Loslassen) nicht
       // als leere Sprachnachricht verschicken.
       if (durationMs < 300 || !base64) return;
-      await sendAudioNow(base64, durationMs, false, wave);
+      // Aus einer fortgesetzten Vorschau: dort gewaehltes "loescht sich nach
+      // Anhoeren" gilt weiter.
+      const viewOnce = viewOnceAudio;
+      setViewOnceAudio(false);
+      await sendAudioNow(base64, durationMs, viewOnce, wave);
     } catch (e) {
       console.error('[Audio] Sofortversand-Stop Fehler:', e);
       setRecording(false);
@@ -3497,6 +3561,9 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     // sofort gesendet (✓); entfernt erst mit der Empfangsbestaetigung (✓✓).
     // Reisst die Verbindung mitten im Transfer ab, geht die Sprachnachricht
     // bei der naechsten Verbindung komplett neu raus. Nie ueber den Relay.
+    // Chatliste: wie beim Empfang nur "Sprachnachricht" (bzw. der neutrale
+    // Timer-Hinweis) - vorher blieb dort die vorherige Nachricht stehen.
+    if (!secretActive) onLastMessage?.(chat?.id, timerPreview(expireModeRef.current) || t('preview.voice'));
     await sendViaOutbox(chat?.id, 'audio', { base64, durationMs, viewOnce, wave: sanitizeWave(wave) }, msgId, {
       ...ephemeralMeta(),
       onQueued: (ok) => setMsgStatus(msgId, ok ? 'pending' : 'failed'),
@@ -3577,6 +3644,37 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     if (recording) stopRecording();
     else startRecording();
   };
+
+  // Vorschau verwerfen: es gibt keine Datei (SecureAudio.js) - Wiedergabe
+  // beenden, der Inhalt verlaesst mit dem State den Speicher.
+  const discardPreview = () => {
+    if (previewPlayerRef.current) { voicePlayer.stop(); previewPlayerRef.current = null; }
+    setPreviewPlaying(false);
+    setPreviewProgress({ position: 0, duration: 0 });
+    setAudioPreview(null);
+    setViewOnceAudio(false);
+  };
+
+  // Zurueck-Taste (BackStack.js): laufende Aufnahme -> Vorschau (nichts geht
+  // verloren); Vorschau -> verwerfen wie der Papierkorb. Erst danach verlaesst
+  // Zurueck den Chat.
+  useBackHandler(recording, () => { stopRecording(); });
+  useBackHandler(!!audioPreview && !recording, discardPreview);
+
+  // Chat verlassen (Zurueck, Sperre, Anruf) waehrend einer Aufnahme: Mikrofon
+  // sofort frei, Aufnahme verworfen. Vorher lief sie im Hintergrund weiter -
+  // das Mikrofon blieb an, und die naechste Aufnahme scheiterte ("laeuft
+  // bereits").
+  React.useEffect(() => () => {
+    clearInterval(recordTimerRef.current);
+    appendBaseRef.current = null;
+    if (recorderRef.current) {
+      recorderRef.current = null;
+      voicePlayer.cancelRecording().catch(() => {});
+    }
+    if (previewPlayerRef.current) { previewPlayerRef.current = null; voicePlayer.stop().catch(() => {}); }
+    if (!playerRef.current) releaseAudio('chat');
+  }, []);
 
   // Datei oeffnen/teilen - genutzt vom Chatverlauf und der Kontaktuebersicht.
   const openFileItem = async (item) => {
@@ -3714,6 +3812,7 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
       // - auch Bild/Audio - beruehren nie den Relay (Nutzer-Vorgabe); ohne
       // Shared Secret (Pairing nie abgeschlossen) gibt es keinen sicheren Weg
       // -> 'failed'.
+      if (!secretActive) onLastMessage?.(chat?.id, timerPreview(expireModeRef.current) || t('preview.image'));
       await sendViaOutbox(chat?.id, 'image', { base64, mimeType }, msgId, {
         ...ephemeralMeta(),
         onQueued: (ok) => setMsgStatus(msgId, ok ? 'pending' : 'failed'),
@@ -3797,8 +3896,8 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
     }]);
     // Siehe identische Begruendung beim eingehenden Text-Handler oben -
     // gilt symmetrisch fuer selbst gesendete Nachrichten waehrend eines
-    // aktiven Secret Chats.
-    if (!secretActive) onLastMessage?.(chat?.id, msgText);
+    // aktiven Secret Chats. Mit Timer nie der Inhalt (timerPreview).
+    if (!secretActive) onLastMessage?.(chat?.id, timerPreview(expireModeRef.current) || msgText);
     setTimeout(() => ref.current?.scrollToEnd({ animated:true }), 100);
 
     // Zustell-Garantie (Outbox-Prinzip, BackgroundSync.js): ZUERST
@@ -3847,17 +3946,21 @@ export function ChatScreen({ chat, messages, onBack, backInterceptRef, onCall, r
   // Rueckwaertssuche gibt es nicht mehr: gesendet werden nur die Koordinaten,
   // Ende-zu-Ende verschluesselt. Ein Ortsname, den eine aeltere Version noch
   // mitschickt, wird weiter angezeigt (reiner Text, keine Anfrage).
+  // Timer wie bei Text (bis 1.2.0 blieb ein eigener Standort trotz Timer
+  // dauerhaft im Verlauf; die Gegenseite wandte nur ihren eigenen Timer an).
   const sendLocationMessage = (lat, lng) => {
     const msgId = Date.now().toString();
     const msgTime = formatTime();
+    const mode = expireModeRef.current;
     setMsgs(m => [...(m||[]), {
       id: msgId, text: t('preview.location'), isLocation: true, lat, lng,
       mine: true, time: msgTime, sys: false, status: 'sending', secret: secretActive || undefined,
+      expireAt: expireModeToExpireAt(mode),
     }]);
-    if (!secretActive) onLastMessage?.(chat?.id, t('preview.location'));
+    if (!secretActive) onLastMessage?.(chat?.id, timerPreview(mode) || t('preview.location'));
     const payload = {
       type: 'text', text: t('preview.location'), isLocation: true, lat, lng,
-      time: Date.now(), msgId, secret: secretActive || undefined,
+      time: Date.now(), msgId, secret: secretActive || undefined, expireMode: mode,
     };
     // Wie send(): write-ahead ueber die Warteschlange (Zustell-Garantie).
     sendViaOutbox(chat?.id, 'text', payload, msgId, {
@@ -4054,42 +4157,22 @@ return (
     // Android-Versionen) - explizit per KeyboardAvoidingView geloest.
     <KeyboardAvoidingView style={{ flex:1 }} behavior="height">
     <View style={{ flex:1, backgroundColor:P.bg }}>
-      <Modal visible={safetyVisible} transparent animationType="fade" onRequestClose={() => setSafetyVisible(false)}>
-        <View style={{ flex:1, backgroundColor:P.overlay, justifyContent:'center', alignItems:'center', padding:24 }}>
-          <View style={{ backgroundColor:P.surface, borderRadius:20, padding:24, width:'100%', gap:16 }}>
-            <Text style={{ fontSize:18, fontWeight:'700', color:P.text, textAlign:'center' }}>{t('safety.title')}</Text>
-            {safetyChanged && (
-              <View style={{ backgroundColor:'#FBF0DE', borderRadius:12, padding:12 }}>
-                <Text style={{ fontSize:12, color:'#8A5A1E', textAlign:'center', lineHeight:17 }}>
-                  {t('safety.changed')}
-                </Text>
-              </View>
-            )}
-            <Text style={{ fontSize:13, color:P.textMuted, textAlign:'center', lineHeight:20 }}>
-              {t('safety.compare')}
-            </Text>
-            <View style={{ backgroundColor:P.accentSoft, borderRadius:12, padding:20, alignItems:'center' }}>
-              <Text style={{ fontSize:28, fontWeight:'700', color:P.codeText, letterSpacing:4, fontFamily:'monospace' }}>
-                {safetyCode}
-              </Text>
-            </View>
-            <Text style={{ fontSize:11, color:P.textMuted, textAlign:'center', lineHeight:16 }}>
-              {t('safety.mismatch')}
-            </Text>
-            <TouchableOpacity
-              style={{ backgroundColor:AC, borderRadius:12, padding:14, alignItems:'center' }}
-              onPress={() => {
-                setSafetyVisible(false);
-                setSafetyChanged(false);
-                if (chat?.id && safetyCode) AsyncStorage.setItem('safety_code_seen_' + chat.id, safetyCode).catch(() => {});
-              }}>
-              <Text style={{ color:P.onAccent, fontWeight:'600' }}>{t('safety.understood')}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <SafetyNumberDialog
+        visible={safetyVisible}
+        chatId={chat?.id}
+        info={safety}
+        onClose={() => setSafetyVisible(false)}
+        onRefresh={refreshSafety}
+        onConfirmed={() => {
+          // Krypto-Review K-03: der Hinweis "Vorgestellt von ..." verschwindet
+          // erst nach der ausdruecklichen Bestaetigung, nicht schon beim Oeffnen.
+          if (chat?.introducedBy && !chat.introducedBy.confirmed) {
+            onRename?.({ id: chat.id, introducedBy: { ...chat.introducedBy, checked: true, confirmed: true } });
+          }
+        }}
+      />
 
-      <Modal visible={timerModal} transparent animationType="slide">
+      <Modal visible={timerModal} transparent animationType="slide" onRequestClose={() => setTimer(false)}>
         <View style={{ flex:1, backgroundColor:P.overlay, justifyContent:'flex-end' }}>
           <View style={{ backgroundColor:P.surface, borderTopLeftRadius:28, borderTopRightRadius:28, padding:24, paddingBottom:48 }}>
             <Text style={{ fontSize:17, fontWeight:'600', color:P.text, marginBottom:4 }}>{t('timer.title')}</Text>
@@ -4101,17 +4184,24 @@ return (
               { key:'24h',  label:t('timer.24h'),     sub:t('timer.24h.sub') },
               { key:'7d',   label:t('timer.7d'),         sub:t('timer.7d.sub') },
             ].map(opt => (
-              <TouchableOpacity key={opt.key} onPress={() => { 
-                setExpire(opt.key); 
+              <TouchableOpacity key={opt.key} onPress={() => {
+                setExpire(opt.key);
                 expireModeRef.current = opt.key;
-                console.log('[Timer] Setze timer für:', chat?.id, '=', opt.key);
-                AsyncStorage.setItem('timer_' + chat?.id, opt.key);
-                // Timer auch an Gegenüber senden
-                const endsAt = Date.now() + opt.mins * 60 * 1000;
-                RTCStore.sendMessage(chat?.id, JSON.stringify({
-                  type: 'system', subtype: 'secret_start', mins: opt.mins, endsAt, ts: Date.now()
-                }));
                 setTimer(false);
+                console.log('[Timer] Setze timer für:', chat?.id, '=', opt.key);
+                const chatId = chat?.id;
+                if (!chatId) return;
+                // Timer auch an Gegenüber senden - ueber die Warteschlange, also
+                // auch wenn gerade keine Verbindung steht. Bis 1.2.0 ging hier
+                // ein secret_start ohne mins raus, das die Gegenseite verwarf
+                // (Fund 28.10.2026). Ein noch nicht zugestelltes aelteres
+                // Timer-Signal ist damit ueberholt.
+                setOwnTimer(chatId, opt.key)
+                  .then(async (ts) => {
+                    await dropFromQueue(chatId, (item) => item.type === 'system' && item.subtype === 'timer');
+                    await sendViaOutbox(chatId, 'system', { type: 'system', subtype: 'timer', mode: opt.key, ts }, 'timer_' + ts);
+                  })
+                  .catch((e) => console.warn('[Timer] Nicht gesendet:', e?.message || e));
               }}
                 style={{ flexDirection:'row', alignItems:'center', paddingVertical:14, borderBottomWidth:0.5, borderBottomColor:P.border }}>
                 <View style={{ flex:1 }}>
@@ -4128,7 +4218,7 @@ return (
         </View>
       </Modal>
       {/* SECRET CHAT MODAL */}
-      <Modal visible={secretModal} transparent animationType="slide">
+      <Modal visible={secretModal} transparent animationType="slide" onRequestClose={() => setSecretModal(false)}>
         <View style={{ flex:1, backgroundColor:'rgba(0,0,0,0.7)', justifyContent:'flex-end' }}>
           <View style={{ backgroundColor:P.surface, borderTopLeftRadius:28, borderTopRightRadius:28, padding:24, paddingBottom:48 }}>
             <Text style={{ fontSize:20, fontWeight:'600', color:P.text, marginBottom:4 }}>{t('secret.title')}</Text>
@@ -4180,7 +4270,7 @@ return (
         </View>
       </Modal>
 
-      <Modal visible={renaming} transparent animationType="fade">
+      <Modal visible={renaming} transparent animationType="fade" onRequestClose={() => setRenaming(false)}>
         <View style={{ flex:1, backgroundColor:P.overlay, alignItems:'center', justifyContent:'center', padding:32 }}>
           <View style={{ width:'100%', backgroundColor:P.surface, borderRadius:20, padding:24, gap:12 }}>
             <Text style={{ fontSize:17, fontWeight:'600', color:P.text }}>{t('chat.rename.title')}</Text>
@@ -4337,7 +4427,7 @@ return (
                 <View style={{ marginTop:16, backgroundColor:P.surface, borderTopWidth:0.5, borderBottomWidth:0.5, borderColor:P.border }}>
                   {action('edit-2', t('chatInfo.rename'), () => { setChatInfo(false); setNewName(chat?.name || ''); setRenaming(true); })}
                   {action('clock', expireMode !== 'off' ? t('chatInfo.timerActive') : t('chatInfo.timer'), () => { setChatInfo(false); setTimer(true); })}
-                  {safetyCode ? action('shield', t('common.showSafetyCode'), () => { setChatInfo(false); setSafetyVisible(true); }) : null}
+                  {showSafety ? action('shield', t('common.showSafetyCode'), () => { setChatInfo(false); setSafetyVisible(true); }) : null}
                   {action('trash-2', t('home.deleteChat'), () => {
                     setChatInfo(false);
                     Alert.alert(
@@ -4398,11 +4488,12 @@ return (
         <TouchableOpacity style={{ flex:1, marginLeft:10 }} onPress={() => setChatInfo(true)}>
           <View style={{ flexDirection:'row', alignItems:'center', gap:5 }}>
             <Text style={{ fontSize:15, fontWeight:'500', color:P.headerText }}>{chat?.name}</Text>
-            {safetyCode && (
-              <TouchableOpacity onPress={(e) => { e.stopPropagation(); setSafetyVisible(true); }} hitSlop={demoBigTargets ? DEMO_HIT : undefined}>
-                <View>
-                  <Icon name="shield" size={13} color={P.headerVerified} />
-                  {safetyChanged && (
+            {showSafety && (
+              <TouchableOpacity testID="safety-shield" onPress={(e) => { e.stopPropagation(); setSafetyVisible(true); }} hitSlop={demoBigTargets ? DEMO_HIT : undefined}>
+                <View style={{ flexDirection:'row', alignItems:'center' }}>
+                  <Icon name="shield" size={13} color={safety?.verified ? P.headerVerified : P.headerIcon} />
+                  {safety?.verified ? <Icon name="check" size={10} color={P.headerVerified} /> : null}
+                  {safety?.changed && (
                     <View style={{ position:'absolute', top:-2, right:-3, width:7, height:7, borderRadius:3.5, backgroundColor:P.headerDanger }} />
                   )}
                 </View>
@@ -4438,9 +4529,10 @@ return (
         </View>
 
       {/* Ueber eine Gruppe vorgestellt (GroupIntroPairing.js): der Admin haette
-          die Einladung lesen koennen - Sicherheitscode-Vergleich empfehlen, bis
-          er einmal geoeffnet wurde. */}
-      {chat?.introducedBy && !chat.introducedBy.checked && (
+          die Einladung lesen oder ersetzen koennen - der Hinweis bleibt, bis der
+          Sicherheitscode ausdruecklich als "stimmt ueberein" bestaetigt wurde
+          (Krypto-Review K-03; vorher genuegte das Oeffnen des Dialogs). */}
+      {chat?.introducedBy && !chat.introducedBy.confirmed && !safety?.verified && (
         <View testID="intro-chat-banner" style={{ flexDirection:'row', alignItems:'center', gap:10, paddingVertical:10, paddingHorizontal:14,
           backgroundColor:P.surfaceAlt, borderBottomWidth:0.5, borderBottomColor:P.border }}>
           <Icon name="user-check" size={15} color={AC} />
@@ -4448,10 +4540,7 @@ return (
             {t('groups.intro.chatBanner', { admin: chat.introducedBy.admin || t('groups.unknown') })}
           </Text>
           <TouchableOpacity accessibilityRole="button" hitSlop={{ top:8, bottom:8, left:8, right:8 }}
-            onPress={() => {
-              onRename?.({ id: chat.id, introducedBy: { ...chat.introducedBy, checked: true } });
-              setSafetyVisible(true);
-            }}>
+            onPress={() => setSafetyVisible(true)}>
             <Text style={{ fontSize:12, fontWeight:'600', color:AC }}>{t('groups.intro.compare')}</Text>
           </TouchableOpacity>
         </View>
@@ -4518,7 +4607,7 @@ return (
       )}
       {/* Design "Malachi Artwork": Klecks-Muster hinter dem Verlauf (ChatArtwork.tsx), die Liste ist dann durchsichtig */}
       <View style={{ flex:1 }}>
-      {chatArtworkVisible(P, { secretActive, customBg }) && <ChatArtwork kind={P.artwork} fills={P.artworkFills} bg={P.chatBg} />}
+      {chatArtworkVisible(P, { secretActive, customBg }) && <ChatArtwork kind={P.artwork} fills={P.artworkFills} glints={P.artworkGlints} bg={P.chatBg} />}
       <FlatList ref={ref} data={msgs} keyExtractor={i => i.id}
         style={{ backgroundColor: secretActive ? '#0E0A06' : customBg || chatArtworkVisible(P, { secretActive, customBg }) ? 'transparent' : (P.chatBgPreset || (demoDarkChat || !P.chatBgLight ? P.chatBg : P.chatBgLight)) }}
         contentContainerStyle={{ padding:14 }}
@@ -4787,66 +4876,33 @@ return (
       />
       </View>
 
-      {audioPreview && (() => {
-        // Vorschau nach der Aufnahme (Nutzerwunsch 2026-10-25): kleiner Player
-        // mit derselben Wellenform wie spaeter im Chat statt reinem Text.
-        // Links verwerfen, dann Abspielen + Wellenform (antippen = springen) +
-        // Zeit, rechts "loescht sich nach Anhoeren" und Senden.
-        const total = previewProgress.duration || audioPreview.durationMs || 0;
-        const frac = previewPlaying && total ? Math.min(1, previewProgress.position / total) : 0;
-        const fmt = (ms) => Math.floor((ms || 0) / 60000) + ':' + String(Math.floor(((ms || 0) % 60000) / 1000)).padStart(2, '0');
-        // Breite: Bildschirm minus Rand, Knoepfe (36+40+40+44), Zeit und Abstaende.
-        const waveW = Math.max(100, Math.round(W - 24 - 160 - 34 - 40));
-        return (
-        <View style={{ backgroundColor: P.surfaceAlt, borderTopWidth:0.5, borderTopColor:P.border,
-          paddingHorizontal:12, paddingVertical:10 }}>
-          <View style={{ flexDirection:'row', alignItems:'center', gap:8 }}>
-            <TouchableOpacity testID="voice-preview-discard" accessibilityRole="button" accessibilityLabel={t('voice.discard')}
-              onPress={() => {
-                // Verworfene Aufnahme: es gibt keine Datei (SecureAudio.js) -
-                // Wiedergabe beenden, Inhalt verlaesst mit dem State den Speicher.
-                if (previewPlayerRef.current) { voicePlayer.stop(); previewPlayerRef.current = null; }
-                setPreviewPlaying(false);
-                setPreviewProgress({ position: 0, duration: 0 });
-                setAudioPreview(null);
-                setViewOnceAudio(false);
-              }} style={{ width:36, height:36, alignItems:'center', justifyContent:'center' }}>
-              <Icon name="trash-2" size={19} color={P.danger} />
-            </TouchableOpacity>
-            <TouchableOpacity testID="voice-preview-play" onPress={playPreview} accessibilityRole="button"
-              accessibilityLabel={previewPlaying ? t('voice.pause') : t('voice.play')}
-              style={{ width:40, height:40, borderRadius:20, backgroundColor: AC, alignItems:'center', justifyContent:'center' }}>
-              <Icon name={previewPlaying ? 'pause' : 'play'} size={18} color={P.onAccent} style={previewPlaying ? undefined : { marginLeft:2 }} />
-            </TouchableOpacity>
-            <View style={{ flex:1, alignItems:'center' }}>
-              <VoiceWaveView testID="voice-preview-wave" levels={parseWave(audioPreview.wave) || fallbackLevels(audioPreview.id)}
-                progress={frac} animate={previewPlaying} variant={waveStyle} width={waveW} height={28}
-                activeColor={AC} idleColor={P.border} onSeek={seekPreview} accessibilityLabel={t('voice.seek')} />
-            </View>
-            <Text style={{ fontSize:12, color:P.textSub, minWidth:34, textAlign:'right', fontVariant:['tabular-nums'] }}>
-              {fmt(previewPlaying ? previewProgress.position : total)}
-            </Text>
-            <TouchableOpacity testID="voice-preview-viewonce" onPress={() => setViewOnceAudio(v => !v)}
-              accessibilityRole="switch" accessibilityState={{ checked: viewOnceAudio }} accessibilityLabel={t('chat.viewOnceHint')}
-              style={{ width:40, height:40, alignItems:'center', justifyContent:'center' }}>
-              <Icon name="zap" size={19} color={viewOnceAudio ? AC : P.textMuted} />
-            </TouchableOpacity>
-            <TouchableOpacity testID="voice-preview-send" onPress={sendAudioPreview} accessibilityRole="button" accessibilityLabel={t('voice.send')}
-              style={{ width:44, height:44, borderRadius:22, backgroundColor: AC, alignItems:'center', justifyContent:'center' }}>
-              <Icon name="send" size={18} color={P.onAccent} />
-            </TouchableOpacity>
-          </View>
-          {viewOnceAudio && (
-            <Text style={{ fontSize:11, color:P.textMuted, marginTop:4, marginLeft:44 }}>⚡ {t('chat.viewOnceHint')}</Text>
-          )}
-        </View>
-        );
-      })()}
       {chat?.wiped ? (
         <View style={{ padding:16, alignItems:'center', backgroundColor:P.surface, borderTopWidth:0.5, borderTopColor:P.border }}>
           <Text style={{ fontSize:13, color:P.textMuted, textAlign:'center' }}>
             {t('chat.wipedNotice')}
           </Text>
+        </View>
+      ) : audioPreview && !recording ? (
+        // Vorschau nach der Aufnahme IM Eingabefeld (Nutzerwunsch 29.10.2026,
+        // "wie bei WhatsApp") - dieselbe Leiste wie Gruppenchat und Siegel
+        // (VoiceDraft.tsx); hier zusaetzlich "loescht sich nach Anhoeren".
+        <View style={{ backgroundColor: secretActive ? P.bg : P.surface, borderTopWidth:0.5,
+          borderTopColor: secretActive ? P.surfaceAlt : P.border, paddingHorizontal:10, paddingVertical:10 }}>
+          {viewOnceAudio && (
+            <Text style={{ fontSize:11, color:P.textMuted, marginBottom:6, marginLeft:42 }}>⚡ {t('chat.viewOnceHint')}</Text>
+          )}
+          <VoiceDraftBar colors={{ surfaceAlt:P.surfaceAlt, border:P.border, text:P.text, textSub:P.textSub, danger:P.danger, accent:AC, onAccent:P.onAccent }}
+            draft={audioPreview} playing={previewPlaying} position={previewProgress.position} duration={previewProgress.duration}
+            waveStyle={waveStyle} canResume={canAppendRecording(audioPreview.base64) && audioPreview.durationMs < MAX_VOICE_MS}
+            onDiscard={discardPreview} onPlay={playPreview} onSeek={seekPreview} onResume={resumeRecording} onSend={sendAudioPreview}
+            extraWidth={36}
+            extra={(
+              <TouchableOpacity testID="voice-preview-viewonce" onPress={() => setViewOnceAudio(v => !v)}
+                accessibilityRole="switch" accessibilityState={{ checked: viewOnceAudio }} accessibilityLabel={t('chat.viewOnceHint')}
+                style={{ width:36, height:40, alignItems:'center', justifyContent:'center' }}>
+                <Icon name="zap" size={19} color={viewOnceAudio ? AC : P.textMuted} />
+              </TouchableOpacity>
+            )} />
         </View>
       ) : (
       <View style={{ flexDirection:'row', padding:10, gap:8, alignItems:'center',
@@ -5083,7 +5139,7 @@ function CallScreen({ chat, callManager, callState, remoteStream, videoOn, remot
     [CallState.OUTGOING_RINGING]: t('call.status.ringing'),
     [CallState.INCOMING_RINGING]: isVideoCall ? t('call.status.incomingVideo') : t('call.status.incoming'),
     [CallState.CONNECTING]:       t('common.connectingDots'),
-    [CallState.ACTIVE]:           callManager?.viaChannelAudio ? fmt(secs) + '  ·  ' + t('call.status.viaTor') : fmt(secs),
+    [CallState.ACTIVE]:           fmt(secs),
     [CallState.ENDED]:            t('call.status.ended'),
   }[callState] || '';
 
@@ -5126,6 +5182,12 @@ function CallScreen({ chat, callManager, callState, remoteStream, videoOn, remot
           textShadowColor: overVideo ? 'rgba(0,0,0,0.6)' : 'transparent', textShadowRadius:6 }}>
           {statusText}
         </Text>
+        {/* Hinweis bei Sprache ueber Tor in eigener, kleiner Zeile - angehaengt an die
+            36-pt-Dauer brach er bisher ueber zwei riesige Zeilen um (Geraetetest 1.3.0). */}
+        {callState === CallState.ACTIVE && callManager?.viaChannelAudio ? (
+          <Text style={{ fontSize:13, color: overVideo ? '#FFFFFF' : P.textMuted, marginTop:6,
+            textShadowColor: overVideo ? 'rgba(0,0,0,0.6)' : 'transparent', textShadowRadius:6 }}>{t('call.status.viaTor')}</Text>
+        ) : null}
       </View>
 
       <View style={{ padding:20, paddingTop:24, gap:12 }}>
@@ -6137,7 +6199,7 @@ function SettingsLink({ icon, title, summary, summaryColor, onPress, accent, bad
 
 function SettingsSheet({ title, children, visible, onClose }) {
   return (
-    <Modal visible={visible} transparent animationType="slide">
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={{ flex:1, backgroundColor:'transparent' }} onPress={onClose} activeOpacity={1} />
       <View style={{ backgroundColor:P.surface, borderTopLeftRadius:28, borderTopRightRadius:28,
         padding:24, paddingBottom:52, position:'absolute', bottom:0, left:0, right:0,
@@ -6709,7 +6771,7 @@ function ShopProScreen({ visible, onClose, accent }) {
 }
 
 // Exportiert nur fuer den Darstellungstest (__tests__/themes/themes.designSection.test.js).
-export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChange, currentBg, currentFont, onAvatarChange, username, onUsernameChange, onWipeAll, onLanguageChange }) {
+export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChange, currentBg, currentFont, onAvatarChange, username, onUsernameChange, onWipeAll, onLanguageChange, onLockNow }) {
   const [duress, setDuress]     = useState(false);
   const [chatBg, setChatBg]     = useState(currentBg || 'theme');
   const [fontSize, setFont]     = useState(currentFont || 'normal');
@@ -6725,9 +6787,9 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
   // Duress-PIN: reiner Zustand aus dem verschluesselten Speicher, kein
   // dekorativer lokaler Schalter mehr (Sicherheitsaudit - der Toggle tat
   // vorher gar nichts). "Aktiv" heisst: es liegt ein Duress-PIN vor.
-  const [duressPinModal, setDuressPinModal] = useState(false);
-  const [duressPinInput, setDuressPinInput] = useState('');
-  const [duressPinError, setDuressPinError] = useState('');
+  // App-PIN aendern und Notfall-PIN festlegen/aendern/entfernen laufen ueber
+  // SecurityPinModal - immer erst mit der aktuellen App-PIN (PinChange.js).
+  const [pinFlow, setPinFlow] = useState(null); // null | 'changePin' | 'setDuress' | 'changeDuress' | 'removeDuress'
   // Vollversion (LicenseManager.js): Zustand fuer PRO-Hinweise und die
   // Vollversion-Seite.
   const [lic, setLic] = useState(getLicenseState());
@@ -6775,102 +6837,30 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
     return subscribeOwnAvatar(setAvatar);
   }, []);
 
-  // Duress-PIN-Zeile: Entfernen ist immer erlaubt; Einrichten nur mit Pro -
-  // ohne Pro oeffnet das Antippen die Vollversion-Seite.
+  // Duress-PIN-Zeile: Entfernen ist immer erlaubt; Einrichten und Aendern nur
+  // mit Pro - ohne Pro oeffnet das Antippen die Vollversion-Seite. Jede
+  // Aenderung verlangt zuerst die aktuelle App-PIN (Nutzerwunsch 29.10.2026:
+  // wer das entsperrte Handy kurz hat, soll den Schutz weder setzen noch
+  // abschalten koennen).
   const onDuressPress = () => {
     if (duress) {
-      Alert.alert(t('settings.duress.removeTitle'), pro
-        ? t('settings.duress.removeBodyPro')
-        : t('settings.duress.removeBodyFree'), [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.remove'), style: 'destructive', onPress: clearDuressPin },
-      ]);
+      const buttons = [{ text: t('common.cancel'), style: 'cancel' }];
+      if (canConfigureDuressPin(pro)) buttons.push({ text: t('settings.duress.change'), onPress: () => setPinFlow('changeDuress') });
+      buttons.push({ text: t('common.remove'), style: 'destructive', onPress: () => setPinFlow('removeDuress') });
+      Alert.alert(t('settings.duress.title'), pro ? t('settings.duress.manageBodyPro') : t('settings.duress.removeBodyFree'), buttons);
     } else if (!canConfigureDuressPin(pro)) {
       setProOpen(true);
     } else {
-      setDuressPinInput('');
-      setDuressPinError('');
-      setDuressPinModal(true);
+      setPinFlow('setDuress');
     }
   };
 
-  const saveDuressPin = async () => {
-    // Vollversion: Einrichten/Aendern der Duress-PIN nur mit gueltiger Lizenz -
-    // hier frisch geprueft, nicht nur aus dem Anzeige-Zustand. (Eine schon
-    // eingerichtete Duress-PIN bleibt dagegen ohne Lizenz aktiv, siehe
-    // LicenseManager.isDuressPinEntry.)
-    if (!canConfigureDuressPin(await isProVerified())) {
-      setDuressPinModal(false);
-      setProOpen(true);
-      return;
-    }
-    // PIN-Tresor: die echte PIN ist nicht mehr gespeichert. Laenge aus
-    // 'pin_length' (Standard 6, wie im Sperrbildschirm); ob die Eingabe die
-    // echte PIN ist, prueft der Tresor (sie wuerde ihn oeffnen).
-    if (await PinVault.ready().then((r) => !!r).catch(() => false)) {
-      const len = parseInt(await AsyncStorage.getItem('pin_length').catch(() => null), 10) || 6;
-      if (duressPinInput.length !== len) {
-        setDuressPinError(t('settings.duress.lengthMismatch', { n: len }));
-        return;
-      }
-      setDuressPinError(t('lock.unlocking'));
-      const r = await PinVault.setDuressPin(duressPinInput);
-      if (r === 'same') { setDuressPinError(t('settings.duress.samePin')); return; }
-      if (r !== 'ok') { setDuressPinError(t('lock.vaultError')); return; }
-      await EncryptedStorage.removeItem('duress_pin').catch(() => {});
-      setDuress(true);
-      setDuressPinModal(false);
-      setDuressPinInput('');
-      setDuressPinError('');
-      return;
-    }
-    const realPin = await EncryptedStorage.getItem('app_pin').catch(() => null);
-    // Ohne eingerichteten Normal-PIN gibt es keine Laenge, an die gekoppelt
-    // werden koennte - und auch keinen Sperrbildschirm, auf dem ein
-    // Duress-PIN je eingegeben wuerde.
-    if (!realPin) {
-      setDuressPinError(t('settings.duress.needPin'));
-      return;
-    }
-    // Der Duress-PIN MUSS exakt so lang sein wie der echte PIN.
-    //
-    // Nicht nur kosmetisch, sondern zwingend fuer die Funktion: LockScreen
-    // wertet eine Eingabe ausschliesslich bei `next.length === pinLen` aus
-    // (tap() oben) und blockt weitere Ziffern bei `pin.length >= pinLen`.
-    // Ein kuerzerer Duress-PIN wird deshalb NIE ausgewertet - der Nutzer
-    // tippt ihn, nichts passiert, er fuellt auf pinLen auf und landet im
-    // Fehlversuchs-Zweig. Bisher liess sich genau das speichern: ein still
-    // wirkungsloser Notruf-PIN, auf den man sich im Ernstfall verlassen
-    // haette (Live-Test entdeckt: 6-stelliger echter PIN, 4-stelliger
-    // Duress-PIN liess sich anstandslos speichern).
-    //
-    // Zweitens verraet eine abweichende Laenge etwas: der Duress-PIN wird
-    // auf DEMSELBEN Bildschirm eingegeben wie der echte und soll davon
-    // ununterscheidbar sein. Eine Person, die zur Eingabe zwingt, darf aus
-    // der Anzahl getippter Ziffern nicht ablesen koennen, welcher der
-    // beiden gerade eingegeben wird.
-    if (duressPinInput.length !== realPin.length) {
-      setDuressPinError(t('settings.duress.lengthMismatch', { n: realPin.length }));
-      return;
-    }
-    if (duressPinInput === realPin) {
-      // Sonst wuerde der Duress-Check in LockScreen (laeuft VOR dem echten
-      // PIN-Vergleich) bei jeder normalen Anmeldung zuerst greifen und den
-      // eigentlichen PIN nie mehr zum Zug kommen lassen.
-      setDuressPinError(t('settings.duress.samePin'));
-      return;
-    }
-    await EncryptedStorage.setItem('duress_pin', duressPinInput);
-    setDuress(true);
-    setDuressPinModal(false);
-    setDuressPinInput('');
-    setDuressPinError('');
-  };
-
-  const clearDuressPin = async () => {
-    await PinVault.clearDuressPin().catch(() => {});
-    await EncryptedStorage.removeItem('duress_pin').catch(() => {});
-    setDuress(false);
+  const onPinFlowDone = (r) => {
+    setPinFlow(null);
+    if (r === 'duressSet') { setDuress(true); Alert.alert(t('settings.duress.title'), t('settings.duress.saved')); return; }
+    if (r === 'duressRemoved') { setDuress(false); Alert.alert(t('settings.duress.title'), t('settings.duress.removed')); return; }
+    if (r === 'pinChangedDuressRemoved') { setDuress(false); Alert.alert(t('pinChange.title'), t('pinChange.doneDuressRemoved')); return; }
+    Alert.alert(t('pinChange.title'), t('pinChange.done'));
   };
 
   const removeAvatar = () => {
@@ -7056,6 +7046,16 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
           openId={openGroup} onToggle={setOpenGroup}>
         <View style={{ backgroundColor:P.surface, borderRadius:16, borderWidth:0.5,
           borderColor:P.border, overflow:'hidden', marginBottom:8 }}>
+          <TouchableOpacity testID="settings-change-pin" activeOpacity={0.7}
+            style={{ flexDirection:'row', alignItems:'center', padding:16 }}
+            onPress={() => setPinFlow('changePin')}>
+            <View style={{ flex:1, marginRight:12 }}>
+              <Text style={{ fontSize:14, fontWeight:'500', color:P.text }}>{t('pinChange.title')}</Text>
+              <Text style={{ fontSize:11, color:P.textMuted, marginTop:2, lineHeight:15 }}>{t('pinChange.rowSub')}</Text>
+            </View>
+            <Text style={{ fontSize:14, color:P.textMuted }}>{CHEVRON}</Text>
+          </TouchableOpacity>
+          <View style={{ height:0.5, backgroundColor:P.surfaceAlt, marginHorizontal:16 }} />
           <TouchableOpacity testID="settings-screen-protection"
             style={{ flexDirection:'row', alignItems:'center', padding:16 }}
             onPress={onScreenProtPress}>
@@ -7250,7 +7250,7 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
       </SettingsSheet>
 
       {/* USERNAME MODAL */}
-      <Modal visible={renameUser} transparent animationType="fade">
+      <Modal visible={renameUser} transparent animationType="fade" onRequestClose={() => setRenameUser(false)}>
         <View style={{ flex:1, backgroundColor:P.overlay, alignItems:'center', justifyContent:'center', padding:32 }}>
           <View style={{ width:'100%', backgroundColor:P.surface, borderRadius:20, padding:24, gap:12 }}>
             <Text style={{ fontSize:17, fontWeight:'600', color:P.text }}>{t('settings.rename.title')}</Text>
@@ -7264,40 +7264,18 @@ export function SettingsScreen({ onBack, onDesignChange, onBgChange, onFontChang
           </View>
         </View>
       </Modal>
-      {/* DURESS PIN MODAL */}
-      <Modal visible={duressPinModal} transparent animationType="fade">
-        <View style={{ flex:1, backgroundColor:P.overlay, alignItems:'center', justifyContent:'center', padding:32 }}>
-          <View style={{ width:'100%', backgroundColor:P.surface, borderRadius:20, padding:24, gap:12 }}>
-            <Text style={{ fontSize:17, fontWeight:'600', color:P.text }}>{t('settings.duress.modalTitle')}</Text>
-            <Text style={{ fontSize:12, color:P.textSub, lineHeight:18 }}>
-              {t('settings.duress.modalBody')}
-            </Text>
-            <TextInput
-              value={duressPinInput}
-              onChangeText={(t) => { setDuressPinInput(t.replace(/\D/g, '').slice(0, 6)); setDuressPinError(''); }}
-              autoFocus
-              secureTextEntry
-              keyboardType="number-pad"
-              placeholder={t('settings.duress.placeholder')}
-              maxLength={6}
-              style={{ borderWidth:1, borderColor:P.border, borderRadius:12, padding:12, fontSize:15, color:P.text, letterSpacing:2, textAlign:'center' }}
-            />
-            {!!duressPinError && <Text style={{ color:P.danger, fontSize:12 }}>{duressPinError}</Text>}
-            <TouchableOpacity onPress={saveDuressPin} style={{ borderRadius:12, padding:14, alignItems:'center', backgroundColor:curAC }}>
-              <Text style={{ color:P.onAccent, fontWeight:'500' }}>{t('common.save')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setDuressPinModal(false)} style={{ borderRadius:12, padding:14, alignItems:'center', backgroundColor:P.surfaceAlt }}>
-              <Text style={{ color:P.textSub }}>{t('common.cancel')}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* APP-PIN / DURESS-PIN (immer erst mit der aktuellen App-PIN) */}
+      <SecurityPinModal mode={pinFlow} palette={P} accent={curAC}
+        onClose={() => setPinFlow(null)} onDone={onPinFlowDone}
+        onLockNow={() => { setPinFlow(null); onLockNow?.(); }}
+        onWipe={() => { setPinFlow(null); onWipeAll?.(); }}
+        onNeedPro={() => { setPinFlow(null); setProOpen(true); }} />
       {/* VOLLVERSION */}
       <ProScreen visible={proOpen} onClose={() => setProOpen(false)} accent={curAC} />
       {/* SIEGEL-MODUS */}
       <SiegelScreen visible={siegelOpen} onClose={() => setSiegelOpen(false)} canSeal={pro} onOpenPro={() => setProOpen(true)} />
       {/* WIPE MODAL */}
-      <Modal visible={wipeModal} transparent animationType="fade">
+      <Modal visible={wipeModal} transparent animationType="fade" onRequestClose={() => setWipe(false)}>
         <View style={{ flex:1, backgroundColor:P.overlay, alignItems:'center',
           justifyContent:'center', padding:32 }}>
           <View style={{ width:'100%', backgroundColor:P.surface, borderRadius:20, padding:24, gap:12 }}>

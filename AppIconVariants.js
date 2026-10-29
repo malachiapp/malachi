@@ -10,7 +10,7 @@
  *                    Voreinstellung, bleibt bei ausgeschaltetem Schalter
  *   klassik_<akzent> Standard-Design mit einer der 11 anderen kostenlosen
  *                    Akzentfarben: Marken-Hintergrund, Zeichen im Akzent
- *   <themeId>        je eines der 21 Design-Themen (Vollversion)
+ *   <themeId>        je eines der 30 Design-Themen (Vollversion)
  *
  * "Kopfleiste und Menue einfaerben" aendert das Icon bewusst nicht (sonst
  * doppelt so viele Varianten fuer einen kaum sichtbaren Unterschied).

@@ -191,21 +191,90 @@ export function unlock(passphrase) {
       plain.fill(0);
     } catch {
       key.fill(0);
-      const fails = (Number(await EncryptedStorage.getItem(FAILS_KEY).catch(() => 0)) || 0) + 1;
-      if (fails >= MAX_FAILS) {
-        await wipeNow();
-        return { ok: false, reason: 'wiped' };
-      }
-      await EncryptedStorage.setItem(FAILS_KEY, String(fails));
-      const waitMs = FAIL_DELAYS_MS[fails - 1] || 0;
-      if (waitMs) await EncryptedStorage.setItem(NEXT_TRY_KEY, String(Date.now() + waitMs));
-      return { ok: false, reason: 'wrong', remaining: MAX_FAILS - fails, waitMs };
+      return registerFail();
     }
     session = { key, header: { v: hdr.v, salt: hdr.salt, kdf: hdr.kdf, security: hdr.security }, data };
     await EncryptedStorage.removeItem(FAILS_KEY).catch(() => {});
     await EncryptedStorage.removeItem(NEXT_TRY_KEY).catch(() => {});
     touch();
     notify();
+    return { ok: true };
+  });
+}
+
+// Fehlversuch zaehlen (Entsperren UND Passphrase aendern - ein Zaehler, sonst
+// liesse sich die Passphrase ueber den Aendern-Dialog ungebremst raten).
+async function registerFail() {
+  const fails = (Number(await EncryptedStorage.getItem(FAILS_KEY).catch(() => 0)) || 0) + 1;
+  if (fails >= MAX_FAILS) {
+    await wipeNow();
+    return { ok: false, reason: 'wiped' };
+  }
+  await EncryptedStorage.setItem(FAILS_KEY, String(fails));
+  const waitMs = FAIL_DELAYS_MS[fails - 1] || 0;
+  if (waitMs) await EncryptedStorage.setItem(NEXT_TRY_KEY, String(Date.now() + waitMs));
+  return { ok: false, reason: 'wrong', remaining: MAX_FAILS - fails, waitMs };
+}
+
+function sameBytes(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
+
+/**
+ * Passphrase aendern (Nutzerwunsch 29.10.2026) - nur bei offenem Tresor UND
+ * mit der richtigen bisherigen Passphrase. Wer den Tresor kurz offen in die
+ * Hand bekommt, kann den Besitzer so nicht aussperren; Fehlversuche zaehlen
+ * wie beim Entsperren (Wartezeiten, nach MAX_FAILS wird geloescht).
+ *
+ * Neues Salz, derselbe Chip-Schluessel, Inhalt mit dem neuen Schluessel neu
+ * verschluesselt. Der neue Tresor wird ZUERST gespeichert und erst danach
+ * der Schluessel im Arbeitsspeicher getauscht - scheitert das Speichern,
+ * bleibt alles beim Alten (sonst schriebe die Sitzung mit einem Schluessel
+ * weiter, zu dem es keine Passphrase gibt).
+ * -> { ok:true } | { ok:false, reason: 'wrong'|'wait'|'wiped'|'same'|'locked', remaining?, waitMs? }
+ */
+export function changePassphrase(oldPassphrase, newPassphrase) {
+  return serial(async () => {
+    if (!session) return { ok: false, reason: 'locked' };
+    const problem = passphraseProblem(newPassphrase);
+    if (problem) throw new SiegelError('passphrase', problem);
+    if (String(oldPassphrase) === String(newPassphrase)) return { ok: false, reason: 'same' };
+    const now = Date.now();
+    const nextTry = Number(await EncryptedStorage.getItem(NEXT_TRY_KEY).catch(() => 0)) || 0;
+    if (now < nextTry) return { ok: false, reason: 'wait', waitMs: nextTry - now };
+    const n = native();
+    const hdr = session.header;
+    const oldKey = unb64(await n.deriveVaultKey(String(oldPassphrase || ''), hdr.salt, hdr.kdf.memKiB, hdr.kdf.iterations));
+    const right = sameBytes(oldKey, session.key);
+    oldKey.fill(0);
+    if (!right) {
+      const r = await registerFail();
+      touch();
+      return r;
+    }
+    const salt = await rng(16);
+    const key = unb64(await n.deriveVaultKey(String(newPassphrase), b64(salt), KDF.memKiB, KDF.iterations));
+    if (key.length !== 32) { key.fill(0); throw new SiegelError('unavailable', 'Tresorschluessel ungueltig'); }
+    const header = { ...hdr, salt: b64(salt), kdf: KDF };
+    const nonce = await rng(24);
+    const plain = Uint8Array.from(Buffer.from(JSON.stringify(session.data), 'utf8'));
+    const box = xchacha20poly1305(key, nonce, AD).encrypt(plain);
+    plain.fill(0);
+    try {
+      await EncryptedStorage.setItem(VAULT_KEY, JSON.stringify({ ...header, nonce: b64(nonce), box: b64(box) }));
+    } catch (e) {
+      key.fill(0);
+      throw e;
+    }
+    try { session.key.fill(0); } catch {}
+    session.key = key;
+    session.header = header;
+    await EncryptedStorage.removeItem(FAILS_KEY).catch(() => {});
+    await EncryptedStorage.removeItem(NEXT_TRY_KEY).catch(() => {});
+    touch();
     return { ok: true };
   });
 }

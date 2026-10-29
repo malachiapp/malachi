@@ -563,6 +563,132 @@
               <category android:name="android.intent.category.LAUNCHER" />
           </intent-filter>
       </activity-alias>
+      <!-- Sternbild -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_sternbild"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_sternbild"
+          android:roundIcon="@mipmap/ic_appicon_sternbild">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Synthwave -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_synthwave"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_synthwave"
+          android:roundIcon="@mipmap/ic_appicon_synthwave">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Papierschnitt -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_papierschnitt"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_papierschnitt"
+          android:roundIcon="@mipmap/ic_appicon_papierschnitt">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Bauhaus -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_bauhaus"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_bauhaus"
+          android:roundIcon="@mipmap/ic_appicon_bauhaus">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Tiefsee -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_tiefsee"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_tiefsee"
+          android:roundIcon="@mipmap/ic_appicon_tiefsee">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Kintsugi -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_kintsugi"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_kintsugi"
+          android:roundIcon="@mipmap/ic_appicon_kintsugi">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Digitaltarn Wald -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_tarnwald"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_tarnwald"
+          android:roundIcon="@mipmap/ic_appicon_tarnwald">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Digitaltarn Stadt -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_tarnstadt"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_tarnstadt"
+          android:roundIcon="@mipmap/ic_appicon_tarnstadt">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
+      <!-- Leopard -->
+      <activity-alias
+          android:name="com.securecommapp.AppIcon_leopard"
+          android:targetActivity="com.securecommapp.MainActivity"
+          android:enabled="false"
+          android:exported="true"
+          android:label="${appLabel}"
+          android:icon="@mipmap/ic_appicon_leopard"
+          android:roundIcon="@mipmap/ic_appicon_leopard">
+          <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+          </intent-filter>
+      </activity-alias>
       <!-- APP-ICON-ALIASES:END -->
 
       <service

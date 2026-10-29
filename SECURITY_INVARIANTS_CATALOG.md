@@ -1322,6 +1322,112 @@ Automated Test: __tests__/security/ratchet.heldRetention.test.js (8 Tests), __te
 Current Status: AUTOMATED
 ```
 
+```
+ID: CRYPTO-HARDEN-002
+Kategorie: IDENTITY / SESSION
+Beschreibung: Der Sicherheitscode ist an die Double-Ratchet-Sitzung gebunden (HKDF von AD_s, 30 Ziffern, Domaenentrennung), auf beiden Seiten gleich, rollenunabhaengig und ueber neue Verbindungen stabil; "geaendert" nur bei echtem Sitzungswechsel; "bestaetigt" nur nach ausdruecklicher Nutzerbestaetigung.
+Warum wichtig: Einzige Erkennung eines Manns in der Mitte (K-01/K-02/K-03). Ein Code, der sich bei jeder Verbindung aendert, gewoehnt an Warnungen.
+Betroffene Komponenten: SafetyNumber.js, SafetyNumberDialog.tsx, RatchetSession.safetySession, RTCStore (caps.sn), App.tsx (ChatScreen, Hinweis "Vorgestellt von")
+Angreifermodell: aktiver Angreifer bei der Kopplung (Link mitgelesen/veraendert, boesartiger Gruppen-Admin)
+Precondition: Sitzung von beiden Seiten bestaetigt; Gegenseite meldet caps.sn = 2 (sonst alter Verbindungscode mit Hinweis).
+Invariant: Zwei getrennte Sitzungen ergeben verschiedene Codes; dieselbe Sitzung ergibt auf beiden Geraeten denselben Code; Oeffnen des Dialogs setzt keinen Bestaetigt-Zustand.
+Violation: Code wechselt ohne Sitzungswechsel, Warnung bei normaler Neuverbindung, Hinweis "Vorgestellt von" verschwindet ohne Bestaetigung.
+Detection Method: Testvektor mit unabhaengiger Gegenprobe (Node-HKDF), Mann-in-der-Mitte-Simulation mit drei Geraeten.
+Automated Test: __tests__/security/safetyNumber.v1.test.js (19), __tests__/security/safetyNumber.integration.test.js (2, echtes ML-KEM)
+Current Status: AUTOMATED
+```
+
+```
+ID: CRYPTO-HARDEN-003
+Kategorie: DEVICE / STORAGE
+Beschreibung: Der PIN-Tresor-KEK entsteht mit einem Chip-Schluessel, der nur bei entsperrtem Geraet rechnet (malachi_pin_v2, setUnlockedDeviceRequired ab API 28); die Umstellung bestehender Tresore verliert nie einen Wert.
+Warum wichtig: K-05 - Rateversuche ueber den Chip am gesperrten, gerooteten Geraet; eine fehlerhafte Umstellung waere Totalverlust aller Verlaeufe.
+Betroffene Komponenten: PinVault.js (create, unlockWithPin, advanceKeyMigration, saveRecordVerified, setDuressPin/clearDuressPin), vault/MalachiPinKeyModule.kt (createKeyAlias, deriveKeys, deleteKeyAlias, destroyKey)
+Angreifermodell: Root/Code-Ausfuehrung als App am gesperrten Geraet; Absturz/Speicherfehler waehrend der Umstellung
+Precondition: Tresor vorhanden.
+Invariant: Zu jedem Zeitpunkt oeffnet ein vorhandener Chip-Schluessel den gespeicherten Datensatz (Haupt oder Sicherung); der alte Schluessel wird erst geloescht, nachdem ein spaeteres Entsperren ueber den neuen gelang und der Datensatz ohne alten Wickel zurueckgelesen wurde; ein Chip-Fehler zaehlt nie als Fehlversuch.
+Violation: Nach Abbruch/Fehler laesst sich der Tresor mit der richtigen PIN nicht mehr oeffnen; Notfall-PIN wirkt nach der Umstellung nicht mehr.
+Detection Method: Absturz-Simulation nach jedem Datensatz-Schreibvorgang, Rueckleseprobe, kaputter/gesperrter Schluessel.
+Automated Test: __tests__/security/pinVault.keyUpgrade.test.js (19), __tests__/security/lockScreen.pinChoice.test.js (3)
+Current Status: AUTOMATED (Keystore-Verhalten selbst nur am Geraet pruefbar)
+```
+
+```
+ID: CRYPTO-HARDEN-004
+Kategorie: P2P / SESSION
+Beschreibung: Die Tor-Anmeldung (Kontakt und Erstkopplung) nutzt zwischen neuen Geraeten einen eindeutig kodierten MAC (v2: Laengenpraefixe, eigenes Label, Hex-Nonces); 1.0/1.1 werden mit v1 weiter bedient; nach der ersten v2-Anmeldung eines Kontakts wird v1 abgelehnt.
+Warum wichtig: K-11 - mehrdeutige Kodierung ist eine stille Fehlerquelle; ohne Klebrigkeit waere jede Verbesserung herabstufbar.
+Betroffene Komponenten: TorTransport.js (authMacV2, handleIncoming, connectViaTor, pairViaTor), ConnCaps.js
+Angreifermodell: Wer die Onion-Adresse erreicht (jede App ueber 127.0.0.1), aktive Rueckstufung
+Precondition: Tor-Verbindung zu einem Kontakt oder Kopplung ueber Einladung.
+Invariant: v2-MAC != v1-MAC fuer dieselben Felder; v1 fuer einen v2-Kontakt wird in beiden Richtungen abgelehnt; Versionen sind nicht vertauschbar.
+Violation: Anmeldung mit v1 nach v2, oder gleicher MAC fuer verschiedene Feldaufteilungen in v2.
+Detection Method: Testvektor (Node-Gegenprobe), Mehrdeutigkeits-Beispiel, Protokoll-Tests beider Seiten.
+Automated Test: __tests__/security/torAuth.v2.test.js (13)
+Current Status: AUTOMATED
+```
+
+```
+ID: CRYPTO-HARDEN-005
+Kategorie: CRYPTOGRAPHY
+Beschreibung: Die aeussere Verschluesselungsschicht nutzt zwischen neuen Geraeten je Richtung eigene Schluessel und bindet Richtung, Version und Zweck als AAD; Version pro Verbindung fest; nach der ersten v2-Verbindung keine Verbindung ohne v2.
+Warum wichtig: K-09 - Spiegelung/Umdeutung von Paketen, die nicht durch den Ratchet gehen (Fuellpakete, Sprache ueber den Kanal).
+Betroffene Komponenten: MessageCrypto.js (encryptOuterV2/decryptOuterV2, aad), WebRTCManager.js (sealOuter, _openOuter, Kyber-Handshake "ol"), ConnCaps.js
+Angreifermodell: Wer Tor/DTLS bricht (heute theoretisch), aktive Rueckstufung
+Precondition: Beide Seiten bieten "ol: 2" an.
+Invariant: Ein Paket einer Richtung ist in der anderen nicht entschluesselbar; ein v1-Paket wird auf einer v2-Verbindung verworfen und umgekehrt; ohne aad bleibt encryptMsg byte-kompatibel zu 1.0/1.1.
+Violation: Gespiegeltes Paket wird angenommen; Verbindung ohne "ol" zu einem v2-Kontakt kommt zustande.
+Detection Method: Spiegelungs- und Rueckstufungs-Tests mit zwei Geraeten.
+Automated Test: __tests__/security/outerLayer.v2.test.js (11), ratchet.integration.test.js (Downgrade-Test jetzt mit gueltiger v2-Schicht)
+Current Status: AUTOMATED
+```
+
+```
+ID: CRYPTO-HARDEN-006
+Kategorie: CRYPTOGRAPHY / SESSION
+Beschreibung: Verbindungsschluessel v2 zwischen neuen Geraeten: X25519 + ML-KEM-768 (X-Wing-artig), Transkript (ek, ct, xI, xR, Kettenkennung, ol, Version, Rollen) als HKDF-Salz, Kette an Anmelde-Geheimnis/PSK; nur abgeleitete Teilschluessel (outer, ratchet-kem, legacy-code); klebrig nach erster Nutzung.
+Warum wichtig: K-07 (ML-KEM-Tausch weder hybrid noch an die Anmeldung gebunden), K-08 (rohes K fuer alles).
+Betroffene Komponenten: ConnKeyV2.js, WebRTCManager.js (kyber_pubkey/kyber_ciphertext, _findChain, Schluesselbestaetigung), TorTransport.js (chainSecret), DirectUpgrade.js, ConnCaps.js
+Angreifermodell: Wer Tor/DTLS in Echtzeit bricht und pk/ct/x austauscht (kuenftiger Quantencomputer); Geraetezugriff auf gespeicherte Schluessel; aktive Rueckstufung
+Precondition: Beide Seiten bieten kx: 2 an.
+Invariant: Beide Seiten leiten genau dann dieselben Teilschluessel ab, wenn Transkript und Kettenglied uebereinstimmen; das rohe ML-KEM-Geheimnis wird weder gespeichert noch als Schluessel benutzt; ein unbekanntes Kettenglied fuehrt zur Ablehnung, nie zu einem anderen Schluessel; v1 nach v2 wird abgelehnt.
+Violation: Manipuliertes Transkript fuehrt zu lesbaren Nachrichten; rohes Geheimnis im Speicher; Verbindung ohne kx/Kette zu einem v2-Kontakt.
+Detection Method: Testvektor mit Node-Gegenprobe, Manipulation jedes Transkriptfeldes, echtes ML-KEM mit zwei Geraeten.
+Automated Test: __tests__/security/connKey.v2.test.js (24), __tests__/security/torAuth.v2.test.js (Kettenglied-Verdrahtung), ratchet.integration.test.js (KEM-Beitrag = K_kem)
+Current Status: AUTOMATED (natives ML-KEM nur am Geraet)
+Hinweis: SESSION-006 (Uebernahme mit einem gestohlenen Verbindungsgeheimnis) bleibt grundsaetzlich bestehen - die Kette schuetzt gegen Transport-Brecher, nicht gegen Diebstahl des Kettenglieds; Inhalte schuetzt weiterhin der Ratchet (fremder Neuaufbau abgelehnt).
+```
+
+```
+ID: CRYPTO-HARDEN-007
+Kategorie: CRYPTOGRAPHY / SESSION
+Beschreibung: Mit Gegenseiten ab Ratchet v2 mischt jede Seite spaetestens alle 24 h bzw. 100 eigene Nachrichten ein frisches ML-KEM-768-Geheimnis in ihren naechsten DH-Schritt (pq_offer/pq_ct durch den Ratchet, Schluesselbestaetigung per kid, Write-Ahead); verlorene, umsortierte oder manipulierte Nachrichten fuehren nie zu einem Geheimnis, das die Gegenseite nicht hat.
+Warum wichtig: K-06 - ohne neue Verbindung tagelang keine PQ-Auffrischung; ein falsch eingemischtes Geheimnis wuerde eine Richtung dauerhaft stoeren.
+Betroffene Komponenten: RatchetSession.js (pqRefreshDue, preparePqOffer, acceptPqOffer, completePqOffer, derivePqSecret, notePeerCaps rv), WebRTCManager.js (_maybePqRefresh, _handlePq, nur via Ratchet), RTCStore (caps.ratchet = 2)
+Angreifermodell: Zustandsdiebstahl + kuenftiger Quantencomputer (PQ-PCS); aktiver Angreifer mit Verbindungsgeheimnis (Einschleusen ausserhalb des Ratchet)
+Precondition: Sitzung bestaetigt, Gegenseite rv = 2.
+Invariant: In own landet nur ein Geheimnis, dessen kid die Gegenseite fuer ihr gespeichertes held-Geheimnis gemeldet hat; pq_* ausserhalb des Ratchet werden verworfen; Gegenseiten v1 erhalten nie ein Angebot.
+Violation: kem-unknown nach Nachmischen; Angebot an 1.0/1.1; pq-Material ohne Ratchet angenommen.
+Detection Method: Sitzungs- und Integrationstests mit echtem ML-KEM, Verlust/Umsortierung/Manipulation/Sitzungswechsel/Speicherfehler.
+Automated Test: __tests__/security/ratchet.pqRefresh.test.js (13)
+Current Status: AUTOMATED
+```
+
+```
+ID: CRYPTO-HARDEN-008
+Kategorie: CRYPTOGRAPHY / SUPPLY CHAIN
+Beschreibung: Krypto-Bibliotheken sind exakt festgehalten (@noble/* in App und Web-Client, BouncyCastle >= 1.85 - derzeit 1.86, libwebrtc org.jitsi:webrtc in der APK) und ein Bibliotheks-Update aendert keine Bytes: ML-KEM-768 rechnet wie @noble (Web-Client) und wie BouncyCastle 1.80, Argon2id fuer PIN-Tresor, Siegel-Tresor und Telefon-Kopplung liefert dieselben Schluessel wie zuvor.
+Warum wichtig: K-12..K-14 - ein Update mit veraenderter Ausgabe wuerde bestehende Tresore unlesbar machen oder Kopplung/Verbindungen alt<->neu brechen; dynamische Versionen ziehen ungepruefte Builds in die APK.
+Betroffene Komponenten: package.json/web/package.json (+ Lockfiles), android/app/build.gradle (bcprov, Pin org.jitsi:webrtc), android/gradle.properties (Jetifier ignoriert bcprov), KyberModule.kt
+Angreifermodell: Lieferkette (kompromittierte Folgeversion), Regressionsfehler bei Updates
+Precondition: Build aus diesem Repository.
+Invariant: Kein ^/~ bei @noble; genau eine BouncyCastle-Abhaengigkeit, exakt, >= 1.85; JVM-Testvektoren (ML-KEM-768 deterministisch per Seed/m, implizite Ablehnung, Schluesselpruefung; Argon2id RFC 9106 + die drei App-Parametersaetze) gruen; libwebrtc-Pin passt zur Hauptversion von react-native-webrtc.
+Violation: Bereichsangabe bei @noble; BouncyCastle-Update ohne gruene Vektoren; dynamische libwebrtc-Version in der APK.
+Detection Method: Statische Pruefung der Build-Dateien (Jest) + JVM-Unit-Test gegen die echte Bibliothek (./gradlew :app:testWebDebugUnitTest); Sollwerte aus @noble/post-quantum, @noble/hashes, Node (OpenSSL-Argon2) und gegengerechnet mit BouncyCastle 1.80.
+Automated Test: __tests__/security/supplyChain.cryptoPins.test.js (9); android/app/src/test/java/com/securecommapp/BouncyCastleVectorsTest.kt (9, JVM)
+Current Status: AUTOMATED
+```
+
 ---
 
 ## Summary

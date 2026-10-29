@@ -26,6 +26,7 @@
  */
 import { NativeModules, DeviceEventEmitter } from 'react-native';
 import RNFS from 'react-native-fs';
+import { Buffer } from 'buffer';
 
 const LEVEL_EVENT = 'MalachiSecureAudioLevel';
 const PLAYBACK_EVENT = 'MalachiSecureAudioPlayback';
@@ -216,6 +217,39 @@ function createVoicePlayer() {
       try { await lib().player.setPlaybackSpeed?.(rate); } catch {}
     },
   };
+}
+
+// ── Aufnahme fortsetzen (Nutzerwunsch 29.10.2026) ──────────────────────────
+// Die sichere Aufnahme liefert AAC als ADTS-Rahmenfolge: jeder Rahmen traegt
+// seinen eigenen Kopf, zwei Aufnahmen hintereinandergehaengt sind wieder eine
+// gueltige Aufnahme. "Fortsetzen" nimmt deshalb einfach einen weiteren
+// Abschnitt auf (ebenfalls nur im Arbeitsspeicher) und haengt ihn an - es
+// entsteht dabei keine Datei. Der Rueckfallweg (MP4-Container aus der
+// Bibliothek) laesst sich so nicht verbinden: dort gibt es kein Fortsetzen.
+const ADTS_MIN = 7;
+
+/** Beginnt der Inhalt mit einem ADTS-Rahmen (Sync 0xFFF, Layer 0)? */
+export function isAdtsBase64(b64) {
+  if (typeof b64 !== 'string' || b64.length < 12) return false;
+  const head = Buffer.from(b64.slice(0, 12), 'base64');
+  return head.length >= ADTS_MIN && head[0] === 0xFF && (head[1] & 0xF6) === 0xF0;
+}
+
+/** Zwei ADTS-Aufnahmen (base64) aneinanderhaengen -> base64, oder null, wenn eine kein ADTS ist. */
+export function appendAdtsBase64(first, second) {
+  if (!isAdtsBase64(first) || !isAdtsBase64(second)) return null;
+  const a = Buffer.from(first, 'base64');
+  const b = Buffer.from(second, 'base64');
+  const both = Buffer.concat([a, b]);
+  const out = both.toString('base64');
+  // Zwischenpuffer gleich ueberschreiben (Strings kann JS nicht loeschen).
+  a.fill(0); b.fill(0); both.fill(0);
+  return out;
+}
+
+/** Laesst sich an diese Aufnahme ein weiterer Abschnitt anhaengen? */
+export function canAppendRecording(base64) {
+  return isSecureAudioAvailable() && isAdtsBase64(base64);
 }
 
 let shared = null;

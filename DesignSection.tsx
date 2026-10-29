@@ -43,7 +43,7 @@ function ThemeCard({ id, name, preview: p, t, selected, locked, onPress, ProBadg
       <View style={{ height:116, borderRadius:14, overflow:'hidden', backgroundColor:p.chatBg,
         borderWidth: selected ? 2 : 1, borderColor: selected ? t.accent : t.borderStrong }}>
         {/* Artwork-Muster (nur Themen mit artwork), unter allem anderen */}
-        {p.artwork ? <ChatArtwork kind={p.artwork} fills={p.artworkFills} testID={'design-artwork-' + id} /> : null}
+        {p.artwork ? <ChatArtwork kind={p.artwork} fills={p.artworkFills} glints={p.artworkGlints} testID={'design-artwork-' + id} /> : null}
         {/* Kopfleiste */}
         <View style={{ height:24, backgroundColor:p.headerBg, flexDirection:'row', alignItems:'center',
           paddingHorizontal:8, gap:6, borderBottomWidth:0.5, borderBottomColor:p.headerBorder }}>

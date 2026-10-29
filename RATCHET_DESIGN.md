@@ -64,7 +64,7 @@ X25519, `@noble/hashes`, `@noble/ciphers`). Nichts ist selbst gebaut.
 
 | Name | Ableitung |
 |---|---|
-| `K` | ML-KEM-768-Geheimnis der Verbindung, auf der die Sitzung entsteht |
+| `K` | ML-KEM-768-Geheimnis der Verbindung, auf der die Sitzung entsteht. **Verbindungen v2** (`kx: 2`, seit Krypto-Review 2026-10-25 V5, siehe unten): statt des rohen Geheimnisses der abgeleitete Teilschlüssel `K_kem` |
 | `kid(K)` | `HKDF-SHA256(ikm=K, salt="malachi-dr-v1-init", info="malachi-kem-id-v1", 16)` – Kennung, gibt nichts über `K` preis |
 | `SK` | `HKDF(K, salt, info="malachi-dr-v1-sk", 32)` – Start-Root-Key |
 | `AD_s` | `HKDF(K, salt, info="malachi-dr-v1-ad", 32)` – Sitzungsbindung |
@@ -73,6 +73,37 @@ X25519, `@noble/hashes`, `@noble/ciphers`). Nichts ist selbst gebaut.
 | `KDF_CK(ck)` | `mk = HMAC-SHA256(ck, 0x01)`, `ck' = HMAC-SHA256(ck, 0x02)` (Spezifikation 5.2) |
 | `ENCRYPT(mk, pt, h)` | `key = HKDF(mk, salt=0³², info="malachi-dr-v1-msg", 32)`, Nonce = 24 Zufallsbytes, XChaCha20-Poly1305, `AD = "malachi-dr-v1" ‖ AD_s ‖ JSON([v, d, pn, n, k, i])` |
 | Medien | Dateischlüssel 32 Zufallsbytes, XChaCha20-Poly1305, Nonce = Chunk-Index, `AD = "malachi-media-v1|art|id|index|gesamt|länge"` |
+
+**Verbindungsschlüssel v2 (V5, `ConnKeyV2.js`).** Bis 1.1 war `K` das rohe
+ML-KEM-Geheimnis und diente zugleich als äußerer Schlüssel, Tor-Anmeldeschlüssel,
+Ratchet-Start, KEM-Beitrag und Code-Eingabe (K-08); der Tausch war nicht an die
+Anmeldung gebunden und ohne X25519-Anteil (K-07). Zwischen neuen Geräten jetzt:
+
+```
+Initiator → {kyber_pubkey, publicKey: ek, kx: 2, x: xI, ck: chainId}
+Responder → {kyber_ciphertext, cipherText: ct, kx: 2, x: xR}
+T      = SHA-256(lp-kodiert: Label, ek, ct, xI, xR, chainId, ol)   Rollen über Feldnamen
+ikm    = ss_MLKEM ‖ X25519(xI, xR) ‖ HKDF(chain, "…|chain")          je 32 Byte
+K_outer = HKDF(ikm, salt=T, "malachi-kx-v2|outer")       äußere Schicht, gespeichert, Tor-Anmeldung, Kettenglied
+K_kem   = HKDF(ikm, salt=T, "malachi-kx-v2|ratchet-kem") Ratchet-Start und KEM-Beitrag (held/own)
+K_code  = HKDF(ikm, salt=T, "malachi-kx-v2|legacy-code") nur alter Verbindungscode
+```
+
+* `chain` = Geheimnis, mit dem sich die Verbindung über Tor angemeldet hat, das
+  der Verbindung, über die ein Direkt-Upgrade ausgehandelt wurde, bzw. der PSK
+  der Einladung (Telefon-Kopplung: keine Kette, der Tunnel ist selbst hybrid und
+  per Code geprüft). `ck` = HKDF-Kennung davon; der Responder sucht das passende
+  Glied (gesetzt, gespeichert, aktive Verbindung) und lehnt ab, wenn er es nicht
+  kennt – nie ein anderer Schlüssel.
+* Implizite Schlüsselbestätigung: Passen die Schlüssel nicht (manipuliertes
+  Transkript), sind schon die ersten Pakete nicht lesbar; nach drei solchen wird
+  die Verbindung verworfen.
+* Das rohe ML-KEM-Geheimnis wird nach der Ableitung nirgends benutzt oder
+  gespeichert. `K_outer` und `K_kem` sind voneinander unabhängig: wer den
+  gespeicherten äußeren Schlüssel erbeutet, kennt den KEM-Beitrag nicht.
+* Klebrig wie `ol`: nach der ersten v2-Verbindung eines Kontakts wird eine
+  Verbindung ohne `kx`, ohne `x` oder ohne Kettenglied abgelehnt. Gegenseiten
+  1.0/1.1 laufen unverändert mit v1 (rohes ML-KEM).
 
 **Zufällige Nonce trotz Einmal-Schlüssel:** Die Spezifikation erlaubt eine
 abgeleitete IV. Würde ein Zustand aber je doppelt benutzt (z. B. Speicher
@@ -164,10 +195,31 @@ und verworfen – der gespeicherte Zustand bleibt unverändert.
   (laufender PQ-Beitrag). Anders als SPQR transportiert Malachi keine eigenen
   ML-KEM-Schlüssel im Ratchet-Header – die Verbindungs-Schlüsseltausche liefern
   ohnehin regelmäßig frische KEM-Geheimnisse (jede Tor-/Direktverbindung).
+* **Regelmäßiges Nachmischen (seit Krypto-Review 2026-10-25, V6/K-06).** Bei
+  Dauerverbindungen kam tagelang kein frisches ML-KEM-Material. Jetzt, nur mit
+  Gegenseiten, die `caps.ratchet >= 2` melden (klebrig, `rv` im Datensatz),
+  bietet jede Seite spätestens alle 24 h bzw. 100 eigene Nachrichten einen
+  frischen ML-KEM-768-Schlüssel an (SPQR-artig, aber ungestückelt):
+  `pq_offer {id, pk}` → Gegenseite kapselt, leitet ab, trägt in `held` ein und
+  **speichert** → `pq_ct {id, ct, kid}` → Anbieter entkapselt, leitet ab, prüft
+  `kid` (Schlüsselbestätigung) und trägt in `own` ein; beim nächsten eigenen
+  DH-Schritt fließt es ein – gleiche Regeln wie Verbindungsgeheimnisse.
+  Geheimnis = `HKDF(ss, salt = SHA-256(lp: Label, id, SHA-256(pk), SHA-256(ct),
+  AD_s), "malachi-dr-v2-pq|secret")` – an Angebot, Chiffrat und Sitzung gebunden.
+  Beide Nachrichten gehen nur durch den Ratchet und werden nur so angenommen.
+  Verlorene Nachrichten: offenes Angebot verfällt nach 1 h, dann neues;
+  passt `kid` nicht (Manipulation, Sitzung inzwischen gewechselt), wird nichts
+  eingemischt – die Gegenseite käme sonst nicht mehr mit. Höchstens ein
+  angenommenes Angebot pro Minute, Wiederholungen werden erkannt. Write-Ahead:
+  offener ML-KEM-Schlüssel bzw. `held`-Eintrag sind gespeichert, bevor die
+  jeweilige Nachricht hinausgeht. Gegenseiten 1.0/1.1 bekommen nie ein Angebot.
 
 ## 5. Speicher, Sperre, Atomizität
 
-* Ein Eintrag `ratchet_<id>` = `{ v, s (Zustand|null), cap, held[], own[] }`.
+* Ein Eintrag `ratchet_<id>` = `{ v, s (Zustand|null), cap, held[], own[] }`,
+  seit 2026-10-25 additiv `rv` (Ratchet v2 der Gegenseite) und `pq` (offene
+  Angebote, angenommene Kennungen, Zeitpunkt/Zähler des Nachmischens); im
+  Zustand `s` additiv `sa` (V4). 1.0/1.1 lesen den Eintrag weiterhin.
   Jede Operation (Senden, Empfangen, KEM eintragen, Fähigkeit merken) läuft unter
   einer Sperre pro Kontakt auf einer Kopie und wird erst nach erfolgreichem
   `setItem` gültig. Senden ist **write-ahead**: der fortgeschrittene Zustand ist
@@ -227,6 +279,23 @@ Verbindungsgeheimnisse werden ohnehin bei jeder Verbindung per ML-KEM erneuert.
 Der Inhalt hängt nicht mehr an ihnen: wer ein Verbindungsgeheimnis erbeutet und
 sich damit anmeldet, bekommt nur Ratchet-Chiffrate, die er nicht lesen kann.
 
+**Seit Krypto-Review 2026-10-25 (K-11):** Anmelde-MAC v2 – jedes Feld mit
+4-Byte-Längenpräfix, eigenes Label in HKDF und MAC, Nonces nur Hex (v1 verkettete
+mit `|`, die Kodierung war nicht eindeutig). Ausgehandelt über `av: 2` in der
+Challenge, alte Gegenseiten bleiben bei v1; nach der ersten v2-Anmeldung eines
+Kontakts wird v1 für ihn abgelehnt (`ConnCaps.js`, `conn_caps_<id>`).
+
+**Äußere Schicht v2 (K-09):** Bis 1.1 nutzten beide Richtungen dieselben drei
+Schlüssel ohne associated data. Jetzt, nur nach Aushandlung im Kyber-Handshake
+(`ol: 2` in `kyber_pubkey` und `kyber_ciphertext`): Schlüssel je Richtung
+(`HKDF(K, "malachi-conn-v2|key|i2r|r2i")`), AAD `"malachi-conn-v2|<richtung>|<zweck>"`
+auf AES-GCM und ChaCha20-Poly1305, Leitungsformat `{type:'encrypted', v:2, data}`.
+Gespiegelte Pakete (z. B. Füll- oder Sprachpakete, die nicht durch den Ratchet
+gehen) sind damit nicht mehr annehmbar. Innerhalb einer Verbindung ist das Format
+fest; nach der ersten v2-Verbindung wird eine Verbindung ohne `ol` abgelehnt.
+Medien ohne Ratchet-Sitzung (Profilbild direkt nach der Kopplung) gehen auf
+v2-Verbindungen über den Dateischlüssel-Weg (`mediaSealer`).
+
 ## 10. Löschen, Wipe, Secret Chat
 
 * Kontakt löschen / `device_wiped` empfangen (`removeContactLocally`,
@@ -255,10 +324,15 @@ Signal – dauerhaft dazwischenschalten; dagegen hilft nur der Sicherheitscode.
 
 **Post-Quanten.** (a) Der Ratchet-Header und alles darin liegt hinter der
 ML-KEM-geschützten Verbindungsschicht – „Mitschneiden jetzt, entschlüsseln
-später“ scheitert schon dort. (b) Selbst wer die Verbindungsschicht hat und X25519
-bricht, braucht für jeden Root-Key-Schritt nach einem KEM-Schritt das zugehörige
-ML-KEM-Geheimnis (HKDF über DH ‖ KEM bleibt geheim, solange eine Eingabe geheim
-ist). (c) Grenze: Zwischen zwei KEM-Schritten (eine Verbindung) beruht die
+später“ scheitert schon dort. (b) Selbst wer X25519 bricht, braucht für jeden
+Root-Key-Schritt nach einem KEM-Schritt das zugehörige KEM-Geheimnis (HKDF über
+DH ‖ KEM bleibt geheim, solange eine Eingabe geheim ist). *Korrektur (Krypto-
+Review K-08):* Bei Verbindungen v1 ist dieses KEM-Geheimnis identisch mit dem
+Schlüssel der Verbindungsschicht – wer „die Verbindungsschicht hat“, hat es also
+auch; (b) gilt dort nur gegen Angreifer, die die Verbindungsschicht nicht haben.
+Bei Verbindungen v2 ist der KEM-Beitrag `K_kem` ein eigener Teilschlüssel, der
+sich aus dem äußeren Schlüssel nicht gewinnen lässt – dort gilt (b) wie
+formuliert. (c) Grenze: Zwischen zwei KEM-Schritten (eine Verbindung) beruht die
 Heilung nur auf X25519; die Initialisierung beruht vollständig auf dem ML-KEM-
 Geheimnis der ersten Ratchet-Verbindung.
 
@@ -298,6 +372,36 @@ Geheimnis der ersten Ratchet-Verbindung.
   Secret der nächsten Verbindung umgestellt.
 * Neues Paket: `@noble/curves` **2.4.0** (exakt gepinnt). Nach dem Merge
   `npm install` im Haupt-Checkout ausführen.
+
+## 13a. Sicherheitscode (seit Krypto-Review 2026-10-25, V1)
+
+Bis 1.1 war der Sicherheitscode `SHA-256(Base64(K))` der **aktuellen Verbindung**
+(16 Ziffern, ohne Domänentrennung) und wechselte bei jedem Neuaufbau – ständige
+„Code geändert“-Hinweise, kein dauerhafter Vergleich (K-01, K-10). Jetzt
+(`SafetyNumber.js`):
+
+```
+SN = HKDF-SHA256(ikm = AD_s, salt = "malachi-safety-number-v2",
+                 info = "malachi-safety-v2|digits", 30 Byte) → 6 × 5 Ziffern
+```
+
+* `AD_s` gehört zur **Sitzung** (§3), ist auf beiden Geräten gleich und
+  unabhängig von der Rolle; neue Verbindungen, Tor-Reserve und Direkt-Upgrade
+  ändern ihn nicht. Er ändert sich nur mit einer neuen Sitzung (Zurücksetzen,
+  Neu-Kopplung) – genau dann warnt die App.
+* Ein Mann in der Mitte hat zwei Sitzungen mit zwei `AD_s`; er kann keine Seite
+  auf dasselbe ML-KEM-Geheimnis zwingen, 30 Ziffern (~100 bit) lassen sich nicht
+  durchprobieren.
+* Angezeigt wird erst, wenn die Sitzung von der Gegenseite bestätigt ist (beim
+  gleichzeitigen Aufbau kann sie vorher noch wechseln).
+* „Stimmt überein“ speichert den bestätigten Code (`safety_v2_<id>`, nur
+  Anzeigezustand). Der Hinweis „Vorgestellt von …“ verschwindet erst danach
+  (K-03), nicht mehr beim Öffnen des Dialogs.
+* Kompatibilität: Fähigkeit `caps.sn = 2` im `profile_name`. Ohne sie zeigt die
+  Gegenseite (1.0/1.1) den alten Verbindungscode; die App zeigt dann ebenfalls
+  diesen, mit dem Hinweis, dass er nur für die aktuelle Verbindung gilt.
+  Migration: Der erste berechnete Code eines bestehenden Kontakts wird ohne
+  Warnung zur Grundlage.
 
 ## 14. Tests
 

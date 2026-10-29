@@ -189,7 +189,9 @@ test('Sprachnachricht: Aufnahme in den Siegel-Cache, beim Stoppen gelesen und so
   await press(tree, 'Alex');
   await press(tree, 'Sprachnachricht');
   expect(mockAudio.recPath).toMatch(/^\/cache\/malachi_siegel\/[0-9a-f]{16}\/aufnahme\.mp4$/);
-  expect(allText(tree)).toMatch(/● Aufnahme/);
+  // Aufnahme-Leiste wie in den Chats (VoiceDraft.tsx): Zeit sichtbar, "● Aufnahme" fuer den Screenreader
+  const time = tree.root.findAll((n) => n.props && n.props.testID === 'siegel-rec-time' && typeof n.type !== 'string')[0];
+  expect(time.props.accessibilityLabel).toMatch(/● Aufnahme/);
   offset += 3000;
   await press(tree, 'Sprachnachricht senden');
   await settle();

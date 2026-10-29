@@ -15,7 +15,8 @@ const de = require('../../locales/de').default;
 
 const ROOT = path.join(__dirname, '..', '..');
 const UI_FILES = ['App.tsx', 'SiegelScreen.tsx', 'GroupScreens.tsx', 'GroupChatScreen.tsx', 'DesignSection.tsx',
-  'GroupCallScreen.tsx', 'PhonePairingPanel.tsx', 'PlayProScreen.tsx', 'UpdateUI.tsx'];
+  'GroupCallScreen.tsx', 'PhonePairingPanel.tsx', 'PlayProScreen.tsx', 'UpdateUI.tsx', 'SafetyNumberDialog.tsx',
+  'SecurityPinModal.tsx', 'VoiceDraft.tsx'];
 const MODULE_FILES = ['CallManager.js', 'LicenseManager.js', 'ShopClient.js', 'GroupMessaging.js', 'RTCStore.js',
   'BackgroundSync.js', 'TorTransport.js', 'SiegelVault.js', 'index.js', 'GroupCallManager.js', 'AppUpdater.js', 'PhonePairing.js'];
 // DesignSection nennt die Uebersetzungsfunktion tr (t ist dort das Theme);

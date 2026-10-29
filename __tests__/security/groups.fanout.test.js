@@ -82,6 +82,7 @@ function loadDevice(name, peers) {
       WebRTCManager: require('../../WebRTCManager').WebRTCManager,
       ES: require('react-native-encrypted-storage').default,
       RNFS: require('react-native-fs'),
+      I18N: require('../../i18n'),
     };
   });
   global.__mockDevice = undefined;
@@ -644,6 +645,25 @@ describe('Gruppen-Medien (Bild, Sprachnachricht)', () => {
     // Warteschlangen leer (Empfangsbestaetigung kam an)
     expect(await queueOf(alice, 'bob')).toHaveLength(0);
     expect(await queueOf(alice, 'carol')).toHaveLength(0);
+  });
+
+  // Fehler 29.10.2026: die eigene Vorschau stand fest auf Deutsch ("Du: 🎤 Sprachnachricht").
+  test('Vorschau in der Chatliste folgt der eingestellten Sprache (eigene und empfangene Medien)', async () => {
+    const { alice, bob, carol } = await trio();
+    await connect(alice, bob);
+    await connect(alice, carol);
+    const gid = await createAndDistribute(alice, ['bob', 'carol'], [bob, carol]);
+    alice.I18N.setLanguage('en');
+    bob.I18N.setLanguage('en');
+    carol.I18N.setLanguage('de');
+    await alice.GM.sendGroupMedia(gid, { kind: 'audio', base64: b64Of(3000, 4), durationMs: 1500 });
+    expect((await groupOf(alice, gid)).last).toBe('You: 🎤 Voice message');
+    await alice.GM.sendGroupMedia(gid, { kind: 'image', base64: b64Of(4000, 6), mimeType: 'image/jpeg' });
+    expect((await groupOf(alice, gid)).last).toBe('You: 📷 Image');
+    await waitFor(async () => mediaOf(await chatOf(bob, gid)).length === 2, 8000, 'Medien bei Bob');
+    await waitFor(async () => mediaOf(await chatOf(carol, gid)).length === 2, 8000, 'Medien bei Carol');
+    expect((await groupOf(bob, gid)).last).toMatch(/: 📷 Image$/);
+    expect((await groupOf(carol, gid)).last).toMatch(/: 📷 Bild$/);
   });
 
   test('Offline-Mitglied bekommt das Bild beim naechsten Verbindungsaufbau; Bild in der Warteschlange nur verschluesselt', async () => {

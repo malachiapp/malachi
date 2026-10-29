@@ -4,6 +4,8 @@ import RNFS from 'react-native-fs';
 import { encryptMsg, decryptMsg, secureRandomToken, randomKeyB64 } from './MessageCrypto';
 import { cleanDisplayName } from './TextSafety';
 import * as RatchetSession from './RatchetSession';
+import * as SafetyNumber from './SafetyNumber';
+import * as ConnCaps from './ConnCaps';
 import { fileKeyFromB64, openMediaChunk } from './MediaKey';
 import { sanitizeWave } from './VoiceWave';
 import { ownAvatarForSending } from './OwnAvatar';
@@ -90,10 +92,42 @@ function previewForMessage(msg) {
   return typeof text === 'string' ? text : '';
 }
 
+// Nachrichten mit Timer ("Nach dem Lesen", 1 h / 24 h / 7 Tage): die
+// Kontaktlisten-Vorschau bleibt stehen, auch wenn die Nachricht selbst laengst
+// geloescht ist (Fund 2026-10-28, Demo-App 1.2.0: Einmal-Nachricht nach dem
+// Lesen weg, ihr Text aber dauerhaft als Vorschau lesbar). Deshalb dort nie
+// der Inhalt, nur ein neutraler Hinweis. null = kein Timer.
+export function timerPreview(mode) {
+  if (mode === 'read') return t('preview.readOnce');
+  if (mode === '1h' || mode === '24h' || mode === '7d') return t('preview.timed');
+  return null;
+}
+
+// Timer, den eine Text-/Standort-Nachricht selbst mitbringt (expireMode im
+// Umschlag bzw. im aelteren JSON-im-Text-Format), sonst undefined.
+function expireModeOf(msg) {
+  if (msg.expireMode) return msg.expireMode;
+  if (typeof msg.text === 'string' && msg.text.startsWith('{')) {
+    try { return JSON.parse(msg.text)?.expireMode || undefined; } catch {}
+  }
+  return undefined;
+}
+
+// Vorschau fuer den Badge-Pfad (Chat geschlossen). Nennt die Nachricht keinen
+// Timer (Standort aus 1.2.0, Web-App), gilt wie im Chat (App.tsx,
+// incomingMode) der fuer diesen Chat eingestellte.
+async function badgePreview(chatId, msg) {
+  const preview = previewForMessage(msg);
+  if (!preview || msg.type !== 'text') return preview;
+  const mode = expireModeOf(msg) || await EncryptedStorage.getItem('timer_' + chatId).catch(() => null);
+  return timerPreview(mode) || preview;
+}
+
 // Steuersignale, die auch ohne offenen Chat sofort wirken muessen (siehe
 // setConnection() und BackgroundSync.applyControlSignal()).
 const CONTROL_SIGNAL_SUBTYPES = new Set([
   'delete_chat', 'device_wiped', 'clear_chat', 'delete_message', 'secret_start', 'secret_end',
+  'timer',
 ]);
 
 // Gruppenchats (GroupMessaging.js, GROUP_CHAT_DESIGN.md): Gruppen-Nachrichten
@@ -134,8 +168,10 @@ export function isGroupMedia(msg) {
 // Gegenueber, laeuft dort eine aeltere App-Version (Rueckfall-Regel siehe
 // BackgroundSync.js). ratchet: Double Ratchet (RatchetSession.js) - fehlt es
 // beim Gegenueber, bleibt es fuer diesen Kontakt beim bisherigen Verfahren.
+// sn: stabiler Sicherheitscode (SafetyNumber.js, Krypto-Review V1) - fehlt es
+// beim Gegenueber, zeigt die App dort weiter den alten Verbindungscode.
 export const OWN_CAPS = RatchetSession.RATCHET_ENABLED
-  ? { ack: 1, ratchet: RatchetSession.RATCHET_CAP_VERSION }
+  ? { ack: 1, ratchet: RatchetSession.RATCHET_CAP_VERSION, sn: SafetyNumber.SAFETY_CAP_VERSION }
   : { ack: 1 };
 const DELETE_ACK_GRACE_MS = 300;  // Bestaetigung eines delete_chat vor dem Schliessen
 const SEEN_MAX = 1000;            // persistierte Zustell-Schluessel pro Kontakt
@@ -289,6 +325,9 @@ class RTCStore {
     this._inboxChain   = Promise.resolve();
     this._inboxRestore = null;
     this._inboxDeferred = false;        // versiegelte Eintraege warten aufs Entsperren
+    // Badge/Vorschau nacheinander (badgePreview liest ggf. den Chat-Timer) -
+    // sonst koennte die Vorschau einer aelteren Nachricht die neuere ueberholen.
+    this._badgeChain   = Promise.resolve();
   }
 
   // Audit 2026-09-28 ("Reconnect klappt dauerhaft nicht mehr"): jede
@@ -740,7 +779,12 @@ class RTCStore {
       // Kontaktnamen). Fuer Bild/Sprachnachricht/Datei fehlte das frueher
       // (Live-Test-Fund 2026-09-28: falscher Typ 'audio_end', fruehes return).
       if (global.showMalachiNotification) global.showMalachiNotification(chatId);
-      if (global.incrementBadge) global.incrementBadge(chatId, previewForMessage(msg));
+      if (global.incrementBadge) {
+        this._badgeChain = this._badgeChain
+          .then(() => badgePreview(chatId, msg))
+          .then((preview) => global.incrementBadge?.(chatId, preview))
+          .catch(() => {});
+      }
     }
     return durable;
   }
@@ -1025,7 +1069,12 @@ class RTCStore {
     // Angabe, ist die Gegenseite (noch) eine aeltere Version.
     const ratchetCap = Number(msg.caps?.ratchet) >= 1;
     if (ratchetCap || msg.subtype === 'profile_name') {
-      RatchetSession.notePeerCaps(chatId, ratchetCap).catch(() => {});
+      // Version mitgeben: >= 2 = ML-KEM-Nachmischen (V6), klebrig.
+      RatchetSession.notePeerCaps(chatId, ratchetCap, Number(msg.caps?.ratchet) || 0).catch(() => {});
+    }
+    // Stabiler Sicherheitscode: nur Anzeige - welche Art Code die Gegenseite zeigt.
+    if (Number(msg.caps?.sn) >= SafetyNumber.SAFETY_CAP_VERSION) {
+      SafetyNumber.notePeerSafetyCap(chatId, Number(msg.caps.sn)).catch(() => {});
     }
     const isNew = !!(msg.caps && Number(msg.caps.ack) >= 1);
     // handshake wird nur bei geaendertem Profilbild gesendet - ohne caps sagt
@@ -1057,7 +1106,7 @@ class RTCStore {
         .catch(() => {})
         .then(() => { this._capsLoading.delete(chatId); });
     }
-    return Promise.all([st.load, caps, this.ensureInboxRestored(), RatchetSession.preload(chatId)]).then(() => {});
+    return Promise.all([st.load, caps, this.ensureInboxRestored(), RatchetSession.preload(chatId), ConnCaps.preload(chatId)]).then(() => {});
   }
 
   // ─── Empfangs-Ablage ("Inbox") ────────────────────────────────────────────
@@ -1204,6 +1253,10 @@ class RTCStore {
     await EncryptedStorage.removeItem(CAPS_PREFIX + chatId).catch(() => {});
     // Double Ratchet: Zustand, KEM-Vorrat und uebersprungene Schluessel.
     await RatchetSession.forget(chatId);
+    // Stabiler Sicherheitscode (Bestaetigung, zuletzt gesehener Code).
+    await SafetyNumber.forget(chatId);
+    // Downgrade-Schutz der Verbindungsverfahren (ConnCaps.js).
+    await ConnCaps.forget(chatId);
     await this._withInboxLock(async () => {
       const idx = await this._readInboxIndex();
       const keep = [];
@@ -1350,6 +1403,8 @@ class RTCStore {
     // Ratchet-Zustaende im Arbeitsspeicher verwerfen; laufende Ratchet-
     // Operationen speichern danach nichts mehr (den Speicher leert der Wipe).
     RatchetSession.forgetAll();
+    SafetyNumber.forgetAll();
+    ConnCaps.forgetAll();
     this._sessionInboxIds.clear();
     this._inboxIds = new WeakMap();
     this._inboxRestore = null;
@@ -1378,6 +1433,8 @@ class RTCStore {
     this.peerCaps.delete(chatId);
     this._seen.delete(chatId);
     RatchetSession.forgetFromMemory(chatId);
+    SafetyNumber.forgetFromMemory(chatId);
+    ConnCaps.forgetFromMemory(chatId);
     const prefix = chatId + '_';
     for (const map of [this.audioBuffer, this.fileBuffer]) {
       if (!map) continue;
